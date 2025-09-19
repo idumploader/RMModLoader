@@ -17,3 +17,4 @@ Known problems:
 
 Used Libraries:
 * [nlohmann json](github.com/nlohmann/json)
+* [minhook](https://github.com/TsudaKageyu/minhook)
