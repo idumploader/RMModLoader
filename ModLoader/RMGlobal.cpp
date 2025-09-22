@@ -21,6 +21,8 @@ namespace rm_modloader {
     const char* (__cdecl* rb_get_string_data)(int* prb_string) = nullptr;
     int(__cdecl* eval_rb_cstr)(const char* script, BYTE* a2, int* error_code) = nullptr;
     int(__cdecl* eval_rb_cstr_noerr)(const char* script) = nullptr;
+    int(__cdecl* get_rb_error_string)(WCHAR* error_buf, size_t buf_size, int*) = nullptr;
+
     int(__cdecl* load_data)(int self, int rb_filename) = nullptr;
     int(__cdecl* startup_scripts)(const wchar_t* scripts_file, StartupScriptsString* rgss3a_filepath) = nullptr;
 
@@ -30,6 +32,7 @@ namespace rm_modloader {
         rb_get_string_data = at_offset<decltype(rb_get_string_data)>(rgss_module, 0x37CA0);
         eval_rb_cstr = at_offset<decltype(eval_rb_cstr)>(rgss_module, 0x0C5B0);
         eval_rb_cstr_noerr = at_offset<decltype(eval_rb_cstr_noerr)>(rgss_module, 0xC600);
+        get_rb_error_string = at_offset<decltype(get_rb_error_string)>(rgss_module, 0xD3E0);
         tilemap_initialize = at_offset<decltype(tilemap_initialize)>(rgss_module, 0x15180);
         init_rb_tilemap = at_offset<decltype(init_rb_tilemap)>(rgss_module, 0x14E00);
 

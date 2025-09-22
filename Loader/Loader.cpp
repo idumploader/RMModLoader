@@ -9,8 +9,6 @@
 #include <tlhelp32.h>
 #include <winternl.h>
 
-
-
 constexpr std::string_view modloader_file = "ModLoader.dll";
 
 static void log_from_pipe(HANDLE pipe) {
@@ -39,7 +37,6 @@ void press_any_key() {
         static_cast<void>(_getch());
     }
 }
-
 int main(int argc, char** argv) {
     std::atexit(press_any_key);
 

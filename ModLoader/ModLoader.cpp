@@ -149,7 +149,7 @@ namespace rm_modloader {
 	}
 
 	void ModLoaderCore::setup_directories() {
-		log_info("Current working dir: {}\n", std::filesystem::current_path().string());
+		log_info("ModLoader version: {}. Current working dir: {}\n", version, std::filesystem::current_path().string());
 		std::filesystem::create_directories(modloader_root_ / modloader_data_dir);
 		std::filesystem::create_directories(modloader_root_ / modloader_data_dir / scripts_dir);
 	}
@@ -227,6 +227,8 @@ namespace rm_modloader {
 	void ModLoaderCore::remove_postinit_handler(ModLoaderHandlerID handler_id) {
 		postinit_handlers_.erase(handler_id);
 	}
+
+	std::string_view ModLoaderCore::version = "2.1";
 
 	std::shared_ptr<ModLoaderCore> mod_loader;
 }

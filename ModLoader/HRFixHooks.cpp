@@ -4,6 +4,10 @@
 #include "Hook.hpp"
 #include "RMGlobal.hpp"
 
+#include <future>
+#include <thread>
+#include <condition_variable>
+
 namespace rm_modloader {
 
     int hrfix_render_width = 640;
@@ -77,7 +81,7 @@ namespace rm_modloader {
 
     int SurfaceHRFixHook::init_surface_bitmap_hook(int width, int height) {
         if (width == hrfix_render_width && height == 41) { // TODO: change
-            height = hrfix_render_height / 2;
+            height = hrfix_render_height;
         }
 
         return (this->*orig_init_surface_bitmap)(width, height);
@@ -116,7 +120,7 @@ namespace rm_modloader {
                     map_offset_y = 0;
                 }
 
-                mod_loader->log_info("set_sprite_offset_hook: tilemap map_id={}\n", reinterpret_cast<RxPatchTilemap*>(tilemap_sprite->tilemap)->map_id);
+                mod_loader->log_info("set_sprite_offset: tilemap map_id={}\n", reinterpret_cast<RxPatchTilemap*>(tilemap_sprite->tilemap)->map_id);
                 mod_loader->log_info("set_sprite_offset: new offset x={}, y={}\n", map_offset_x, map_offset_y);
                 mod_loader->log_info("set_sprite_offset: map changed width={}, height={}\n", current_map_width, current_map_height);
             }
@@ -140,7 +144,7 @@ namespace rm_modloader {
 
     decltype(&CreateWindowExW) orig_CreateWindowExW = nullptr;
 
-    HWND WINAPI create_window_ex_hook(
+    static HWND WINAPI create_window_ex_hook(
         _In_ DWORD dwExStyle,
         _In_opt_ LPCWSTR lpClassName,
         _In_opt_ LPCWSTR lpWindowName,
@@ -175,8 +179,8 @@ namespace rm_modloader {
         hrfix_render_height = mod_loader->get_config().get_required_height();
 
         // Patch for screen size
-        mod_loader->patch_memory_as<int>(0x20F6, hrfix_render_width); // set width cap for resize_screen
-        mod_loader->patch_memory_as<int>(0x2106, hrfix_render_height); // set heght cap for resize_screen
+        mod_loader->patch_memory_as<int>(0x20F6, hrfix_render_width); // set width limit for resize_screen
+        mod_loader->patch_memory_as<int>(0x2106, hrfix_render_height); // set heght limit for resize_screen
 
         mod_loader->patch_memory_as<int>(0x20FF, hrfix_render_width); // set new width for resize_screen if exceeds cap
         mod_loader->patch_memory_as<int>(0x210F, hrfix_render_height); // set new height for resize_screen if exceeds cap

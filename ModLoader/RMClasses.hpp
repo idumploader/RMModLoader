@@ -23,14 +23,19 @@ namespace rm_modloader {
 	struct SurfaceSprite;
 
 	struct SpriteVFTable {
-		void* (__thiscall Sprite::* Sprite_dtx)(char a2);
-		int(__thiscall Sprite::* unk4)(int a2);
+		void* (__thiscall Sprite::* destructor)(char a1);
+		int(__thiscall Sprite::* unk4)(int a1);
 		bool(__thiscall Sprite::* set_sprite_offset)(int x, int y);
-		void(__thiscall Sprite::* unkC)();
-		void(__thiscall Sprite::* unk10)();
-		void(__thiscall Sprite::* unk14)();
+		void(__thiscall Sprite::* unkC)(int a1);
+		void(__thiscall Sprite::* unk10)(int a1);
+		void(__thiscall Sprite::* unk14)(DWORD a1, DWORD a2);
 		int(__thiscall Sprite::* set_render_rect)(RECT* rect);
 		Sprite* (__thiscall Sprite::* set_ancestor)(Sprite* ancestor);
+		void(__thiscall* unk20)();
+		int(__thiscall* unk24)(Surface*, int);
+		void(__thiscall* unk28)(int a1); // Almost every is empty function
+		int(__thiscall* unk2C)(int, int);
+		void(__thiscall* unk30)(RECT*);
 	};
 
 	static_assert(sizeof(SpriteVFTable::set_sprite_offset) == 0x4);
@@ -45,7 +50,7 @@ namespace rm_modloader {
 		RECT rect;
 		int offset_x;
 		int offset_y;
-		DWORD gap20;
+		DWORD is_visible;
 		RECT rect24;
 		DWORD gap34[6];
 		RECT rect4C;
@@ -54,8 +59,7 @@ namespace rm_modloader {
 		DWORD sprite_id;
 		DWORD M_need_update_rect;
 		DWORD unk78;
-		// this is assumption, that every Sprite object has child sprites
-		DWORD gap78[2];
+		DWORD gap7C[2];
 		Sprite** M_child_begin;
 		Sprite** M_child_end;
 	};
@@ -135,11 +139,24 @@ namespace rm_modloader {
 	/* 21 */
 	struct GameFrame
 	{
+		static constexpr std::string_view type_name = "class CGameFrame";
+
 		DWORD vftable;
 		DWORD gap4[1];
 		HWND window_handle;
 		WCHAR window_title[256];
-		DWORD gap204[14];
+		DWORD gap20C[2];
+		DWORD required_fps;
+		DWORD unk214;
+		BOOL window_is_active;
+		DWORD last_frame_time_ms;
+		DWORD updates_per_second;
+		DWORD frames_count;
+		DWORD frames_before_update;
+		DWORD last_frames_count;
+		DWORD show_fps_enabled;
+		DWORD last_mesage_ms;
+		DWORD gap23C[2];
 		Screen* screen;
 		Surface* surface248;
 		Surface* surface24C;
@@ -172,18 +189,27 @@ namespace rm_modloader {
 	};
 
 	/* 31 */
-	struct RxSprite : SurfaceSprite
+	struct __cppobj RxSprite : SurfaceSprite
 	{
 		static constexpr std::string_view type_name = "class CRxSprite";
 
-		DWORD gapCC[8];
-		double doubleF0;
-		double doubleF8;
-		double double100;
-		DWORD gap108[4];
-		double double118;
-		DWORD gapF8[103];
+		RECT src_rect;
+		POINT coord;
+		POINT origin;
+		double zoom_x;
+		double zoom_y;
+		double angle;
+		DWORD wave_amp;
+		DWORD wave_length;
+		DWORD wave_speed;
+		DWORD unk114;
+		double wave_phase;
+		BOOL is_mirror;
+		DWORD gap124[6];
+		DWORD color;
+		DWORD gap140[96];
 	};
+
 
 	/* 36 */
 	struct RxInput

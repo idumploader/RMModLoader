@@ -34,6 +34,8 @@ namespace rm_modloader {
 		friend struct ModLoaderCoreHooks;
 
 	public:
+		static std::string_view version;
+
 		using PreinitHandler = std::function<void()>;
 		using PostinitHandler = std::function<void()>;
 
@@ -77,9 +79,9 @@ namespace rm_modloader {
 			return hook_function(std::bit_cast<void*>(target), std::bit_cast<void*>(hook_method), reinterpret_cast<void**>(orig_method));
 		}
 
-		template<typename T, typename TMethod>
-		ModLoaderPatchID hook_method(intptr_t offset, TMethod(T::* hook_method), TMethod(T::** orig_method)) {
-			return hook_function(offset, std::bit_cast<void*>(hook_method), orig_method);
+		template<typename T, typename THook, typename TMethod>
+		ModLoaderPatchID hook_method(intptr_t offset, TMethod(THook::* hook_method), TMethod(T::** orig_method)) {
+			return hook_function(offset, std::bit_cast<void*>(hook_method), reinterpret_cast<void**>(orig_method));
 		}
 
 		template<typename T>
