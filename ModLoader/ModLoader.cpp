@@ -195,7 +195,7 @@ namespace rm_modloader {
 		// TODO:
 	}
 
-	GameFrame* ModLoaderCore::get_game() {
+	GameFrame* ModLoaderCore::get_game() const {
 		return *rgss_game;
 	}
 

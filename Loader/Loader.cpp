@@ -63,8 +63,10 @@ int main(int argc, char** argv) {
         return -1;
     }
 
-    HMODULE kernel32 = GetModuleHandle(TEXT("kernel32.dll"));
-    void* load_library_proc = GetProcAddress(kernel32, "LoadLibraryA");
+    //HMODULE kernel32 = GetModuleHandle(TEXT("kernel32.dll"));
+    //void* load_library_proc = GetProcAddress(kernel32, "LoadLibraryA");
+
+    void* load_library_proc = &LoadLibraryA;
 
     SIZE_T alloc_size = dll_path.string().size();
     LPVOID allocated_mem = VirtualAllocEx(pi.hProcess, nullptr, alloc_size, MEM_COMMIT, PAGE_READWRITE);

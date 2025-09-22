@@ -33,6 +33,9 @@ namespace rm_modloader {
     extern int(__cdecl* load_data)(int self, int rb_filename);
     extern int(__cdecl* startup_scripts)(const wchar_t* scripts_file, StartupScriptsString* rgss3a_filepath);
 
+    /**
+     * Initializes all global functions and method pointers
+     */
     extern void init_functionset();
 
 };
