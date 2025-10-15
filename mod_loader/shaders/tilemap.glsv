@@ -1,0 +1,64 @@
+#version 430 core
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec2 aTexCoord;
+
+// Offset of tile in screen space coordinates
+layout(location = 2) in vec3 aOffset;
+// Scale of tile, including texture offset scale, e.g. cutting texture to fit in tile
+layout(location = 3) in vec2 aZoom;
+// Texture offset inside tileset. Measured in tiles
+layout(location = 4) in vec2 aTexOffset;
+// Texture index in tilesets array
+// TODO: change to int
+layout(location = 5) in float aTexIndex;
+// Stride of animation in tiles. It gets appended to texture offset, multiplied by clock
+// Used to create animation, animation tiles must be equally spaced
+layout(location = 6) in vec2 aAnimStride;
+
+out vec2 TexCoord;
+out float TexIndex;
+
+// Screen space view matrix
+uniform mat4 uView;
+// Screen size, maximum size of viewport
+uniform vec2 uScreenSize;
+// Clock of animations, increased every animation delta time
+uniform int uAnimationClock;
+
+// Offset of all the tiles in tilemap
+uniform vec3 uGlobalOffset;
+// Viewport size, used to cull unseen vertices
+uniform vec2 uViewportSize;
+
+// Tilesets texture informations
+struct TextureInfo {
+	vec2 texture_size;
+	sampler2D texture;
+};
+
+// Array of tilesets
+// 9 tilesets textures and 1 shadow texture
+uniform TextureInfo uTexturesInfos[9 + 1];
+
+void main() {
+	// position on the viewport
+	vec3 position = uGlobalOffset + aOffset + aPos * vec3(aZoom, 1.0);
+	//position.z *= 20.0;
+	int texture_index = int(aTexIndex);
+	vec2 tile_size = 1. / (uTexturesInfos[texture_index].texture_size / 32.);
+	
+	vec2 tex_offset = aTexOffset;
+	tex_offset += aAnimStride * (uAnimationClock % 3);
+	// tileset are y-axis mirrored, so it needs to invert y value of texture offset
+	// TODO: switch this work to renderer
+	tex_offset.y = uTexturesInfos[texture_index].texture_size.y / 32. - tex_offset.y - 1;
+	
+	vec4 local_position = uView * vec4(position, 1.0);
+	gl_Position = local_position;
+	
+	gl_ClipDistance[0] = ((uViewportSize.y / uScreenSize.y) * 2 - 1) - local_position.y;
+	gl_ClipDistance[1] = ((uViewportSize.x / uScreenSize.x) * 2 - 1) - local_position.x;
+	
+	TexCoord = aTexCoord * aZoom * tile_size + tile_size * tex_offset;
+	TexIndex = aTexIndex;
+}
