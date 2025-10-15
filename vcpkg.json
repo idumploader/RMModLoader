@@ -1,0 +1,10 @@
+{
+	"name": "rmforge",
+	"version": "2.2",
+	"dependencies": [
+		"glm",
+		"nlohmann-json",
+		"glfw3",
+		"minhook"
+	]
+}
