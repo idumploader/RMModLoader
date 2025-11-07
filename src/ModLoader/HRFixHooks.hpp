@@ -50,5 +50,17 @@ namespace rm_modloader {
         int __thiscall set_rect_hook(RECT* new_rect);
     };
 
+    struct RxInputHRFixHook : RxInput {
+        static RxInput*(__thiscall RxInput::* orig_update_keys)();
+
+        static bool is_fullscreen;
+        static RECT last_window_rect;
+        constexpr static char windowed_fullscreen_key = VK_F11;
+
+        void toggle_fullscreen();
+
+        RxInput* __thiscall update_keys_hook();
+    };
+
     extern void apply_hrfix();
 }

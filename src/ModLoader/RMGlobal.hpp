@@ -27,6 +27,8 @@ namespace rm_modloader {
     extern int(__thiscall Surface::* surface_init_bitmap)(int width, int height);
     extern int(__thiscall RxTilemapSprite::* tilemap_render_tiles)(Surface* surf, RECT* rect);
 
+    extern RxInput* (__thiscall RxInput::* input_update_keys)();
+
     extern RubyValue(__cdecl* tilemap_initialize)(RubyValue self, int a2, void* a3);
     extern RubyValue(__cdecl* init_rb_tilemap)(RubyValue self, int a2, void* a3);
     extern RubyValue(__cdecl* tilemap_bitmaps)(RubyValue self);
@@ -42,6 +44,8 @@ namespace rm_modloader {
 
     extern int(__cdecl* load_data)(int self, int rb_filename);
     extern int(__cdecl* startup_scripts)(const wchar_t* scripts_file, StartupScriptsString* rgss3a_filepath);
+
+    extern int(__cdecl* get_rb_key_symbol_index)(RubyValue symbol_value);
 
     /**
      * Initializes all global functions and method pointers

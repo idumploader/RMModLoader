@@ -14,6 +14,8 @@ namespace rm_modloader {
     int(__thiscall Surface::* surface_init_bitmap)(int width, int height) = nullptr;
     int(__thiscall RxTilemapSprite::* tilemap_render_tiles)(Surface* surf, RECT* rect) = nullptr;
 
+    RxInput*(__thiscall RxInput::* input_update_keys)() = nullptr;
+
     RubyValue(__cdecl* tilemap_initialize)(RubyValue self, int a2, void* a3) = nullptr;
     RubyValue(__cdecl* init_rb_tilemap)(RubyValue self, int a2, void* a3) = nullptr;
     RubyValue(__cdecl* tilemap_bitmaps)(RubyValue self) = nullptr;
@@ -29,6 +31,8 @@ namespace rm_modloader {
 
     int(__cdecl* load_data)(int self, int rb_filename) = nullptr;
     int(__cdecl* startup_scripts)(const wchar_t* scripts_file, StartupScriptsString* rgss3a_filepath) = nullptr;
+
+    int(__cdecl* get_rb_key_symbol_index)(RubyValue symbol_value) = nullptr;
 
     void init_functionset() {
         rgss_module = LoadLibrary(TEXT("System\\RGSS301.dll"));
@@ -51,11 +55,14 @@ namespace rm_modloader {
         tilemap_bitmaps = at_offset<decltype(tilemap_bitmaps)>(rgss_module, 0x15520);
         tilemap_render_tiles = at_offset<decltype(tilemap_render_tiles)>(rgss_module, 0x21D40);
         surface_init_bitmap = at_offset<decltype(surface_init_bitmap)>(rgss_module, 0x10B3B0);
+        input_update_keys = at_offset<decltype(input_update_keys)>(rgss_module, 0x1B4D0);
         set_sprite_offset = at_offset<decltype(set_sprite_offset)>(rgss_module, 0x110F40);
         set_rect = at_offset<decltype(set_rect)>(rgss_module, 0x110FF0);
 
         load_data = at_offset<decltype(load_data)>(rgss_module, 0xCDE0);
         startup_scripts = at_offset<decltype(startup_scripts)>(rgss_module, 0xEA50);
+
+        get_rb_key_symbol_index = at_offset<decltype(get_rb_key_symbol_index)>(rgss_module, 0x0C340);
     }
 
 }

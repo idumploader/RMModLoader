@@ -50,6 +50,7 @@ add_library(ModLoader SHARED
 	"src/ModLoader/FastRenderHooks.cpp"
 	"src/ModLoader/TilemapReader.cpp"
 	"src/ModLoader/ControlsChangeHooks.cpp"
+	"src/ModLoader/GLFWMisc.cpp"
 )
 
 #target_precompile_headers(ModLoader PRIVATE "src/pch.h")

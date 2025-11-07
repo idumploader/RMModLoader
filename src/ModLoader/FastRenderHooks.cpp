@@ -714,36 +714,32 @@ namespace rm_modloader {
 		int sprite_height = sprite->rect.bottom - sprite->rect.top;
 		int sprite_x = sprite->offset_x;
 		int sprite_y = sprite->offset_y;
-		float sprite_z = sprite->offset_z / 40.f;
+		float sprite_z = sprite->offset_z / 512.f;
 
 		Sprite* iter_ancestor = sprite->ancestor;
 		bool is_visible = false;
+		int ancestor_depth = 0;
+		while (iter_ancestor) {
+			iter_ancestor = iter_ancestor->ancestor;
+			ancestor_depth++;
+		}
+
+		iter_ancestor = sprite->ancestor;
 		while (iter_ancestor && !is_visible) {
 			sprite_x += iter_ancestor->offset_x;
 			sprite_y += iter_ancestor->offset_y;
-			sprite_z += iter_ancestor->offset_z / 40.f + 0.1f;
+			sprite_z += (iter_ancestor->offset_z * std::pow(4,  ancestor_depth) / 32.f) + 0.01f;
 			//sprite_z += 0.1f;
 			is_visible = iter_ancestor == mod_loader->get_game()->screen;
 
 			iter_ancestor = iter_ancestor->ancestor;
+			ancestor_depth--;
 		}
 		is_visible = is_visible && sprite->is_visible;
-		sprite_z = std::clamp(sprite_z, 0.f, 20.f);
-		sprite_z += static_cast<float>(sprite_y) / window_height_ / 40.f;
-		//sprite_z += static_cast<float>(sprite_y) / window_height_;
-		//sprite_z += static_cast<float>(sprite_height) / window_height_;
-		//sprite_z += rand() % 200;
-		////sprite_z += 1.f / sprite_height * 10.f;
-		//if (sprite == mod_loader->get_game()->sprite250) {
-		//	mod_loader->log_info("Sprite (0x{:X}) is in game frame\n", reinterpret_cast<uintptr_t>(sprite));
-		//}
-		//if (sprite == mod_loader->get_game()->sprite258) {
-		//	mod_loader->log_info("Sprite (0x{:X}) is in game frame (sprite258)\n", reinterpret_cast<uintptr_t>(sprite));
-		//}
+		sprite_z = std::clamp(sprite_z, 0.f, (max_z_layer - 1) * 4.f);
+		sprite_z += static_cast<float>(sprite_y) / window_height_;
 
-		//mod_loader->log_info("Sprite z = {}\n", sprite_z);
-
-		sprite_z *= 10.f;
+		sprite_z /= 4.f;
 
 		int width = sprite->src_rect.right - sprite->src_rect.left;
 		int height = sprite->src_rect.bottom - sprite->src_rect.top;
@@ -946,7 +942,7 @@ namespace rm_modloader {
 		//glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
 		//glLineWidth(2);
 
-		glClearColor(0.2F, 0.3F, 0.3F, 1.0F);
+		//glClearColor(0.2F, 0.3F, 0.3F, 1.0F);
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 		render_sprites(screen);
@@ -1011,10 +1007,7 @@ namespace rm_modloader {
 	}
 
 	GLFWwindow* GLRenderer::make_window(int width, int height) {
-		if (!glfwInit()) {
-			mod_loader->log_info("Failed to init glfw");
-			return nullptr; // throw error
-		}
+		// glfw has already inited by the ModLoader
 
 		glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
 		glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
@@ -1205,8 +1198,8 @@ namespace rm_modloader {
 
 	int __thiscall ScreenFastRenderHook::update_screen_hook(int a1, int a2) {
 		shared_renderer->render_screen(this);
-		//return (this->*orig_update_screen)(a1, a2);
-		return 1;
+		return (this->*orig_update_screen)(a1, a2);
+		//return 1;
 	}
 	int(__thiscall Screen::* ScreenFastRenderHook::orig_update_screen)(int a1, int a2) = nullptr;
 

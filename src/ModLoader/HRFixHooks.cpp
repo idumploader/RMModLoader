@@ -3,6 +3,7 @@
 #include "ModLoader.hpp"
 #include "Hook.hpp"
 #include "RMGlobal.hpp"
+#include "GLFWMisc.hpp"
 
 #include <future>
 #include <thread>
@@ -143,6 +144,48 @@ namespace rm_modloader {
     int SpriteHRFixHook::current_map_width = 0;
     int SpriteHRFixHook::current_map_height = 0;
 
+    void RxInputHRFixHook::toggle_fullscreen() {
+        GameFrame* game = mod_loader->get_game();
+        if (is_fullscreen) {
+            is_fullscreen = false;
+            SetWindowLongPtr(game->window_handle, GWL_STYLE, WS_VISIBLE | WS_OVERLAPPEDWINDOW);
+            SetWindowPos(
+                game->window_handle,
+                nullptr,
+                last_window_rect.left,
+                last_window_rect.top,
+                last_window_rect.right - last_window_rect.left,
+                last_window_rect.bottom - last_window_rect.top,
+                SWP_FRAMECHANGED
+            );
+        }
+        else {
+            is_fullscreen = true;
+            GetWindowRect(game->window_handle, &last_window_rect);
+
+            int screen_width = GetSystemMetrics(SM_CXSCREEN);
+            int screen_height = GetSystemMetrics(SM_CYSCREEN);
+            SetWindowLongPtr(game->window_handle, GWL_STYLE, WS_VISIBLE | WS_POPUP);
+            SetWindowPos(game->window_handle, HWND_TOP, 0, 0, screen_width, screen_height, SWP_FRAMECHANGED);
+        }
+    }
+
+    RxInput* __thiscall RxInputHRFixHook::update_keys_hook() {
+        // immediate update fullscreen key
+        static SHORT last_fullscreen_key_state = 0;
+        SHORT fullscreen_key_state = GetKeyState(windowed_fullscreen_key);
+        if (last_fullscreen_key_state >= 0 && fullscreen_key_state < 0) { // key just down
+            toggle_fullscreen();
+        }
+        last_fullscreen_key_state = fullscreen_key_state;
+
+        return (this->*orig_update_keys)();
+    }
+
+    RxInput* (__thiscall RxInput::* RxInputHRFixHook::orig_update_keys)() = nullptr;
+    bool RxInputHRFixHook::is_fullscreen = false;
+    RECT RxInputHRFixHook::last_window_rect = { 0 };
+
     decltype(&CreateWindowExW) orig_CreateWindowExW = nullptr;
 
     static HWND WINAPI create_window_ex_hook(
@@ -219,6 +262,9 @@ namespace rm_modloader {
         // Fix for transitions
         mod_loader->patch_memory_as<int>(0x10E6A7, hrfix_render_width);
         mod_loader->patch_memory_as<int>(0x10E6C4, hrfix_render_height);
+
+        mod_loader->hook_method(input_update_keys, &RxInputHRFixHook::update_keys_hook, &RxInputHRFixHook::orig_update_keys);
+        input_update_keys = static_cast<decltype(input_update_keys)>(&RxInputHRFixHook::update_keys_hook);
 
         mod_loader->log_info("Applied HRFix\n");
     }
