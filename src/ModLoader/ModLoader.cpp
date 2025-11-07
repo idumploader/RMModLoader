@@ -4,6 +4,7 @@
 #include "HRFixHooks.hpp"
 #include "FastRenderHooks.hpp"
 #include "ControlsChangeHooks.hpp"
+#include "GLFWMisc.hpp"
 
 #include <fstream>
 #include <locale>
@@ -144,6 +145,8 @@ namespace rm_modloader {
 	}
 
 	void ModLoaderCore::on_preinit() {
+		init_glfw();
+
 		for (auto& [id, handler] : preinit_handlers_) {
 			handler();
 		}
@@ -270,6 +273,6 @@ namespace rm_modloader {
 		postinit_handlers_.erase(handler_id);
 	}
 
-	constexpr std::string_view ModLoaderCore::version = "2.2";
+	constexpr std::string_view ModLoaderCore::version = "2.3";
 	std::shared_ptr<ModLoaderCore> mod_loader;
 }

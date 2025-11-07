@@ -258,7 +258,7 @@ namespace rm_modloader {
 	{
 		DWORD vftable;
 		DWORD gap4[7];
-		BYTE gap20[17];
+		BYTE key_binds[17];
 		BYTE immediate_current_keys[30]; // setted once when updating, then immediately clears
 		BYTE current_keys[30]; // currently hold keys
 		BYTE last_keys[30]; // last update holded keys
@@ -344,6 +344,7 @@ namespace rm_modloader {
 	static_assert(sizeof(RxPlane) == 0x110);
 	static_assert(sizeof(ImageLoader) == 0x4);
 	static_assert(sizeof(DrawLocal_ImageLoader) == 0x8);
+	static_assert(sizeof(RxInput) == 0xA0);
 
 };
 #undef __cppobj
