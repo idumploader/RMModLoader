@@ -17,4 +17,12 @@ ModLoader.hook_key(VKKeys::VK_W, VKKeys::VK_X)
 ModLoader.hook_key(VKKeys::VK_D, VKKeys::VK_RIGHT)
 ModLoader.hook_key(VKKeys::VK_A, VKKeys::VK_LEFT)
 
+ModLoader.gamepad_deadzone = 100
+ModLoader.gamepad_invert_x = false
+ModLoader.gamepad_invert_y = true
+
+ModLoader.gamepad_bind(GamepadButtons::A, :Z)
+ModLoader.gamepad_bind(GamepadButtons::B, :X)
+ModLoader.gamepad_bind(GamepadButtons::RIGHT_BUMPER, :SHIFT)
+
 end # ModLoader.controls_change_enabled

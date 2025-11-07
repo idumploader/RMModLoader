@@ -17,6 +17,7 @@ Also mod loader has built-in feature to change game resolution (HRFix). If you w
 ## Built-in custom scripts
 * GraphicsReplace: Can be used to replace some in-game assets at runtime. The script searches at "mod_loader" folder. For example, placing file "my_game_title.png" at "mod_loader\Graphics\Pictures" replaces  in-game "Graphics\Pictures\my_game_title.png"
 * HRFix: Fixes some problems when getting higher resolution than 640x480. Works only with "hrfix_enable"=true in config
+* ControlsChange: You can change game controls by binding keys to each other. Enables gamepad controls. Works only with "controls_change"=true in config
 
 ## Known problems
 * HRFix can significantly lower the FPS
