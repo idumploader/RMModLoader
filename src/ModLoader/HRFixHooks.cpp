@@ -15,6 +15,22 @@ namespace rm_modloader {
     int hrfix_render_width = 640;
     int hrfix_render_height = 480;
 
+    std::pair<int, int> offset_screen_size(int width, int height) {
+        RECT system_client_rect;
+        SystemParametersInfoA(SPI_GETWORKAREA, 0, &system_client_rect, 0);
+        int working_height = system_client_rect.bottom - system_client_rect.top;
+        int working_width = system_client_rect.right - system_client_rect.left;
+
+        TITLEBARINFOEX title_bar_info = { sizeof(TITLEBARINFOEX) };
+        SendMessage(mod_loader->get_game()->window_handle, WM_GETTITLEBARINFOEX, 0, reinterpret_cast<LPARAM>(&title_bar_info));
+        int title_bar_height = (title_bar_info.rcTitleBar.bottom - title_bar_info.rcTitleBar.top);
+
+        return std::make_pair(
+            std::min(working_width, width),
+            std::min(working_height - title_bar_height, height)
+        );
+    }
+
     bool is_cut_disabled_map(RxTilemap* tilemap) {
         RxPatchTilemap* patched_tilemap = reinterpret_cast<RxPatchTilemap*>(tilemap);
         return patched_tilemap->map_id == 90;
@@ -39,7 +55,7 @@ namespace rm_modloader {
 
         RubyValue global_rb_tilemap = *at_offset<RubyValue*>(rgss_module, 0x26A0B4);
 
-        rb_register_method(global_rb_tilemap, "map_id=", patch_tilemap_set_map_id, 1);
+        rb_define_method(global_rb_tilemap, "map_id=", patch_tilemap_set_map_id, 1);
     }
 
     int TilemapMapIDPatch::patch_tilemap_set_map_id(void* ruby_data, int map_id_object) {
@@ -158,10 +174,15 @@ namespace rm_modloader {
                 last_window_rect.bottom - last_window_rect.top,
                 SWP_FRAMECHANGED
             );
+
+            auto [adjusted_width, adjusted_height] = offset_screen_size(hrfix_render_width, hrfix_render_height);
+            (game->*game_frame_resize_screen)(adjusted_width, adjusted_height);
         }
         else {
             is_fullscreen = true;
             GetWindowRect(game->window_handle, &last_window_rect);
+
+            (game->*game_frame_resize_screen)(hrfix_render_width, hrfix_render_height);
 
             int screen_width = GetSystemMetrics(SM_CXSCREEN);
             int screen_height = GetSystemMetrics(SM_CYSCREEN);
@@ -263,8 +284,15 @@ namespace rm_modloader {
         mod_loader->patch_memory_as<int>(0x10E6A7, hrfix_render_width);
         mod_loader->patch_memory_as<int>(0x10E6C4, hrfix_render_height);
 
+        // enable fullscreen by key
         mod_loader->hook_method(input_update_keys, &RxInputHRFixHook::update_keys_hook, &RxInputHRFixHook::orig_update_keys);
         input_update_keys = static_cast<decltype(input_update_keys)>(&RxInputHRFixHook::update_keys_hook);
+
+        // set default resolution
+        mod_loader->add_postinit_handler([] {
+            auto [adjusted_width, adjusted_height] = offset_screen_size(hrfix_render_width, hrfix_render_height);
+            (mod_loader->get_game()->*game_frame_resize_screen)(adjusted_width, adjusted_height);
+        });
 
         mod_loader->log_info("Applied HRFix\n");
     }

@@ -1,6 +1,6 @@
 if ModLoader.hrfix_enabled
 
-Graphics.resize_screen(1920, 1000)
+#Graphics.resize_screen(1920, 1080)
 
 module HRFix
 	ORIG_PICTURE_IMG_WIDTH = 680.0

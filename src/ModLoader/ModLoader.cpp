@@ -10,6 +10,9 @@
 #include <locale>
 #include <array>
 
+#undef max
+#undef min
+
 std::string_view named_pipe_name = R"(\\.\pipe\WindowHookDebugLog)";
 
 decltype(&IsDebuggerPresent) orig_IsDebuggerPresent;
@@ -50,6 +53,14 @@ namespace rm_modloader {
 		static RubyValue __cdecl controls_change_enabled(RubyValue module) {
 			return mod_loader->get_config().is_controls_change_enabled() ? ruby_true : ruby_false;
 		}
+
+		static RubyValue __cdecl data_directory(RubyValue module) {
+			return rb_str_new_cstr(ModLoaderCore::modloader_data_dir.data());
+		}
+
+		static RubyValue __cdecl version(RubyValue module) {
+			return rb_str_new_cstr(ModLoaderCore::version.data());
+		}
 	};
 
 	struct ModLoaderCoreHooks {
@@ -65,7 +76,8 @@ namespace rm_modloader {
 
 		static int __cdecl startup_scripts_hook(const wchar_t* scripts_file, StartupScriptsString* compressed) {
 			auto name = std::wstring_view(scripts_file);
-			mod_loader->log_info("startup_scripts: loading from {}\n", std::string(name.begin(), name.end()));
+			auto compressed_view = std::wstring_view(compressed->buffer);
+			mod_loader->log_info("startup_scripts: loading from {}. RGSS string: {}\n", std::string(name.begin(), name.end()), std::string(compressed_view.begin(), compressed_view.end()));
 
 			mod_loader->setup_mod_loader_ruby_module();
 			mod_loader->on_preinit();
@@ -128,7 +140,7 @@ namespace rm_modloader {
 	}
 
 	void ModLoaderCore::register_ruby_method(std::string_view name, void* function, int argument_count) {
-		rb_register_module_method(ruby_module_, name.data(), function, argument_count);
+		rb_define_singleton_method(ruby_module_, name.data(), function, argument_count);
 	}
 
 	ModLoaderPatchID ModLoaderCore::hook_function_internal(void* target, void* hook_func, void** orig_func) {
@@ -150,6 +162,8 @@ namespace rm_modloader {
 		for (auto& [id, handler] : preinit_handlers_) {
 			handler();
 		}
+
+		execute_all_user_scripts_in(modloader_root_ / modloader_data_dir / preinit_scripts_dir);
 	}
 
 	void ModLoaderCore::on_postinit() {
@@ -157,17 +171,39 @@ namespace rm_modloader {
 			handler();
 		}
 
-		execute_all_user_scripts();
+		execute_all_user_scripts_in(modloader_root_ / modloader_data_dir / scripts_dir);
 
 		patched_decompress_script_ = nullptr;
 	}
 
-	void ModLoaderCore::execute_all_user_scripts() const {
-		auto user_scripts_dir = modloader_root_ / modloader_data_dir / scripts_dir;
-		for (auto& entry : std::filesystem::directory_iterator(user_scripts_dir)) {
-			if (entry.is_directory()) continue;
-			if (entry.path().extension() != ".rb") continue;
+	void ModLoaderCore::execute_all_user_scripts_in(const std::filesystem::path& scripts_dir) const {
+		std::vector<std::filesystem::directory_entry> scripts_entries(std::filesystem::directory_iterator(scripts_dir), std::filesystem::directory_iterator{});
+		std::erase_if(scripts_entries, [](const auto& entry) -> bool {
+			return entry.is_directory() || entry.path().extension() != ".rb";
+		});
 
+		auto entry_to_enum_index = [this](const auto& entry) {
+			std::string filename = entry.path().filename().string();
+			size_t enum_pos = filename.find(" - ");
+			if (enum_pos == std::string::npos) {
+				log_info("file {} has invalid enumeration filename syntax (should be \"dddd - *.rb\"). Placing at the end.", filename);
+				return std::numeric_limits<int64_t>::max();
+			}
+			std::istringstream filename_stream(filename.substr(0, enum_pos));
+
+			int64_t index;
+			filename_stream >> index;
+			if (filename_stream.fail()) {
+				log_info("file {} has invalid enumeration filename syntax (should be \"dddd - *.rb\"). Placing at the end.", filename);
+				return std::numeric_limits<int64_t>::max();
+			}
+			return index;
+		};
+		std::sort(scripts_entries.begin(), scripts_entries.end(), [&entry_to_enum_index](const auto& left, const auto& right) {
+			return entry_to_enum_index(left) < entry_to_enum_index(right);
+		});
+
+		for (auto& entry : scripts_entries) {
 			std::ifstream script_is(entry.path());
 			std::string script_content((std::istreambuf_iterator<char>(script_is)), std::istreambuf_iterator<char>());
 
@@ -224,6 +260,9 @@ namespace rm_modloader {
 			apply_controls_change();
 		}
 
+		// remove restriction from "load_data" when executing game script to always load from encrypted "Game.rgss3a"
+		patch_memory_as<int>(0xEBB4, 1);
+
 		log_info("Applied all base hooks\n");
 	}
 
@@ -233,10 +272,12 @@ namespace rm_modloader {
 
 	void ModLoaderCore::setup_mod_loader_ruby_module() {
 		//add_preinit_handler([this] {
-			ruby_module_ = rb_get_module("ModLoader");
+			ruby_module_ = rb_define_module("ModLoader");
 			register_ruby_method("hrfix_enabled", ModLoaderRubyModule::hrfix_enabled);
 			register_ruby_method("fast_render_enabled", ModLoaderRubyModule::fast_render_enabled);
 			register_ruby_method("controls_change_enabled", ModLoaderRubyModule::controls_change_enabled);
+			register_ruby_method("version", ModLoaderRubyModule::version);
+			register_ruby_method("data_directory", ModLoaderRubyModule::data_directory);
 		//});
 	}
 
@@ -273,6 +314,6 @@ namespace rm_modloader {
 		postinit_handlers_.erase(handler_id);
 	}
 
-	constexpr std::string_view ModLoaderCore::version = "2.3";
+	constexpr std::string_view ModLoaderCore::version = "2.4";
 	std::shared_ptr<ModLoaderCore> mod_loader;
 }
