@@ -27,15 +27,19 @@ namespace rm_modloader {
     extern int(__thiscall Surface::* surface_init_bitmap)(int width, int height);
     extern int(__thiscall RxTilemapSprite::* tilemap_render_tiles)(Surface* surf, RECT* rect);
 
+    extern int(__thiscall GameFrame::* game_frame_resize_screen)(int width, int height);
+
     extern RxInput* (__thiscall RxInput::* input_update_keys)();
 
     extern RubyValue(__cdecl* tilemap_initialize)(RubyValue self, int a2, void* a3);
     extern RubyValue(__cdecl* init_rb_tilemap)(RubyValue self, int a2, void* a3);
     extern RubyValue(__cdecl* tilemap_bitmaps)(RubyValue self);
 
-    extern RubyValue(__cdecl* rb_get_module)(const char* name);
-    extern RubyValue(__cdecl* rb_register_module_method)(RubyValue object, const char* name, void* func, int arg_count);
-    extern RubyValue(__cdecl* rb_register_method)(RubyValue object, const char* name, void* func, int arg_count);
+    extern RubyValue(__cdecl* rb_str_new_cstr)(const char* ptr);
+    extern RubyValue(__cdecl* rb_define_module)(const char* name);
+    extern RubyValue(__cdecl* rb_define_class)(const char* name, RubyValue base);
+    extern RubyValue(__cdecl* rb_define_singleton_method)(RubyValue object, const char* name, void* func, int arg_count);
+    extern RubyValue(__cdecl* rb_define_method)(RubyValue object, const char* name, void* func, int arg_count);
     extern int(__cdecl* rb_parse_int)(RubyValue object);
     extern const char* (__cdecl* rb_get_string_data)(RubyValue rb_string);
     extern RubyValue(__cdecl* eval_rb_cstr)(const char* script, BYTE* a2, int* error_code);

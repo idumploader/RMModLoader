@@ -44,6 +44,7 @@ namespace rm_modloader {
 	class ModLoaderCore {
 		friend class detail::ModLoaderBooter;
 		friend struct ModLoaderCoreHooks;
+		friend struct ModLoaderRubyModule;
 
 	public:
 		static const std::string_view version;
@@ -53,6 +54,7 @@ namespace rm_modloader {
 
 		static constexpr std::string_view modloader_data_dir = "mod_loader";
 		static constexpr std::string_view scripts_dir = "scripts";
+		static constexpr std::string_view preinit_scripts_dir = "scripts_preinit";
 
 		ModLoaderCore(std::filesystem::path loader_root_path);
 		ModLoaderCore(const ModLoaderCore& other) = delete;
@@ -310,11 +312,39 @@ namespace rm_modloader {
 		 */
 		void on_postinit();
 
-		void execute_all_user_scripts() const;
+		/**
+		 * Execute all ruby scripts in given directory with .rb extension.
+		 * The scripts are ordered by prefixed priority. "(\d+) - .*.rb"
+		 * If some script failed to execute, the error will be logged.
+		 * @param scripts_dir directory where to walk and execute ruby scripts.
+		 */
+		void execute_all_user_scripts_in(const std::filesystem::path& scripts_dir) const;
 
+		/**
+		 * Create all directories needed for ModLoader
+		 */
 		void setup_directories();
+
+		/**
+		 * Setup all hooks needed for ModLoader
+		 */
 		void setup_modloader_hooks();
+
+		/**
+		 * @todo
+		 */
 		void clear_modloader_hooks();
+
+		/**
+		 * Create ModLoader ruby module, which can be accessed from scripts.
+		 * Can be used in preinit and postinit scripts.
+		 * 
+		 * ModLoader.hrfix_enabled - returns if the HRFix is enabled in config.
+		 * ModLoader.fast_render_enabled - returns if the FastRender is enabled in config.
+		 * ModLoader.controls_change_enabled - returns if the ControlsChange is enabled in config.
+		 * ModLoader.version - returns current version of the ModLoader as string.
+		 * ModLoader.data_directory - returns current root data directory of the ModLoader as string.
+		 */
 		void setup_mod_loader_ruby_module();
 
 		std::filesystem::path modloader_root_;
