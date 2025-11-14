@@ -24,6 +24,7 @@ namespace rm_modloader {
 
     RubyValue(__cdecl* rb_str_new_cstr)(const char* ptr) = nullptr;
     RubyValue(__cdecl* rb_define_module)(const char* name) = nullptr;
+    RubyValue(__cdecl* rb_define_function)(const char* name, void* func, int arg_count) = nullptr;
     RubyValue(__cdecl* rb_define_class)(const char* name, RubyValue base) = nullptr;
     RubyValue(__cdecl* rb_define_singleton_method)(RubyValue object, const char* name, void* func, int arg_count) = nullptr;
     RubyValue(__cdecl* rb_define_method)(RubyValue object, const char* name, void* func, int arg_count) = nullptr;
@@ -56,6 +57,7 @@ namespace rm_modloader {
 
         rb_str_new_cstr = at_offset<decltype(rb_str_new_cstr)>(rgss_module, 0x36570);
         rb_define_module = at_offset<decltype(rb_define_module)>(rgss_module, 0x5E990);
+        rb_define_function = at_offset<decltype(rb_define_function)>(rgss_module, 0x5F270);
         rb_define_class = at_offset<decltype(rb_define_class)>(rgss_module, 0x5E740);
         rb_define_singleton_method = at_offset<decltype(rb_define_singleton_method)>(rgss_module, 0x5F1E0);
         tilemap_bitmaps = at_offset<decltype(tilemap_bitmaps)>(rgss_module, 0x15520);

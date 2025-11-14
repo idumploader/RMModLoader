@@ -37,6 +37,7 @@ namespace rm_modloader {
 
     extern RubyValue(__cdecl* rb_str_new_cstr)(const char* ptr);
     extern RubyValue(__cdecl* rb_define_module)(const char* name);
+    extern RubyValue(__cdecl* rb_define_function)(const char* name, void* func, int arg_count);
     extern RubyValue(__cdecl* rb_define_class)(const char* name, RubyValue base);
     extern RubyValue(__cdecl* rb_define_singleton_method)(RubyValue object, const char* name, void* func, int arg_count);
     extern RubyValue(__cdecl* rb_define_method)(RubyValue object, const char* name, void* func, int arg_count);
