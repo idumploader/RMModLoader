@@ -356,8 +356,6 @@ namespace rm_modloader {
 
 		HANDLE debug_pipe_handle_;
 
-		std::unique_ptr<char[]> patched_decompress_script_;
-
 		ModLoaderConfig config_;
 		RubyValue ruby_module_;
 	};

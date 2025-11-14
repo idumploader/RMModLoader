@@ -74,6 +74,15 @@ namespace rm_modloader {
 			return orig_load_data(self, a2);
 		}
 
+		static int __cdecl fake_rgss_main(int a1) {
+			mod_loader->on_postinit();
+			mod_loader->log_info("fake_rgss_main: Executed post-init scripts. Starting game\n");
+
+			mod_loader->execute_script("rgsssmain { SceneManager.run }");
+
+			return 1;
+		}
+
 		static int __cdecl startup_scripts_hook(const wchar_t* scripts_file, StartupScriptsString* compressed) {
 			auto name = std::wstring_view(scripts_file);
 			auto compressed_view = std::wstring_view(compressed->buffer);
@@ -82,14 +91,7 @@ namespace rm_modloader {
 			mod_loader->setup_mod_loader_ruby_module();
 			mod_loader->on_preinit();
 
-			int ret = orig_startup_scripts(scripts_file, compressed);
-
-			mod_loader->on_postinit();
-			mod_loader->log_info("startup_scripts: Executed post-init scripts. Starting game\n");
-
-			mod_loader->execute_script("rgss_main { SceneManager.run }");
-
-			return ret;
+			return orig_startup_scripts(scripts_file, compressed);
 		}
 	};
 
@@ -159,6 +161,8 @@ namespace rm_modloader {
 	void ModLoaderCore::on_preinit() {
 		init_glfw();
 
+		rb_define_function("rgss_main", ModLoaderCoreHooks::fake_rgss_main, 0);
+
 		for (auto& [id, handler] : preinit_handlers_) {
 			handler();
 		}
@@ -172,8 +176,6 @@ namespace rm_modloader {
 		}
 
 		execute_all_user_scripts_in(modloader_root_ / modloader_data_dir / scripts_dir);
-
-		patched_decompress_script_ = nullptr;
 	}
 
 	void ModLoaderCore::execute_all_user_scripts_in(const std::filesystem::path& scripts_dir) const {
@@ -237,16 +239,6 @@ namespace rm_modloader {
 	void ModLoaderCore::setup_modloader_hooks() {
 		hook_api_function(L"kernel32.dll", "IsDebuggerPresent", is_debugger_present_hook, &orig_IsDebuggerPresent);
 
-		if (!patched_decompress_script_) {
-			// Copied script from RPG Maker. It loads and decompresses all scripts.
-			// Changed, that it doesn't include "Main" scripts, who calls `rgss_main` and actually runs game. ModLoader will call `rgss_main` on it's own
-			constexpr char load_script[] = "$RGSS_SCRIPTS = load_data(@scripts_fname);$RGSS_SCRIPTS.delete_if{ |s| s[1] == \"Main\" };$RGSS_SCRIPTS.each { |s| s[3,0] = Zlib::Inflate.inflate(s[2]) };$RGSS_SCRIPTS.size";
-
-			patched_decompress_script_ = std::make_unique<char[]>(sizeof(load_script));
-			strcpy_s(patched_decompress_script_.get(), sizeof(load_script), load_script);
-			patch_memory_as<int>(0xEBA0, reinterpret_cast<intptr_t>(patched_decompress_script_.get()));
-		}
-
 		hook_function(load_data, &ModLoaderCoreHooks::load_data_hook, &ModLoaderCoreHooks::orig_load_data);
 		hook_function(startup_scripts, &ModLoaderCoreHooks::startup_scripts_hook, &ModLoaderCoreHooks::orig_startup_scripts);
 
@@ -262,6 +254,9 @@ namespace rm_modloader {
 
 		// remove restriction from "load_data" when executing game script to always load from encrypted "Game.rgss3a"
 		patch_memory_as<int>(0xEBB4, 1);
+
+		// change rgss_main to rgsssmain
+		patch_memory_as<char>(0x1A7EF0, 's');
 
 		log_info("Applied all base hooks\n");
 	}
