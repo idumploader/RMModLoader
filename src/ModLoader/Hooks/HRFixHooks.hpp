@@ -1,5 +1,5 @@
 #pragma once
-#include "RMClasses.hpp"
+#include "../RMClasses.hpp"
 
 namespace rm_modloader {
 

@@ -1,9 +1,9 @@
 #define NOMINMAX
 #include "HRFixHooks.hpp"
-#include "ModLoader.hpp"
-#include "Hook.hpp"
-#include "RMGlobal.hpp"
-#include "GLFWMisc.hpp"
+#include "../ModLoader.hpp"
+#include "../Hook.hpp"
+#include "../RMGlobal.hpp"
+#include "../GLFWMisc.hpp"
 
 #include <future>
 #include <thread>
@@ -238,6 +238,31 @@ namespace rm_modloader {
             lpParam
         );
     }
+
+    struct ScreenHRFixHook : Screen {
+        static int(__thiscall Screen::* orig_update_screen)(int a1, int a2);
+
+        int __thiscall update_screen_hook(int a1, int a2);
+    };
+
+    int __thiscall ScreenHRFixHook::update_screen_hook(int a1, int a2) {
+        static std::unique_ptr<char[]> screen_data = std::make_unique<char[]>(2048 * 2048 * 4);
+        static std::mutex render_mutex;
+        static std::condition_variable render_cv;
+        static int render_a1 = a1, render_a2 = a2;
+        static std::thread render_thread([this] {
+            while (true) {
+                std::unique_lock l(render_mutex);
+                (this->*orig_update_screen)(render_a1, render_a2);
+                render_cv.wait(l);
+            }
+        });
+
+        std::unique_lock l(render_mutex);
+
+        return 1;
+    }
+    int(__thiscall Screen::* ScreenHRFixHook::orig_update_screen)(int a1, int a2) = nullptr;
 
     void apply_hrfix() {
         hrfix_render_width = mod_loader->get_config().get_required_width();

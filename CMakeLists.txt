@@ -43,13 +43,14 @@ find_package(minhook REQUIRED)
 
 add_library(ModLoader SHARED
 	"src/ModLoader/DllMain.cpp"
-	"src/ModLoader/HRFixHooks.cpp"
+	"src/ModLoader/Hooks/HRFixHooks.cpp"
 	"src/ModLoader/ModLoader.cpp"
 	"src/ModLoader/ModLoaderConfig.cpp"
 	"src/ModLoader/RMGlobal.cpp"
-	"src/ModLoader/FastRenderHooks.cpp"
+	"src/ModLoader/Hooks/FastRenderHooks.cpp"
 	"src/ModLoader/TilemapReader.cpp"
-	"src/ModLoader/ControlsChangeHooks.cpp"
+	"src/ModLoader/Hooks/ControlsChangeHooks.cpp"
+	"src/ModLoader/Hooks/IntegratedHooks.cpp"
 	"src/ModLoader/GLFWMisc.cpp"
 )
 

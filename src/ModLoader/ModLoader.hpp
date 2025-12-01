@@ -7,6 +7,7 @@
 #include <unordered_map>
 #include <functional>
 #include <span>
+#include <iostream>
 
 namespace rm_modloader {
 	namespace detail {
@@ -264,9 +265,26 @@ namespace rm_modloader {
 		template<typename ... TArgs>
 		void log_info(const std::format_string<TArgs...> fmt, TArgs&& ... args) const {
 			std::string msg = "[ModLoader INFO] " + std::format(std::move(fmt), std::forward<TArgs>(args) ...);
-			DWORD written;
-			WriteFile(debug_pipe_handle_, msg.c_str(), msg.size(), &written, nullptr);
+			log(msg);
 		}
+
+		/**
+		 * Print warning log to user
+		 * @tparam TArgs Format arguments types
+		 * @param fmt Format string. @ref std::format
+		 * @param args ... Format arguments
+		 */
+		template<typename ... TArgs>
+		void log_warning(const std::format_string<TArgs...> fmt, TArgs&& ... args) const {
+			std::string msg = "\x1B[0;33m[ModLoader INFO] " + std::format(std::move(fmt), std::forward<TArgs>(args) ...) + "\x1B[0m";
+			log(msg);
+		}
+
+		/**
+		 * Print raw log string
+		 * @param msg log message
+		 */
+		void log(std::string_view msg) const;
 		
 		/**
 		 * Get mod loader config. It contains all the settings for mod loader
@@ -301,6 +319,19 @@ namespace rm_modloader {
 
 		ModLoaderPatchID hook_function_internal(void* target, void* hook_func, void** orig_func);
 		ModLoaderPatchID hook_api_function_internal(std::wstring_view lib_name, std::string_view function_name, void* hook_func, void** orig_func);
+
+		/**
+		 * Internal ruby log method
+		 * @tparam TArgs Format arguments types
+		 * @param fmt Format string. @ref std::format
+		 * @param args ... Format arguments
+		 */
+		template<typename ... TArgs>
+		void log_ruby(const std::format_string<TArgs...> fmt, TArgs&& ... args) const {
+			std::string msg = "\x1B[38;5;214m[Ruby] " + std::format(std::move(fmt), std::forward<TArgs>(args) ...) + "\x1B[0m";
+			DWORD written;
+			WriteFile(debug_pipe_handle_, msg.c_str(), msg.size(), &written, nullptr);
+		}
 
 		/**
 		 * This method is internally used by ModLoaderBooter

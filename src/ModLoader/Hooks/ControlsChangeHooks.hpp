@@ -1,5 +1,5 @@
 #pragma once
-#include "RMGlobal.hpp"
+#include "../RMGlobal.hpp"
 
 #include <GLFW/glfw3.h>
 
@@ -86,26 +86,5 @@ namespace rm_modloader {
 		static RubyValue __cdecl mod_loader_hook_key(RubyValue module, RubyValue orig_virt_key, RubyValue virt_key);
 	};
 
-	// hook for enabling gamepad
-	struct RxInputControlChangeHook : RxInput {
-		static RxInput* (__thiscall RxInput::* orig_update_keys)();
-
-		static float gamepad_deadzone;
-		static bool gamepad_x_inverted;
-		static bool gamepad_y_inverted;
-
-		void process_gamepad_inputs();
-
-		RxInput* __thiscall update_keys_hook();
-
-		static bool gamepad_pressed(const GLFWgamepadstate& gamepad_state, int key);
-		static bool gamepad_axed(const GLFWgamepadstate& gamepad_state, int axis, bool negative);
-
-		static RubyValue __cdecl mod_loader_gamepad_set_deadzone(RubyValue module, RubyValue deadzone_value);
-		static RubyValue __cdecl mod_loader_gamepad_bind(RubyValue module, RubyValue button_value, RubyValue button_action_value);
-		static RubyValue __cdecl mod_loader_gamepad_set_invert_x(RubyValue module, RubyValue invert_x_value);
-		static RubyValue __cdecl mod_loader_gamepad_set_invert_y(RubyValue module, RubyValue invert_y_value);
-	};
-	
 	extern void apply_controls_change();
 }

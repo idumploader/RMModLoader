@@ -1,7 +1,7 @@
 #include "FastRenderHooks.hpp"
-#include "ModLoader.hpp"
-#include "TilemapReader.hpp"
-#include "Hook.hpp"
+#include "../ModLoader.hpp"
+#include "../TilemapReader.hpp"
+#include "../Hook.hpp"
 
 #include <glad.h>
 #include <staplegl.hpp>

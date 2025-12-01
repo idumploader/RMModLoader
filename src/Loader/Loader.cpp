@@ -37,14 +37,25 @@ void press_any_key() {
         static_cast<void>(_getch());
     }
 }
+
+void enable_virtual_cmd_mode() {
+    HANDLE cout_handle = GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD mode;
+    if (!GetConsoleMode(cout_handle, &mode)) {
+        return;
+    }
+    mode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+    SetConsoleMode(cout_handle, mode);
+}
+
 int main(int argc, char** argv) {
     std::atexit(press_any_key);
+    enable_virtual_cmd_mode();
+    std::locale::global(std::locale("RU_ru.UTF8"));
 
     constexpr std::string_view named_pipe_name = R"(\\.\pipe\WindowHookDebugLog)";
     std::filesystem::path game_exe = "Game.exe";
     std::filesystem::path dll_path = modloader_file;
-    STARTUPINFOA si = { 0 };
-    si.cb = sizeof(si);
 
     if (!std::filesystem::exists(dll_path)) {
         std::cerr << "Failed to find ModLoader file\n";
@@ -56,7 +67,17 @@ int main(int argc, char** argv) {
         return -1;
     }
 
+    HANDLE pipe_handle = CreateNamedPipeA(named_pipe_name.data(), PIPE_ACCESS_INBOUND, PIPE_TYPE_BYTE | PIPE_WAIT, 1, 0, 0, NMPWAIT_USE_DEFAULT_WAIT, nullptr);
+    if (pipe_handle == INVALID_HANDLE_VALUE) {
+        std::cerr << "Failed to create pipe\n";
+        return -1;
+    }
+
     PROCESS_INFORMATION pi;
+    STARTUPINFOA si = { 0 };
+    si.cb = sizeof(si);
+    //si.hStdOutput = pipe_handle;
+
     std::string root_path = game_exe.parent_path().string();
     if (!CreateProcessA(game_exe.string().c_str(), game_exe.string().data(), nullptr, nullptr, FALSE, CREATE_SUSPENDED, nullptr, !root_path.empty() ? root_path.c_str() : nullptr , &si, &pi)) {
         std::cerr << "Failed to create process\n";
@@ -79,13 +100,6 @@ int main(int argc, char** argv) {
     if (!WriteProcessMemory(pi.hProcess, allocated_mem, dll_path.string().c_str(), alloc_size, nullptr)) {
         TerminateProcess(pi.hProcess, -1);
         std::cerr << "Failed to write memory";
-        return -1;
-    }
-
-    HANDLE pipe_handle = CreateNamedPipeA(named_pipe_name.data(), PIPE_ACCESS_INBOUND, PIPE_TYPE_BYTE | PIPE_WAIT, 1, 0, 0, NMPWAIT_USE_DEFAULT_WAIT, nullptr);
-    if (pipe_handle == INVALID_HANDLE_VALUE) {
-        TerminateProcess(pi.hProcess, -1);
-        std::cerr << "Failed to create pipe\n";
         return -1;
     }
     

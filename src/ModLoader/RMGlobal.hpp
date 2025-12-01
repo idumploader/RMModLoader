@@ -52,6 +52,10 @@ namespace rm_modloader {
 
     extern int(__cdecl* get_rb_key_symbol_index)(RubyValue symbol_value);
 
+    inline constexpr RubyValue rb_make_number(int number) {
+        return (number & 0xFF) << 1 | 1;
+    }
+
     /**
      * Initializes all global functions and method pointers
      */
