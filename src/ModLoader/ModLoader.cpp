@@ -1,9 +1,10 @@
 #include "ModLoader.hpp"
 #include "Hook.hpp"
 #include "RMGlobal.hpp"
-#include "HRFixHooks.hpp"
-#include "FastRenderHooks.hpp"
-#include "ControlsChangeHooks.hpp"
+#include "Hooks/HRFixHooks.hpp"
+#include "Hooks/FastRenderHooks.hpp"
+#include "Hooks/ControlsChangeHooks.hpp"
+#include "Hooks/IntegratedHooks.hpp"
 #include "GLFWMisc.hpp"
 
 #include <fstream>
@@ -60,6 +61,16 @@ namespace rm_modloader {
 
 		static RubyValue __cdecl version(RubyValue module) {
 			return rb_str_new_cstr(ModLoaderCore::version.data());
+		}
+
+		static RubyValue __cdecl log_ruby(RubyValue module, RubyValue log_string) {
+			std::string_view msg = rb_get_string_data(reinterpret_cast<RubyValue>(&log_string));
+			if (msg != "\n") {
+				mod_loader->log_ruby("{}", msg);
+			} else {
+				mod_loader->log(msg);
+			}
+			return ruby_true;
 		}
 	};
 
@@ -137,6 +148,11 @@ namespace rm_modloader {
 		memcpy(target, data, size);
 	}
 
+	void ModLoaderCore::log(std::string_view msg) const {
+		DWORD written;
+		WriteFile(debug_pipe_handle_, msg.data(), msg.size(), &written, nullptr);
+	}
+
 	const ModLoaderConfig& ModLoaderCore::get_config() const {
 		return config_;
 	}
@@ -188,7 +204,7 @@ namespace rm_modloader {
 			std::string filename = entry.path().filename().string();
 			size_t enum_pos = filename.find(" - ");
 			if (enum_pos == std::string::npos) {
-				log_info("file {} has invalid enumeration filename syntax (should be \"dddd - *.rb\"). Placing at the end.", filename);
+				log_warning("file {} has invalid enumeration filename syntax (should be \"dddd - *.rb\"). Placing at the end.\n", filename);
 				return std::numeric_limits<int64_t>::max();
 			}
 			std::istringstream filename_stream(filename.substr(0, enum_pos));
@@ -196,7 +212,7 @@ namespace rm_modloader {
 			int64_t index;
 			filename_stream >> index;
 			if (filename_stream.fail()) {
-				log_info("file {} has invalid enumeration filename syntax (should be \"dddd - *.rb\"). Placing at the end.", filename);
+				log_warning("file {} has invalid enumeration filename syntax (should be \"dddd - *.rb\"). Placing at the end.\n", filename);
 				return std::numeric_limits<int64_t>::max();
 			}
 			return index;
@@ -251,6 +267,7 @@ namespace rm_modloader {
 		if (config_.is_controls_change_enabled()) {
 			apply_controls_change();
 		}
+		apply_integrated_hooks();
 
 		// remove restriction from "load_data" when executing game script to always load from encrypted "Game.rgss3a"
 		patch_memory_as<int>(0xEBB4, 1);
@@ -273,6 +290,8 @@ namespace rm_modloader {
 			register_ruby_method("controls_change_enabled", ModLoaderRubyModule::controls_change_enabled);
 			register_ruby_method("version", ModLoaderRubyModule::version);
 			register_ruby_method("data_directory", ModLoaderRubyModule::data_directory);
+
+			register_ruby_method("log", &ModLoaderRubyModule::log_ruby);
 		//});
 	}
 
@@ -309,6 +328,6 @@ namespace rm_modloader {
 		postinit_handlers_.erase(handler_id);
 	}
 
-	constexpr std::string_view ModLoaderCore::version = "2.4";
+	constexpr std::string_view ModLoaderCore::version = "2.5";
 	std::shared_ptr<ModLoaderCore> mod_loader;
 }
