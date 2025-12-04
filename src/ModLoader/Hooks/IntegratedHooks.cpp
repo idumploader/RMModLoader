@@ -12,11 +12,14 @@ namespace rm_modloader {
 	RxInput*(__thiscall RxInput::* ExtendedControlSet::orig_update_keys)() = nullptr;
 
 	std::array<int, 30> ExtendedControlSet::gamepad_binds;
-	std::array<BYTE, 0xFF> ExtendedControlSet::current_keyboard_state;
-	std::array<BYTE, 0xFF> ExtendedControlSet::prev_keyboard_state;
+	std::array<BYTE, 256> ExtendedControlSet::current_keyboard_state;
+	std::array<BYTE, 256> ExtendedControlSet::prev_keyboard_state;
 
-	std::chrono::high_resolution_clock::duration ExtendedControlSet::repeat_delta = std::chrono::milliseconds(80);
-	std::array<std::chrono::high_resolution_clock::time_point, 0xFF> ExtendedControlSet::repeat_last_pressed_time;
+	std::chrono::high_resolution_clock::duration ExtendedControlSet::repeat_delta = std::chrono::milliseconds(50);
+	std::chrono::high_resolution_clock::duration ExtendedControlSet::repeat_hang_time = std::chrono::milliseconds(250);
+	std::array<std::chrono::high_resolution_clock::time_point, 256> ExtendedControlSet::last_pressed_time;
+	std::array<std::chrono::high_resolution_clock::time_point, 256> ExtendedControlSet::last_repeat_time;
+	std::array<bool, 256> ExtendedControlSet::last_requested_repeat;
 
 	float ExtendedControlSet::gamepad_deadzone = 0.4f;
 	bool ExtendedControlSet::gamepad_x_inverted = false;
@@ -33,6 +36,16 @@ namespace rm_modloader {
 		prev_keyboard_state = current_keyboard_state;
 		if (!GetKeyboardState(current_keyboard_state.data())) {
 			// error
+		}
+
+		auto time_now = std::chrono::high_resolution_clock::now();
+		for (size_t i = 0; i < current_keyboard_state.size(); ++i) {
+			last_pressed_time[i] = (current_keyboard_state[i] & 0x80) && !(prev_keyboard_state[i] & 0x80) ?
+				time_now : last_pressed_time[i];
+
+			bool should_reset_repeat = time_now - last_repeat_time[i] >= repeat_delta && last_requested_repeat[i] && (current_keyboard_state[i] & 0x80);
+			last_repeat_time[i] = should_reset_repeat ? time_now : last_pressed_time[i];
+			last_requested_repeat[i] = false;
 		}
 	}
 
@@ -69,8 +82,10 @@ namespace rm_modloader {
 	bool ExtendedControlSet::is_key_repeated(int key) {
 		bool is_pressed = (current_keyboard_state[key] & 0x80);
 		auto time_now = std::chrono::high_resolution_clock::now();
-		if (is_pressed &&  time_now - repeat_last_pressed_time[key] >= repeat_delta) {
-			repeat_last_pressed_time[key] = time_now;
+
+		if (is_key_pressed(key)
+			|| is_pressed && time_now - last_pressed_time[key] >= repeat_hang_time && time_now - last_repeat_time[key] >= repeat_delta) {
+			last_requested_repeat[key] = true;
 			return ruby_true;
 		}
 		return ruby_false;

@@ -281,6 +281,18 @@ namespace rm_modloader {
 		}
 
 		/**
+		 * Print errror log to user
+		 * @tparam TArgs Format arguments types
+		 * @param fmt Format string. @ref std::format
+		 * @param args ... Format arguments
+		 */
+		template<typename ... TArgs>
+		void log_error(const std::format_string<TArgs...> fmt, TArgs&& ... args) const {
+			std::string msg = "\x1B[0;31m[ModLoader INFO] " + std::format(std::move(fmt), std::forward<TArgs>(args) ...) + "\x1B[0m";
+			log(msg);
+		}
+
+		/**
 		 * Print raw log string
 		 * @param msg log message
 		 */

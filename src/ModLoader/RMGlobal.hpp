@@ -28,6 +28,7 @@ namespace rm_modloader {
     extern int(__thiscall RxTilemapSprite::* tilemap_render_tiles)(Surface* surf, RECT* rect);
 
     extern int(__thiscall GameFrame::* game_frame_resize_screen)(int width, int height);
+    extern int(__thiscall Screen::* screen_resize_screen)(int width, int height, bool is_fullscreen);
 
     extern RxInput* (__thiscall RxInput::* input_update_keys)();
 

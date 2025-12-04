@@ -16,11 +16,14 @@ namespace rm_modloader {
 		static RxInput*(__thiscall RxInput::* orig_update_keys)();
 
 		static std::array<int, 30> gamepad_binds;
-		static std::array<BYTE, 0xFF> current_keyboard_state;
-		static std::array<BYTE, 0xFF> prev_keyboard_state;
+		static std::array<BYTE, 256> current_keyboard_state;
+		static std::array<BYTE, 256> prev_keyboard_state;
 
 		static std::chrono::high_resolution_clock::duration repeat_delta;
-		static std::array<std::chrono::high_resolution_clock::time_point, 0xFF> repeat_last_pressed_time;
+		static std::chrono::high_resolution_clock::duration repeat_hang_time;
+		static std::array<std::chrono::high_resolution_clock::time_point, 256> last_pressed_time;
+		static std::array<std::chrono::high_resolution_clock::time_point, 256> last_repeat_time;
+		static std::array<bool, 256> last_requested_repeat;
 
 		static float gamepad_deadzone;
 		static bool gamepad_x_inverted;
