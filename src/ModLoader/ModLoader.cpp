@@ -89,7 +89,16 @@ namespace rm_modloader {
 			mod_loader->on_postinit();
 			mod_loader->log_info("fake_rgss_main: Executed post-init scripts. Starting game\n");
 
-			mod_loader->execute_script("rgsssmain { SceneManager.run }");
+			int error;
+			mod_loader->execute_script("rgsssmain { SceneManager.run }", error);
+			if (error) {
+				std::array<WCHAR, 512> error_buffer = {};
+				int error_error = 0; // xD
+				get_rb_error_string(error_buffer.data(), error_buffer.size(), &error_error);
+
+				std::wstring_view error_wstr = error_buffer.data();
+				MessageBoxW(mod_loader->get_game()->window_handle, error_wstr.data(), L"Error", MB_OK | MB_ICONERROR);
+			}
 
 			return 1;
 		}
@@ -236,7 +245,7 @@ namespace rm_modloader {
 				get_rb_error_string(error_buffer.data(), error_buffer.size(), &error_error);
 
 				std::wstring_view error_wstr = error_buffer.data();
-				log_info(
+				log_error(
 					"Failed executing script: {}\n"
 					"Error: {}\n",
 					entry.path().string(),

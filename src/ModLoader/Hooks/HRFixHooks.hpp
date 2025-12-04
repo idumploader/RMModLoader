@@ -62,5 +62,11 @@ namespace rm_modloader {
         RxInput* __thiscall update_keys_hook();
     };
 
+    struct DisableFullscreenHook : Screen {
+        static int(__thiscall Screen::* orig_resize_screen)(int width, int height, bool is_fullscreen);
+
+        int __thiscall resize_screen_hook(int width, int height, bool is_fullscreen);
+    };
+
     extern void apply_hrfix();
 }

@@ -15,6 +15,7 @@ namespace rm_modloader {
     int(__thiscall RxTilemapSprite::* tilemap_render_tiles)(Surface* surf, RECT* rect) = nullptr;
 
     int(__thiscall GameFrame::* game_frame_resize_screen)(int width, int height) = nullptr;
+    int(__thiscall Screen::* screen_resize_screen)(int width, int height, bool is_fullscreen) = nullptr;
 
     RxInput*(__thiscall RxInput::* input_update_keys)() = nullptr;
 
@@ -63,6 +64,7 @@ namespace rm_modloader {
         tilemap_bitmaps = at_offset<decltype(tilemap_bitmaps)>(rgss_module, 0x15520);
         tilemap_render_tiles = at_offset<decltype(tilemap_render_tiles)>(rgss_module, 0x21D40);
         game_frame_resize_screen = at_offset<decltype(game_frame_resize_screen)>(rgss_module, 0x20D0);
+        screen_resize_screen = at_offset<decltype(screen_resize_screen)>(rgss_module, 0x10DC30);
         surface_init_bitmap = at_offset<decltype(surface_init_bitmap)>(rgss_module, 0x10B3B0);
         input_update_keys = at_offset<decltype(input_update_keys)>(rgss_module, 0x1B4D0);
         set_sprite_offset = at_offset<decltype(set_sprite_offset)>(rgss_module, 0x110F40);

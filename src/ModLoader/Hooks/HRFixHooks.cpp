@@ -164,6 +164,7 @@ namespace rm_modloader {
         GameFrame* game = mod_loader->get_game();
         if (is_fullscreen) {
             is_fullscreen = false;
+            //LONG style = GetWindowLongPtr(game->window_handle, GWL_STYLE);
             SetWindowLongPtr(game->window_handle, GWL_STYLE, WS_VISIBLE | WS_OVERLAPPEDWINDOW);
             SetWindowPos(
                 game->window_handle,
@@ -186,7 +187,10 @@ namespace rm_modloader {
 
             int screen_width = GetSystemMetrics(SM_CXSCREEN);
             int screen_height = GetSystemMetrics(SM_CYSCREEN);
+            //LONG style = GetWindowLongPtr(game->window_handle, GWL_STYLE);
+
             SetWindowLongPtr(game->window_handle, GWL_STYLE, WS_VISIBLE | WS_POPUP);
+            //SetWindowLongPtr(game->window_handle, GWL_EXSTYLE, WS_EX_APPWINDOW |WS_EX_CONTROLPARENT);
             SetWindowPos(game->window_handle, HWND_TOP, 0, 0, screen_width, screen_height, SWP_FRAMECHANGED);
         }
     }
@@ -264,6 +268,12 @@ namespace rm_modloader {
     }
     int(__thiscall Screen::* ScreenHRFixHook::orig_update_screen)(int a1, int a2) = nullptr;
 
+    int(__thiscall Screen::* DisableFullscreenHook::orig_resize_screen)(int width, int height, bool is_fullscreen) = nullptr;
+
+    int __thiscall DisableFullscreenHook::resize_screen_hook(int width, int height, bool is_fullscreen) {
+        return (this->*orig_resize_screen)(width, height, false);
+    }
+
     void apply_hrfix() {
         hrfix_render_width = mod_loader->get_config().get_required_width();
         hrfix_render_height = mod_loader->get_config().get_required_height();
@@ -312,6 +322,8 @@ namespace rm_modloader {
         // enable fullscreen by key
         mod_loader->hook_method(input_update_keys, &RxInputHRFixHook::update_keys_hook, &RxInputHRFixHook::orig_update_keys);
         input_update_keys = static_cast<decltype(input_update_keys)>(&RxInputHRFixHook::update_keys_hook);
+
+        mod_loader->hook_method(screen_resize_screen, &DisableFullscreenHook::resize_screen_hook, &DisableFullscreenHook::orig_resize_screen);
 
         // set default resolution
         mod_loader->add_postinit_handler([] {
