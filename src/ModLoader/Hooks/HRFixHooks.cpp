@@ -40,6 +40,11 @@ namespace rm_modloader {
         return at_address<RxPatchTilemap*>(at_address<void*>(ruby_data, 16), 8);
     }
 
+    template<typename T>
+    T* rgss_get_rb_data(RubyValue ruby_data) {
+        return at_address<T*>(get_rb_data_data<void>(ruby_data), 8);
+    }
+
     int TilemapMapIDPatch::tilemap_initialize_hook(int a1, int a2, void* a3) {
         int ret = orig_tilemap_initialize(a1, a2, a3);
 
@@ -274,6 +279,40 @@ namespace rm_modloader {
         return (this->*orig_resize_screen)(width, height, false);
     }
 
+    static RubyValue __cdecl rx_viewport_get_x_ruby(RubyValue object) {
+        RxViewport* viewport = rgss_get_rb_data<RxViewport>(object);
+
+        return rb_make_number(viewport->offset_x);
+    }
+
+    static RubyValue __cdecl rx_viewport_set_x_ruby(RubyValue object, RubyValue x_value) {
+        RxViewport* viewport = rgss_get_rb_data<RxViewport>(object);
+        int new_x = rb_parse_int(x_value);
+        if (viewport->offset_x != new_x) {
+            viewport->offset_x = new_x;
+            (viewport->*(viewport->vftable->set_sprite_offset))(viewport->offset_x, viewport->offset_y);
+        }
+
+        return x_value;
+    }
+
+    static RubyValue __cdecl rx_viewport_get_y_ruby(RubyValue object) {
+        RxViewport* viewport = rgss_get_rb_data<RxViewport>(object);
+
+        return rb_make_number(viewport->offset_y);
+    }
+
+    static RubyValue __cdecl rx_viewport_set_y_ruby(RubyValue object, RubyValue y_value) {
+        RxViewport* viewport = rgss_get_rb_data<RxViewport>(object);
+        int new_y = rb_parse_int(y_value);
+        if (viewport->offset_y != new_y) {
+            viewport->offset_y = new_y;
+            (viewport->*(viewport->vftable->set_sprite_offset))(viewport->offset_x, viewport->offset_y);
+        }
+
+        return y_value;
+    }
+
     void apply_hrfix() {
         hrfix_render_width = mod_loader->get_config().get_required_width();
         hrfix_render_height = mod_loader->get_config().get_required_height();
@@ -305,7 +344,7 @@ namespace rm_modloader {
 
         mod_loader->hook_method(tilemap_render_tiles, &RxTilemapSpriteHRFixHook::render_tilemap_tiles_hook, &RxTilemapSpriteHRFixHook::orig_render_tilemap_tiles);
         mod_loader->hook_method(surface_init_bitmap, &SurfaceHRFixHook::init_surface_bitmap_hook, &SurfaceHRFixHook::orig_init_surface_bitmap);
-        mod_loader->hook_method(set_sprite_offset, &SpriteHRFixHook::set_sprite_offset_hook, &SpriteHRFixHook::orig_set_sprite_offset);
+        //mod_loader->hook_method(set_sprite_offset, &SpriteHRFixHook::set_sprite_offset_hook, &SpriteHRFixHook::orig_set_sprite_offset);
         //mod_loader->hook_method(set_sprite_offset, &SpriteHRFixHook::set_rect_hook, &SpriteHRFixHook::orig_set_rect);
 
         // Patch for new RxTilemap field
@@ -329,6 +368,15 @@ namespace rm_modloader {
         mod_loader->add_postinit_handler([] {
             auto [adjusted_width, adjusted_height] = offset_screen_size(hrfix_render_width, hrfix_render_height);
             (mod_loader->get_game()->*game_frame_resize_screen)(adjusted_width, adjusted_height);
+        });
+
+        mod_loader->add_preinit_handler([] {
+            RubyValue* viewport_klass = mod_loader->at_base_offset_as<RubyValue*>(0x26A0D8);
+
+            rb_define_method(*viewport_klass, "x", rx_viewport_get_x_ruby, 0);
+            rb_define_method(*viewport_klass, "x=", rx_viewport_set_x_ruby, 1);
+            rb_define_method(*viewport_klass, "y", rx_viewport_get_y_ruby, 0);
+            rb_define_method(*viewport_klass, "y=", rx_viewport_set_y_ruby, 1);
         });
 
         mod_loader->log_info("Applied HRFix\n");

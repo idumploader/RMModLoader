@@ -5,7 +5,7 @@ if (CMAKE_TOOLCHAIN_FILE MATCHES "vcpkg.cmake")
 	include(${CMAKE_TOOLCHAIN_FILE})
 endif()
 
-project(rmforge LANGUAGES CXX C)
+project(rmforge LANGUAGES CXX C VERSION 2.6)
 
 include(CMakePackageConfigHelpers)
 
@@ -51,9 +51,14 @@ add_library(ModLoader SHARED
 	"src/ModLoader/TilemapReader.cpp"
 	"src/ModLoader/Hooks/ControlsChangeHooks.cpp"
 	"src/ModLoader/Hooks/IntegratedHooks.cpp"
+	"src/ModLoader/Hooks/SteamSupportHooks.cpp"
 	"src/ModLoader/GLFWMisc.cpp"
 )
 
+target_compile_definitions(ModLoader PUBLIC
+	-DRM_MODLOADER_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
+	-DRM_MODLOADER_VERSION_MINOR=${PROJECT_VERSION_MINOR}
+)
 #target_precompile_headers(ModLoader PRIVATE "src/pch.h")
 
 target_link_libraries(ModLoader PRIVATE

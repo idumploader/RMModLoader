@@ -5,11 +5,13 @@
 #include "Hooks/FastRenderHooks.hpp"
 #include "Hooks/ControlsChangeHooks.hpp"
 #include "Hooks/IntegratedHooks.hpp"
+#include "Hooks/SteamSupportHooks.hpp"
 #include "GLFWMisc.hpp"
 
 #include <fstream>
 #include <locale>
 #include <array>
+#include <cwctype>
 
 #undef max
 #undef min
@@ -64,7 +66,7 @@ namespace rm_modloader {
 		}
 
 		static RubyValue __cdecl log_ruby(RubyValue module, RubyValue log_string) {
-			std::string_view msg = rb_get_string_data(reinterpret_cast<RubyValue>(&log_string));
+			std::string_view msg = rb_get_string_data(&log_string);
 			if (msg != "\n") {
 				mod_loader->log_ruby("{}", msg);
 			} else {
@@ -72,14 +74,49 @@ namespace rm_modloader {
 			}
 			return ruby_true;
 		}
+		
+		static RubyValue __cdecl config_get(RubyValue module, RubyValue key_value) {
+			std::string_view key = rb_get_string_data(&key_value);
+			if (key.empty()) {
+				return ruby_nil;
+			}
+			if (!mod_loader->get_config().contains(key)) {
+				rb_raise(*ruby_error_arg_error, "ModLoader config key not found");
+				return ruby_nil;
+			}
+
+			const auto& value = mod_loader->get_config().at(key);
+			if (value.is_string()) {
+				return rb_str_new_cstr(static_cast<std::string_view>(value).data());
+			}
+			if (value.is_boolean()) {
+				return static_cast<bool>(value) ? ruby_true : ruby_false;
+			}
+			if (value.is_number()) {
+				return rb_make_number(value);
+			}
+			if (value.is_null()) {
+				return ruby_nil;
+			}
+			rb_raise(*ruby_error_arg_error, "Cannot convert ModLoader config value");
+			return ruby_nil;
+		}
+
+		static RubyValue __cdecl version_major(RubyValue module) {
+			return rb_make_number(RM_MODLOADER_VERSION_MAJOR);
+		}
+
+		static RubyValue __cdecl version_minor(RubyValue module) {
+			return rb_make_number(RM_MODLOADER_VERSION_MINOR);
+		}
 	};
 
 	struct ModLoaderCoreHooks {
-		static int(__cdecl* orig_load_data)(int self, int a2);
+		static int(__cdecl* orig_load_data)(RubyValue self, RubyValue a2);
 		static int(__cdecl* orig_startup_scripts)(const wchar_t* scripts_file, StartupScriptsString* compressed);
 
-		static int __cdecl load_data_hook(int self, int a2) {
-			const char* name = rb_get_string_data(reinterpret_cast<RubyValue>(&a2));
+		static int __cdecl load_data_hook(RubyValue self, RubyValue a2) {
+			const char* name = rb_get_string_data(&a2);
 			mod_loader->log_info("load_data: {}\n", name);
 
 			return orig_load_data(self, a2);
@@ -90,7 +127,7 @@ namespace rm_modloader {
 			mod_loader->log_info("fake_rgss_main: Executed post-init scripts. Starting game\n");
 
 			int error;
-			mod_loader->execute_script("rgsssmain { SceneManager.run }", error);
+			mod_loader->execute_script("rgsssmain { SceneManager.run }", "ModLoaderMainRunner", error);
 			if (error) {
 				std::array<WCHAR, 512> error_buffer = {};
 				int error_error = 0; // xD
@@ -115,7 +152,7 @@ namespace rm_modloader {
 		}
 	};
 
-	int(__cdecl* ModLoaderCoreHooks::orig_load_data)(int self, int a2) = nullptr;
+	int(__cdecl* ModLoaderCoreHooks::orig_load_data)(RubyValue self, RubyValue a2) = nullptr;
 	int(__cdecl* ModLoaderCoreHooks::orig_startup_scripts)(const wchar_t* scripts_file, StartupScriptsString* compressed) = nullptr;
 
 	ModLoaderCore::ModLoaderCore(std::filesystem::path loader_root_path) :
@@ -235,21 +272,25 @@ namespace rm_modloader {
 			std::string script_content((std::istreambuf_iterator<char>(script_is)), std::istreambuf_iterator<char>());
 
 			int error;
-			execute_script(script_content, error);
+			//execute_script(script_content, "ModLoaderEvaluator", error);
+			execute_script(script_content, entry.path().filename().string(), error);
 			if (!error) {
 				log_info("Executed script: {}\n", entry.path().string());
 			}
 			else {
 				std::array<WCHAR, 512> error_buffer = {};
 				int error_error = 0; // xD
-				get_rb_error_string(error_buffer.data(), error_buffer.size(), &error_error);
+				get_rb_error_string(error_buffer.data(), error_buffer.max_size(), &error_error);
 
 				std::wstring_view error_wstr = error_buffer.data();
+				auto parsed_error = error_wstr | std::views::transform([](wchar_t c) {
+					return std::iswprint(c) || c == L'\n' ? c : L'?';
+				});
 				log_error(
 					"Failed executing script: {}\n"
 					"Error: {}\n",
 					entry.path().string(),
-					std::string(error_wstr.begin(), error_wstr.end())
+					std::string(parsed_error.begin(), parsed_error.end())
 				);
 			}
 		}
@@ -277,6 +318,7 @@ namespace rm_modloader {
 			apply_controls_change();
 		}
 		apply_integrated_hooks();
+		apply_steam_support_hooks();
 
 		// remove restriction from "load_data" when executing game script to always load from encrypted "Game.rgss3a"
 		patch_memory_as<int>(0xEBB4, 1);
@@ -299,6 +341,9 @@ namespace rm_modloader {
 			register_ruby_method("controls_change_enabled", ModLoaderRubyModule::controls_change_enabled);
 			register_ruby_method("version", ModLoaderRubyModule::version);
 			register_ruby_method("data_directory", ModLoaderRubyModule::data_directory);
+			register_ruby_method("config_get", ModLoaderRubyModule::config_get);
+			register_ruby_method("version_major", ModLoaderRubyModule::version_major);
+			register_ruby_method("version_minor", ModLoaderRubyModule::version_minor);
 
 			register_ruby_method("log", &ModLoaderRubyModule::log_ruby);
 		//});
@@ -312,9 +357,8 @@ namespace rm_modloader {
 		return eval_rb_cstr_noerr(script.data());
 	}
 
-	int ModLoaderCore::execute_script(std::string_view script, int& error) const {
-		BYTE unk_byte;
-		return eval_rb_cstr(script.data(), &unk_byte, std::addressof(error));
+	int ModLoaderCore::execute_script(std::string_view script, std::string_view script_name, int& error) const {
+		return eval_rb_cstr(script.data(), script_name.data(), std::addressof(error));
 	}
 
 	ModLoaderHandlerID ModLoaderCore::add_preinit_handler(PreinitHandler handler) {
@@ -337,6 +381,16 @@ namespace rm_modloader {
 		postinit_handlers_.erase(handler_id);
 	}
 
-	constexpr std::string_view ModLoaderCore::version = "2.5";
+#define STRINGIFY_(a) #a
+#define STRINGIFY(a) STRINGIFY_(a)
+
+	constexpr std::string_view make_version_string() {
+		return STRINGIFY(RM_MODLOADER_VERSION_MAJOR) "." STRINGIFY(RM_MODLOADER_VERSION_MINOR);
+	}
+
+#undef STRINGIFY_
+#undef STRINGIFY
+	
+	constexpr std::string_view ModLoaderCore::version = make_version_string();
 	std::shared_ptr<ModLoaderCore> mod_loader;
 }

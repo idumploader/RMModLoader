@@ -113,10 +113,11 @@ namespace rm_modloader {
 		/**
 		 * Execute given Ruby script syncronously
 		 * @param script Ruby scripts content
+		 * @param script_name Named of the script. Used when getting error string
 		 * @param error Reference to output error code. Error if > 0
 		 * @return Last evaluated ruby object
 		 */
-		int execute_script(std::string_view script, int& error) const;
+		int execute_script(std::string_view script, std::string_view script_name, int& error) const;
 
 		/**
 		 * Add pre-init handler. It's executed right before game scripts executed
@@ -341,8 +342,7 @@ namespace rm_modloader {
 		template<typename ... TArgs>
 		void log_ruby(const std::format_string<TArgs...> fmt, TArgs&& ... args) const {
 			std::string msg = "\x1B[38;5;214m[Ruby] " + std::format(std::move(fmt), std::forward<TArgs>(args) ...) + "\x1B[0m";
-			DWORD written;
-			WriteFile(debug_pipe_handle_, msg.c_str(), msg.size(), &written, nullptr);
+			log(msg);
 		}
 
 		/**
