@@ -1,6 +1,7 @@
 #include "IntegratedHooks.hpp"
 #include "ControlsChangeHooks.hpp"
 #include "../ModLoader.hpp"
+#include "../Hook.hpp"
 
 #include <GLFW/glfw3.h>
 
@@ -117,7 +118,7 @@ namespace rm_modloader {
 
 		WORD symb;
 		BOOL ret = ToAscii(key, 0, current_keyboard_state.data(), &symb, 0);
-		return ret ? rb_make_number(symb) : ruby_nil;
+		return ret ? rb_make_number(symb & 0xFF) : ruby_nil;
 	}
 
 	RubyValue __cdecl ExtendedControlSet::mod_loader_gamepad_set_deadzone(RubyValue module, RubyValue deadzone_value) {

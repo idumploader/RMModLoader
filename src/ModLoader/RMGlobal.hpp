@@ -1,5 +1,6 @@
 #pragma once
 #include "RMClasses.hpp"
+#include "Ruby.hpp"
 
 namespace rm_modloader {
 
@@ -14,12 +15,6 @@ namespace rm_modloader {
     inline GameFrame* get_rgss_game() {
         return *rgss_game;
     }
-
-    using RubyValue = int;
-
-    constexpr RubyValue ruby_false = 0;
-    constexpr RubyValue ruby_true = 2;
-    constexpr RubyValue ruby_nil = 4;
 
     extern int(__thiscall Sprite::* set_sprite_offset)(int x, int y);
     extern int(__thiscall Sprite::* set_rect)(RECT* new_rect);
@@ -42,20 +37,29 @@ namespace rm_modloader {
     extern RubyValue(__cdecl* rb_define_class)(const char* name, RubyValue base);
     extern RubyValue(__cdecl* rb_define_singleton_method)(RubyValue object, const char* name, void* func, int arg_count);
     extern RubyValue(__cdecl* rb_define_method)(RubyValue object, const char* name, void* func, int arg_count);
+    extern RubyValue(__cdecl* rb_define_alloc_func)(RubyValue object, RubyValue(__cdecl* func)(RubyValue));
     extern int(__cdecl* rb_parse_int)(RubyValue object);
-    extern const char* (__cdecl* rb_get_string_data)(RubyValue rb_string);
-    extern RubyValue(__cdecl* eval_rb_cstr)(const char* script, BYTE* a2, int* error_code);
+    extern const char* (__cdecl* rb_get_string_data)(RubyValue* rb_string);
+    extern RubyValue(__cdecl* eval_rb_cstr)(const char* script, const char* script_name, int* error_code);
     extern RubyValue(__cdecl* eval_rb_cstr_noerr)(const char* script);
+    extern RubyValue(__cdecl* rb_funcall)(RubyValue recv, RubyID mid, int n, ...);
+    extern void(__cdecl* rb_raise)(RubyValue exc_class, const char* fmt, ...);
     extern int(__cdecl* get_rb_error_string)(WCHAR* error_buf, size_t buf_size, int*);
+
+    extern RubyValue(__cdecl* rb_big_new)(int len, bool is_positive);
+    extern void*(__cdecl* alloc_rb_rdata)(size_t size);
+    extern RubyValue(__cdecl* make_rb_rdata)(RubyValue klass, void* data, void(__cdecl* dmark)(void*), void(__cdecl* dfree)(void*));
 
     extern int(__cdecl* load_data)(int self, int rb_filename);
     extern int(__cdecl* startup_scripts)(const wchar_t* scripts_file, StartupScriptsString* rgss3a_filepath);
 
     extern int(__cdecl* get_rb_key_symbol_index)(RubyValue symbol_value);
 
-    inline constexpr RubyValue rb_make_number(int number) {
-        return (number & 0xFF) << 1 | 1;
-    }
+    extern void(__cdecl* rgss_free)(void* block);
+
+    extern RubyValue* ruby_error_arg_error;
+    extern RubyValue* ruby_c_object;
+    extern RubyValue* ruby_c_bignum;
 
     /**
      * Initializes all global functions and method pointers
