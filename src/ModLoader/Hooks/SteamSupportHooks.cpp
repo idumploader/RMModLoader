@@ -46,13 +46,16 @@ namespace rm_modloader {
 		}
 	}
 
-	constexpr bool is_debug = false;
-
 	template<typename ... Args>
 	void debug_mod_loader_log(std::format_string<Args...> fmt, Args&& ... args) {
-		if constexpr (is_debug) {
-			mod_loader->log_info(std::move(fmt), std::forward<Args>(args) ...);
-		}
+#ifdef _DEBUG
+		mod_loader->log_info(std::move(fmt), std::forward<Args>(args) ...);
+#endif
+	}
+
+	template<typename ... T>
+	inline bool check_ruby_type(RubyValue value, T ... expected_types) {
+		return ((rb_type(value) == expected_types) || ...);
 	}
 
 	using SteamCCallbackRunner = void(*)(RubyValue recv, RubyID method, void* pv_param, bool failure);
@@ -184,7 +187,7 @@ namespace rm_modloader {
 
 		static RubyValue __cdecl initialize(RubyValue object, RubyValue callback_type_value) {
 			if (!is_rb_fixnum(callback_type_value)) {
-				rb_raise(*ruby_error_arg_error, "Wrong arguments, expected Fixnum");
+				rb_raise(*ruby_error_arg_error, "Expected callback_type as fixnum");
 				return ruby_nil;
 			}
 
@@ -326,10 +329,12 @@ namespace rm_modloader {
 		}
 
 		static RubyValue __cdecl initialize(RubyValue object, RubyValue callback_type_value, RubyValue recv, RubyValue method) {
-			if (!is_rb_fixnum(callback_type_value)
-				|| !is_rb_symbol(method)
-				) {
-				rb_raise(*ruby_error_arg_error, "Wrong arguments");
+			if (!check_ruby_type(callback_type_value, RUBY_T_FIXNUM)) {
+				rb_raise(*ruby_error_arg_error, "Expected callback type as fixnum");
+				return ruby_nil;
+			}
+			if (!check_ruby_type(method, RUBY_T_SYMBOL)) {
+				rb_raise(*ruby_error_arg_error, "Expected method as symbol");
 				return ruby_nil;
 			}
 
@@ -405,8 +410,8 @@ namespace rm_modloader {
 		}
 
 		static RubyValue __cdecl initialize(RubyValue object, RubyValue type_value, RubyValue from_id_value, RubyValue data_value) {
-			if (!is_rb_fixnum(type_value)) {
-				rb_raise(*ruby_error_arg_error, "Wrong arguments");
+			if (!check_ruby_type(from_id_value, RUBY_T_FIXNUM, RUBY_T_BIGNUM)) {
+				rb_raise(*ruby_error_arg_error, "Expected from_id as fixnum or bignum");
 				return ruby_nil;
 			}
 
@@ -528,24 +533,24 @@ namespace rm_modloader {
 		static RubyValue klass;
 
 		static RubyValue __cdecl create_lobby_ruby(RubyValue object, RubyValue type_value, RubyValue max_players_value, RubyValue callback_value) {
-			if (callback_value == ruby_nil) {
-				// ...
+			if (!check_ruby_type(type_value, RUBY_T_FIXNUM)) {
+				rb_raise(*ruby_error_arg_error, "Expected type as fixnum");
 				return ruby_nil;
 			}
-			if (is_rb_immediate(callback_value)
-				|| rb_get_value_klass(callback_value) != SteamCCallResult::klass
-				|| !is_rb_fixnum(type_value)
-				|| !is_rb_fixnum(max_players_value)
-				) {
-				rb_raise(*ruby_error_arg_error, "Wrong arguments");
+			if (!check_ruby_type(max_players_value, RUBY_T_FIXNUM)) {
+				rb_raise(*ruby_error_arg_error, "Expected max_players as fixnum");
 				return ruby_nil;
 			}
-			SteamCCallResult* callback = get_rb_data_data<SteamCCallResult>(callback_value);
-			debug_mod_loader_log("SteamAPI create_lobby. Pointer: {:X}, {}, {}\n",
-				reinterpret_cast<uintptr_t>(callback),
-				rb_parse_int(type_value),
-				rb_parse_int(max_players_value)
-			);
+			//debug_mod_loader_log(
+			//	"callback type: {}, callback klass: {}, call result klass: {}",
+			//	static_cast<int>(rb_type(callback_value)),
+			//	check_ruby_type(callback_value, RUBY_T_DATA) ? dynamic_cast<SteamCCallResult*>(get_rb_data_data<CCallbackBase>(callback_value)) : 0,
+			//	SteamCCallResult::klass
+			//);
+			//if (callback_value != ruby_nil && (!check_ruby_type(callback_value, RUBY_T_DATA) || rb_get_value_klass(callback_value) != SteamCCallResult::klass)) {
+			//	rb_raise(*ruby_error_arg_error, "Expected callback as SteamCCallResult or nil");
+			//	return ruby_nil;
+			//}
 
 			ELobbyType lobby_type = static_cast<ELobbyType>(rb_parse_int(type_value));
 			int max_players = rb_parse_int(max_players_value);
@@ -556,16 +561,19 @@ namespace rm_modloader {
 				reinterpret_cast<uintptr_t>(matchmaking),
 				api_call
 			);
-			callback->set_api_call(api_call);
+			if (callback_value != ruby_nil) {
+				SteamCCallResult* callback = get_rb_data_data<SteamCCallResult>(callback_value);
+				callback->set_api_call(api_call);
+			}
 
 			return callback_value;
 		}
 
 		static RubyValue __cdecl leave_lobby(RubyValue object, RubyValue lobby_id_value) {
-			//if (!is_rb_fixnum(lobby_id_value)) {
-			//	rb_raise(*ruby_error_arg_error, "Wrong arguments");
-			//	return ruby_nil;
-			//}
+			if (!check_ruby_type(lobby_id_value, RUBY_T_FIXNUM, RUBY_T_BIGNUM)) {
+				rb_raise(*ruby_error_arg_error, "Expected lobby_id as fixnum or bignum");
+				return ruby_nil;
+			}
 
 			CSteamID steam_id = rb_num2ull(lobby_id_value);
 			SteamMatchmaking()->LeaveLobby(steam_id);
@@ -577,9 +585,8 @@ namespace rm_modloader {
 				// ...
 				return ruby_nil;
 			}
-			// TODO: check
-			if (false) {
-				rb_raise(*ruby_error_arg_error, "Wrong arguments");
+			if (!check_ruby_type(lobby_id_value, RUBY_T_FIXNUM, RUBY_T_BIGNUM)) {
+				rb_raise(*ruby_error_arg_error, "Expected lobby_id as fixnum or bignum");
 				return ruby_nil;
 			}
 			SteamCCallResult* callback = get_rb_data_data<SteamCCallResult>(callback_value);
@@ -592,15 +599,17 @@ namespace rm_modloader {
 		}
 
 		static RubyValue __cdecl get_lobby_owner_ruby(RubyValue object, RubyValue lobby_id_value) {
-			// TODO: check
-			if (false) {
-				rb_raise(*ruby_error_arg_error, "Wrong arguments");
+			if (!check_ruby_type(lobby_id_value, RUBY_T_FIXNUM, RUBY_T_BIGNUM)) {
+				rb_raise(*ruby_error_arg_error, "Expected lobby_id as fixnum or bignum");
 				return ruby_nil;
 			}
 			CSteamID lobby_id = rb_num2ull(lobby_id_value);
 
 			CSteamID owner_id = SteamMatchmaking()->GetLobbyOwner(lobby_id);
 
+			if (!owner_id.IsValid()) {
+				return ruby_nil;
+			}
 			return rb_i642num(owner_id.ConvertToUint64());
 		}
 
@@ -659,10 +668,19 @@ namespace rm_modloader {
 		}
 
 		static RubyValue __cdecl send_basic_packet_ruby(RubyValue object, RubyValue user_id_value, RubyValue channel_value, RubyValue packet_value, RubyValue flags_value) {
-			if (false) {
-				rb_raise(*ruby_error_arg_error, "Wrong arguments");
+			if (!check_ruby_type(user_id_value, RUBY_T_FIXNUM, RUBY_T_BIGNUM)) {
+				rb_raise(*ruby_error_arg_error, "Expected user_id as fixnum or bignum");
 				return ruby_nil;
 			}
+			if (!check_ruby_type(channel_value, RUBY_T_FIXNUM)) {
+				rb_raise(*ruby_error_arg_error, "Expected channel as fixnum");
+				return ruby_nil;
+			}
+			if (!check_ruby_type(flags_value, RUBY_T_FIXNUM)) {
+				rb_raise(*ruby_error_arg_error, "Expected flags as fixnum");
+				return ruby_nil;
+			}
+
 			SteamNetworkingIdentity identity;
 			identity.SetSteamID64(rb_num2ull(user_id_value));
 			int channel_id = rb_parse_int(channel_value);
@@ -683,11 +701,24 @@ namespace rm_modloader {
 			return result == k_EResultOK ? ruby_true : ruby_false;
 		}
 
+		static void process_packet(BasicNetworkPacket& packet, RubyValue recv, RubyID method) {
+
+		}
+
 		static RubyValue __cdecl read_basic_packets_ruby(RubyValue object, RubyValue channel_value, RubyValue max_messages_value, RubyValue recv, RubyValue method_value) {
-			if (false) {
-				rb_raise(*ruby_error_arg_error, "Wrong arguments");
+			if (!check_ruby_type(channel_value, RUBY_T_FIXNUM)) {
+				rb_raise(*ruby_error_arg_error, "Expected channel as fixnum");
 				return ruby_nil;
 			}
+			if (!check_ruby_type(max_messages_value, RUBY_T_FIXNUM)) {
+				rb_raise(*ruby_error_arg_error, "Expected max_messages as fixnum");
+				return ruby_nil;
+			}
+			if (!check_ruby_type(method_value, RUBY_T_SYMBOL)) {
+				rb_raise(*ruby_error_arg_error, "Expected method as symbol");
+				return ruby_nil;
+			}
+
 			int channel_id = rb_parse_int(channel_value);
 			int max_messages = rb_parse_int(max_messages_value);
 			RubyID method = rb_sym2id(method_value);
@@ -803,6 +834,11 @@ namespace rm_modloader {
 	}
 
 	void apply_steam_support_hooks() {
+		auto config_value = mod_loader->get_config().get("steam_support");
+		if (!config_value || !config_value->get<bool>()) {
+			return;
+		}
+
 		mod_loader->add_preinit_handler([] {
 			if (!init_steam_env()) {
 				mod_loader->log_error("Failed to init steam environment!\n");
@@ -813,5 +849,7 @@ namespace rm_modloader {
 			init_rb_basic_network_packet();
 			init_rb_steam_callback();
 		});
+
+		mod_loader->log_info("Applied steam support\n");
 	}
 }

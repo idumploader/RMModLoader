@@ -45,8 +45,8 @@ namespace rm_modloader {
 	};
 
 	struct RubyRBasic {
-		RubyValue flags;
 		RubyValue klass;
+		RubyValue flags;
 	};
 
 	struct RubyRData {
@@ -119,15 +119,17 @@ namespace rm_modloader {
 
 	constexpr RubyValueType rb_type(RubyValue value) {
 		if (is_rb_immediate(value)) {
-			if (value == ruby_nil) return RUBY_T_NIL;
-			if (value == ruby_false) return RUBY_T_FALSE;
 			if (value == ruby_true) return RUBY_T_TRUE;
 			if (value == ruby_undef) return RUBY_T_UNDEF;
-			if (value == is_rb_symbol(value)) return RUBY_T_SYMBOL;
-			if (value == is_rb_fixnum(value)) return RUBY_T_FIXNUM;
-			RubyValue klass = reinterpret_cast<RubyRBasic*>(value)->klass;
-			return static_cast<RubyValueType>(klass & 0x1F);
+			if (is_rb_symbol(value)) return RUBY_T_SYMBOL;
+			if (is_rb_fixnum(value)) return RUBY_T_FIXNUM;
 		}
+		else {
+			if (value == ruby_nil) return RUBY_T_NIL;
+			if (value == ruby_false) return RUBY_T_FALSE;
+		}
+		RubyValue klass = reinterpret_cast<RubyRBasic*>(value)->klass;
+		return static_cast<RubyValueType>(klass & RUBY_T_MASK);
 	}
 
 	inline constexpr RubyValue rb_make_number(int number) {

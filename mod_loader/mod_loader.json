@@ -1,7 +1,8 @@
 {
 	"hrfix_enable": true,
-	"fast_render": true,
+	"fast_render": false,
 	"controls_change": true,
-	"width": 1920,
-	"height": 1000
+	"steam_support": true,
+	"width": 1500,
+	"height": 840
 }

@@ -55,4 +55,10 @@ namespace rm_modloader {
 	const nlohmann::json& ModLoaderConfig::at(std::string_view key) const {
 		return config_.at(key);
 	}
+	const nlohmann::json* ModLoaderConfig::get(std::string_view key) const noexcept {
+		if (!contains(key)) {
+			return nullptr;
+		}
+		return std::addressof(at(key));
+	}
 }
