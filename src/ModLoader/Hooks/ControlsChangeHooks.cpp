@@ -30,6 +30,10 @@ namespace rm_modloader {
 	}
 
 	void apply_controls_change() {
+		if (!mod_loader->get_config().is_controls_change_enabled()) {
+			return;
+		}
+
 		mod_loader->hook_api_function(L"user32.dll", "GetKeyState", &ControlsChangeHooks::get_key_state_hook, &ControlsChangeHooks::orig_GetKeyState);
 
 		mod_loader->add_preinit_handler([] {

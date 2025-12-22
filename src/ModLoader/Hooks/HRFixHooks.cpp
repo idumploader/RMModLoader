@@ -279,6 +279,65 @@ namespace rm_modloader {
         return (this->*orig_resize_screen)(width, height, false);
     }
 
+    struct TilemapSpriteOffsetHook : RxTilemapSprite {
+        static decltype(SpriteVFTable::set_sprite_offset) orig_set_sprite_offset;
+
+        bool __thiscall set_sprite_offset_hook(int x, int y) {
+            x += hrfix_render_width / 32 > tilemap->width ? (hrfix_render_width / 32 - tilemap->width) / 2: 0;
+            y += hrfix_render_height / 32 > tilemap->height ? (hrfix_render_height / 32 - tilemap->height) / 2 : 0;
+            return (this->*orig_set_sprite_offset)(x, y);
+            //return true;
+        }
+    };
+
+    decltype(SpriteVFTable::set_sprite_offset) TilemapSpriteOffsetHook::orig_set_sprite_offset = nullptr;
+
+    static RubyValue __cdecl rx_tilemap_get_x_ruby(RubyValue object) {
+        RxTilemap* tilemap = rgss_get_rb_data<RxTilemap>(object);
+
+        return rb_make_number(tilemap->tilemap_sprite8->offset_x);
+    }
+
+    static RubyValue __cdecl rx_tilemap_set_x_ruby(RubyValue object, RubyValue x_value) {
+        RxTilemap* tilemap = rgss_get_rb_data<RxTilemap>(object);
+        int new_x = rb_parse_int(x_value);
+        if (tilemap->tilemap_sprite8->offset_x != new_x) {
+            RxTilemapSprite* sprite = tilemap->tilemap_sprite8;
+            sprite->offset_x = new_x;
+            (sprite->*(TilemapSpriteOffsetHook::orig_set_sprite_offset))(sprite->offset_x, sprite->offset_y);
+        }
+        if (tilemap->tilemap_spriteC->offset_x != new_x) {
+            RxTilemapSprite* sprite = tilemap->tilemap_spriteC;
+            sprite->offset_x = new_x;
+            (sprite->*(TilemapSpriteOffsetHook::orig_set_sprite_offset))(sprite->offset_x, sprite->offset_y);
+        }
+
+        return x_value;
+    }
+
+    static RubyValue __cdecl rx_tilemap_get_y_ruby(RubyValue object) {
+        RxTilemap* tilemap = rgss_get_rb_data<RxTilemap>(object);
+
+        return rb_make_number(tilemap->tilemap_sprite8->offset_y);
+    }
+
+    static RubyValue __cdecl rx_tilemap_set_y_ruby(RubyValue object, RubyValue y_value) {
+        RxTilemap* tilemap = rgss_get_rb_data<RxTilemap>(object);
+        int new_y = rb_parse_int(y_value);
+        if (tilemap->tilemap_sprite8->offset_y != new_y) {
+            RxTilemapSprite* sprite = tilemap->tilemap_sprite8;
+            sprite->offset_y = new_y;
+            (sprite->*(TilemapSpriteOffsetHook::orig_set_sprite_offset))(sprite->offset_x, sprite->offset_y);
+        }
+        if (tilemap->tilemap_spriteC->offset_y != new_y) {
+            RxTilemapSprite* sprite = tilemap->tilemap_spriteC;
+            sprite->offset_y = new_y;
+            (sprite->*(TilemapSpriteOffsetHook::orig_set_sprite_offset))(sprite->offset_x, sprite->offset_y);
+        }
+
+        return y_value;
+    }
+
     static RubyValue __cdecl rx_viewport_get_x_ruby(RubyValue object) {
         RxViewport* viewport = rgss_get_rb_data<RxViewport>(object);
 
@@ -314,6 +373,10 @@ namespace rm_modloader {
     }
 
     void apply_hrfix() {
+        if (!mod_loader->get_config().is_hrfix_enabled()) {
+            return;
+        }
+
         hrfix_render_width = mod_loader->get_config().get_required_width();
         hrfix_render_height = mod_loader->get_config().get_required_height();
 
@@ -371,6 +434,13 @@ namespace rm_modloader {
         });
 
         mod_loader->add_preinit_handler([] {
+            RubyValue* tilemap_klass = mod_loader->at_base_offset_as<RubyValue*>(0x26A0B4);
+
+            rb_define_method(*tilemap_klass, "x", rx_tilemap_get_x_ruby, 0);
+            rb_define_method(*tilemap_klass, "x=", rx_tilemap_set_x_ruby, 1);
+            rb_define_method(*tilemap_klass, "y", rx_tilemap_get_y_ruby, 0);
+            rb_define_method(*tilemap_klass, "y=", rx_tilemap_set_y_ruby, 1);
+
             RubyValue* viewport_klass = mod_loader->at_base_offset_as<RubyValue*>(0x26A0D8);
 
             rb_define_method(*viewport_klass, "x", rx_viewport_get_x_ruby, 0);
@@ -378,6 +448,10 @@ namespace rm_modloader {
             rb_define_method(*viewport_klass, "y", rx_viewport_get_y_ruby, 0);
             rb_define_method(*viewport_klass, "y=", rx_viewport_set_y_ruby, 1);
         });
+
+        SpriteVFTable* tilemap_sprite_vftable = mod_loader->at_base_offset_as<SpriteVFTable*>(0x1A91EC);
+        TilemapSpriteOffsetHook::orig_set_sprite_offset = tilemap_sprite_vftable->set_sprite_offset;
+        tilemap_sprite_vftable->set_sprite_offset = static_cast<decltype(SpriteVFTable::set_sprite_offset)>(&TilemapSpriteOffsetHook::set_sprite_offset_hook);
 
         mod_loader->log_info("Applied HRFix\n");
     }

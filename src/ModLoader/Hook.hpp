@@ -59,6 +59,14 @@ template<typename T, typename TMethod>
     return ThisBoundMethod{ object, cast_vftable(object)->*method };
 }
 
+///**
+// * 
+// */
+//template<typename T, typename TVFTable, typename TMethod, typename THookMethod>
+//auto patch_vftable(TVFTable* vftable, TMethod TVFTable::* T::* method, THookMethod T::* hook_method) {
+//    
+//}
+
 /**
  * Get pointer to address with offset from base in bytes (base + offset)
  * @tparam T Returned pointer type

@@ -1,4 +1,4 @@
-if ModLoader.controls_change_enabled
+# if ModLoader.controls_change_enabled
 
 module VKKeys
 	VK_LBUTTON = 0x01
@@ -244,4 +244,4 @@ module GamepadButtons
 	DPAD_LEFT = 14
 end
 
-end # ModLoader.controls_change_enabled
+# end # ModLoader.controls_change_enabled

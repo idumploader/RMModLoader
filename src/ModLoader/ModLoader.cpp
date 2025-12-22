@@ -1,12 +1,8 @@
 #include "ModLoader.hpp"
 #include "Hook.hpp"
 #include "RMGlobal.hpp"
-#include "Hooks/HRFixHooks.hpp"
-#include "Hooks/FastRenderHooks.hpp"
-#include "Hooks/ControlsChangeHooks.hpp"
-#include "Hooks/IntegratedHooks.hpp"
-#include "Hooks/SteamSupportHooks.hpp"
 #include "GLFWMisc.hpp"
+#include "Hooks.hpp"
 
 #include <fstream>
 #include <locale>
@@ -300,6 +296,7 @@ namespace rm_modloader {
 		log_info("ModLoader version: {}. Current working dir: {}\n", version, std::filesystem::current_path().string());
 		std::filesystem::create_directories(modloader_root_ / modloader_data_dir);
 		std::filesystem::create_directories(modloader_root_ / modloader_data_dir / scripts_dir);
+		std::filesystem::create_directories(modloader_root_ / modloader_data_dir / preinit_scripts_dir);
 	}
 
 	void ModLoaderCore::setup_modloader_hooks() {
@@ -308,17 +305,9 @@ namespace rm_modloader {
 		hook_function(load_data, &ModLoaderCoreHooks::load_data_hook, &ModLoaderCoreHooks::orig_load_data);
 		hook_function(startup_scripts, &ModLoaderCoreHooks::startup_scripts_hook, &ModLoaderCoreHooks::orig_startup_scripts);
 
-		if (config_.is_hrfix_enabled()) {
-			apply_hrfix();
+		for (auto& applier : hooks_appliers) {
+			applier();
 		}
-		if (config_.is_fast_render_enabled()) {
-			apply_fast_render();
-		}
-		if (config_.is_controls_change_enabled()) {
-			apply_controls_change();
-		}
-		apply_integrated_hooks();
-		apply_steam_support_hooks();
 
 		// remove restriction from "load_data" when executing game script to always load from encrypted "Game.rgss3a"
 		patch_memory_as<int>(0xEBB4, 1);

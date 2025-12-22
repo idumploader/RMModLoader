@@ -1286,6 +1286,10 @@ namespace rm_modloader {
 	int(__cdecl* RxViewportHook::orig_set_flash_data)(int a1, int a2) = nullptr;
 
 	void apply_fast_render() {
+		if (!mod_loader->get_config().is_fast_render_enabled()) {
+			return;
+		}
+
 		// Execute in postinit, because can't use LoadLibrary (used by glad and glfw) inside DllMain,
 		// so call it after game initialization
 		mod_loader->add_preinit_handler([] {
