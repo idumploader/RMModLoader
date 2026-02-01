@@ -15,6 +15,8 @@ namespace rm_modloader {
     int hrfix_render_width = 640;
     int hrfix_render_height = 480;
 
+    bool tileset_offset_enabled = true;
+
     std::pair<int, int> offset_screen_size(int width, int height) {
         RECT system_client_rect;
         SystemParametersInfoA(SPI_GETWORKAREA, 0, &system_client_rect, 0);
@@ -113,6 +115,10 @@ namespace rm_modloader {
     int(__thiscall Surface::* SurfaceHRFixHook::orig_init_surface_bitmap)(int width, int height) = nullptr;
 
     int SpriteHRFixHook::set_sprite_offset_hook(int x, int y) {
+        if (!tileset_offset_enabled) {
+            return (this->*orig_set_sprite_offset)(x, y);
+        }
+
         auto loc = get_object_locator(this);
 
         static Sprite* tilemap_ancestor = nullptr;
@@ -283,8 +289,8 @@ namespace rm_modloader {
         static decltype(SpriteVFTable::set_sprite_offset) orig_set_sprite_offset;
 
         bool __thiscall set_sprite_offset_hook(int x, int y) {
-            x += hrfix_render_width / 32 > tilemap->width ? (hrfix_render_width / 32 - tilemap->width) / 2: 0;
-            y += hrfix_render_height / 32 > tilemap->height ? (hrfix_render_height / 32 - tilemap->height) / 2 : 0;
+            x += hrfix_render_width / 32 > tilemap->width ? (hrfix_render_width / 32 - tilemap->width) * 16 : 0;
+            y += hrfix_render_height / 32 > tilemap->height ? (hrfix_render_height / 32 - tilemap->height) * 16 : 0;
             return (this->*orig_set_sprite_offset)(x, y);
             //return true;
         }
@@ -372,6 +378,19 @@ namespace rm_modloader {
         return y_value;
     }
 
+    static RubyValue __cdecl hrfix_tileset_offset_enabled_set(RubyValue module, RubyValue value) {
+        if (value != ruby_false && value != ruby_true) {
+            rb_raise(*ruby_error_arg_error, "Expected boolean");
+            return ruby_nil;
+        }
+        tileset_offset_enabled = value == ruby_true;
+        return value;
+    }
+
+    static RubyValue __cdecl hrfix_tileset_offset_enabled_get(RubyValue module) {
+        return tileset_offset_enabled ? ruby_true : ruby_false;
+    }
+
     void apply_hrfix() {
         if (!mod_loader->get_config().is_hrfix_enabled()) {
             return;
@@ -407,7 +426,7 @@ namespace rm_modloader {
 
         mod_loader->hook_method(tilemap_render_tiles, &RxTilemapSpriteHRFixHook::render_tilemap_tiles_hook, &RxTilemapSpriteHRFixHook::orig_render_tilemap_tiles);
         mod_loader->hook_method(surface_init_bitmap, &SurfaceHRFixHook::init_surface_bitmap_hook, &SurfaceHRFixHook::orig_init_surface_bitmap);
-        //mod_loader->hook_method(set_sprite_offset, &SpriteHRFixHook::set_sprite_offset_hook, &SpriteHRFixHook::orig_set_sprite_offset);
+        mod_loader->hook_method(set_sprite_offset, &SpriteHRFixHook::set_sprite_offset_hook, &SpriteHRFixHook::orig_set_sprite_offset);
         //mod_loader->hook_method(set_sprite_offset, &SpriteHRFixHook::set_rect_hook, &SpriteHRFixHook::orig_set_rect);
 
         // Patch for new RxTilemap field
@@ -447,11 +466,14 @@ namespace rm_modloader {
             rb_define_method(*viewport_klass, "x=", rx_viewport_set_x_ruby, 1);
             rb_define_method(*viewport_klass, "y", rx_viewport_get_y_ruby, 0);
             rb_define_method(*viewport_klass, "y=", rx_viewport_set_y_ruby, 1);
+
+            mod_loader->register_ruby_method("hrfix_tileset_offset_enabled", hrfix_tileset_offset_enabled_get);
+            mod_loader->register_ruby_method("hrfix_tileset_offset_enabled=", hrfix_tileset_offset_enabled_set);
         });
 
-        SpriteVFTable* tilemap_sprite_vftable = mod_loader->at_base_offset_as<SpriteVFTable*>(0x1A91EC);
-        TilemapSpriteOffsetHook::orig_set_sprite_offset = tilemap_sprite_vftable->set_sprite_offset;
-        tilemap_sprite_vftable->set_sprite_offset = static_cast<decltype(SpriteVFTable::set_sprite_offset)>(&TilemapSpriteOffsetHook::set_sprite_offset_hook);
+        //SpriteVFTable* tilemap_sprite_vftable = mod_loader->at_base_offset_as<SpriteVFTable*>(0x1A91EC);
+        //TilemapSpriteOffsetHook::orig_set_sprite_offset = tilemap_sprite_vftable->set_sprite_offset;
+        //tilemap_sprite_vftable->set_sprite_offset = static_cast<decltype(SpriteVFTable::set_sprite_offset)>(&TilemapSpriteOffsetHook::set_sprite_offset_hook);
 
         mod_loader->log_info("Applied HRFix\n");
     }

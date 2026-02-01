@@ -2,7 +2,7 @@
 	"hrfix_enable": true,
 	"fast_render": false,
 	"controls_change": true,
-	"steam_support": true,
+	"steam_support": false,
 	"width": 1500,
 	"height": 840
 }
