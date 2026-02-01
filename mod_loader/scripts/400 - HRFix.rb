@@ -23,7 +23,10 @@ module HRFix
 		"あしながおじさん", "イーディス立ち絵", "イーディス立ち絵1",
 		"イーディス立ち絵2", "ロリーナ立ち絵", "ロリーナ立ち絵1",
 		"ロリーナ立ち絵2", "ロリーナ立ち絵3", "ロリーナ立ち絵4",
-		"人形立ち絵"
+		"人形立ち絵", "鎧を履いた騎士",
+		
+		# DLC
+		"剑光", 
 	]
 end
 
@@ -331,68 +334,100 @@ class Game_Character
 	
 end
 
-class Spriteset_Map
-	attr_reader :tilemap
+# class Spriteset_Map
+	# attr_reader :tilemap
 	
-	alias hrfix_orig_create_characters create_characters
-	alias hrfix_orig_create_viewports create_viewports
-	alias hrfix_orig_create_parallax create_parallax
-	alias hrfix_orig_update_viewports update_viewports
+	# alias hrfix_orig_create_characters create_characters
+	# alias hrfix_orig_create_viewports create_viewports
+	# alias hrfix_orig_create_parallax create_parallax
+	# alias hrfix_orig_update_viewports update_viewports
 	
-	def create_viewports
-		hrfix_orig_create_viewports
-		@tm_viewport = Viewport.new
-		@viewport1.z = 1
-	end
+	# def create_viewports
+		# hrfix_orig_create_viewports
+		# @tm_viewport = Viewport.new
+		# @viewport1.z = 1
+	# end
 	
-	def create_tilemap
-		@tilemap = Tilemap.new(@tm_viewport)
-		@tilemap.map_data = $game_map.data
-		load_tileset
-	end
+	# def create_tilemap
+		# @tilemap = Tilemap.new(@tm_viewport)
+		# @tilemap.map_data = $game_map.data
+		# load_tileset
+	# end
 	
-	def create_parallax
-		@parallax = Plane.new(@tm_viewport)
-		@parallax.z = -100
-	end
+	# def create_parallax
+		# @parallax = Plane.new(@tm_viewport)
+		# @parallax.z = -100
+	# end
 	
-	def create_characters
-		hrfix_orig_create_characters
+	# def create_characters
+		# hrfix_orig_create_characters
 		
-		off_x = [$game_map.screen_tile_x - $game_map.width, 0].max * 16
-		off_y = [$game_map.screen_tile_y - $game_map.height, 0].max * 16
+		# off_x = [$game_map.screen_tile_x - $game_map.width, 0].max * 16
+		# off_y = [$game_map.screen_tile_y - $game_map.height, 0].max * 16
+		# # @character_sprites.each do |sprite|
+		# #	sprite.character.real_x += off_x
+		# #	sprite.character.real_y += off_y
+		# # end
+		
+		# @viewport1.x = off_x
+		# @viewport1.y = off_y
+	# end
+	
+	# def update_characters
+		# refresh_characters if @map_id != $game_map.map_id
+		
+		# off_x = [$game_map.screen_tile_x - $game_map.width, 0].max * 16
+		# off_y = [$game_map.screen_tile_y - $game_map.height, 0].max * 16
 		# @character_sprites.each do |sprite|
-		#	sprite.character.real_x += off_x
-		#	sprite.character.real_y += off_y
+			# sprite.update
+			# # sprite.x += off_x
+			# # sprite.y += off_y
 		# end
-		
-		@viewport1.x = off_x
-		@viewport1.y = off_y
+	# end
+	
+	# def update_viewports
+		# hrfix_orig_update_viewports
+		# @tm_viewport.update
+	# end
+# end
+
+if not ["2.4", "2.5"].include?(ModLoader.version)
+
+p "HRFix: ModLoader.version >= 2.6. Enabled hrfix_tileset_offset_enabled"
+
+class Scene_Map
+
+	alias hrfix_orig_start start
+	alias hrfix_orig_terminate terminate
+	
+	def start
+		ModLoader.hrfix_tileset_offset_enabled = true
+		hrfix_orig_start
 	end
 	
-	def update_characters
-		refresh_characters if @map_id != $game_map.map_id
-		
-		off_x = [$game_map.screen_tile_x - $game_map.width, 0].max * 16
-		off_y = [$game_map.screen_tile_y - $game_map.height, 0].max * 16
-		@character_sprites.each do |sprite|
-			sprite.update
-			# sprite.x += off_x
-			# sprite.y += off_y
-		end
+	def terminate
+		ModLoader.hrfix_tileset_offset_enabled = false
+		hrfix_orig_terminate
 	end
+
+end
+
+class Scene_Title
+	alias hrfix_orig_start start
 	
-	def update_viewports
-		hrfix_orig_update_viewports
-		@tm_viewport.update
+	def start
+		ModLoader.hrfix_tileset_offset_enabled = false
+		hrfix_orig_start
 	end
 end
 
-class Game_Event
-	alias hrfix_orig_near_the_screen? :near_the_screen?
+end # not ["2.4", "2.5"].include?(ModLoader.version)
 
-	def near_the_screen?(dx = $game_map.width / 2 + 1, dy = $game_map.height / 2 + 1)
-		hrfix_orig_near_the_screen(dx, dy)
+class Game_Event
+	alias hrfix_orig_near_the_screen? near_the_screen?
+
+	def near_the_screen?(dx = $game_map.screen_tile_x / 2 + 1, dy = $game_map.screen_tile_y / 2 + 1)
+		hrfix_orig_near_the_screen?(dx, dy)
 	end
 end
 
