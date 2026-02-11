@@ -5,7 +5,7 @@ if (CMAKE_TOOLCHAIN_FILE MATCHES "vcpkg.cmake")
 	include(${CMAKE_TOOLCHAIN_FILE})
 endif()
 
-project(rmforge LANGUAGES CXX C VERSION 2.6)
+project(rmforge LANGUAGES CXX C VERSION 2.7)
 
 include(CMakePackageConfigHelpers)
 
@@ -53,6 +53,7 @@ add_library(ModLoader SHARED
 	"src/ModLoader/Hooks/IntegratedHooks.cpp"
 	"src/ModLoader/Hooks/SteamSupportHooks.cpp"
 	"src/ModLoader/GLFWMisc.cpp"
+	"src/ModLoader/Hooks/FileManagerHooks.cpp"
 )
 
 target_compile_definitions(ModLoader PUBLIC

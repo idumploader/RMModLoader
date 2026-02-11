@@ -330,6 +330,45 @@ namespace rm_modloader {
 		ImageLoader* image_loader;
 	};
 
+	struct RxSurface : Surface {
+		static constexpr std::string_view type_name = "class CRxSurface";
+
+		DWORD unk58;
+	};
+
+	struct RxBitmap {
+		static constexpr std::string_view type_name = "class CRxBitmap";
+
+		BYTE gap0[8];
+		RxSurface* surface;
+	};
+
+	struct File {
+		DWORD vftable;
+		HMMIO mm_io;
+		DWORD gap4[7];
+	};
+
+	struct RxMemoryFile : File {
+		DWORD unk24;
+	};
+
+	struct RepositoryFileInfo {
+		DWORD offset;
+		DWORD file_size;
+		DWORD unk8;
+		char filename[MAX_PATH];
+	};
+
+	struct FileRepository {
+		DWORD unk0;
+		DWORD unk4;
+		DWORD unk8;
+		RepositoryFileInfo* first_file;
+		RepositoryFileInfo* last_file;
+		DWORD unk14;
+	};
+
 	// TODO: change
 	//#pragma pointers_to_members(best_case)
 
@@ -345,6 +384,11 @@ namespace rm_modloader {
 	static_assert(sizeof(ImageLoader) == 0x4);
 	static_assert(sizeof(DrawLocal_ImageLoader) == 0x8);
 	static_assert(sizeof(RxInput) == 0xA0);
+	static_assert(sizeof(RxBitmap) == 0xC);
+	static_assert(sizeof(File) == 0x24);
+	static_assert(sizeof(RxMemoryFile) == 0x28);
+	static_assert(sizeof(RepositoryFileInfo) == 0x110);
+	static_assert(sizeof(FileRepository) == 0x18);
 
 };
 #undef __cppobj
