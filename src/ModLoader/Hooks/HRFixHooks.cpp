@@ -289,10 +289,13 @@ namespace rm_modloader {
         static decltype(SpriteVFTable::set_sprite_offset) orig_set_sprite_offset;
 
         bool __thiscall set_sprite_offset_hook(int x, int y) {
-            x += hrfix_render_width / 32 > tilemap->width ? (hrfix_render_width / 32 - tilemap->width) * 16 : 0;
-            y += hrfix_render_height / 32 > tilemap->height ? (hrfix_render_height / 32 - tilemap->height) * 16 : 0;
+            x +=   hrfix_render_width / 32UL > tilemap->width
+                ? (hrfix_render_width / 32UL - tilemap->width) * 16
+                : 0;
+            y +=   hrfix_render_height / 32UL > tilemap->height
+                ? (hrfix_render_height / 32UL - tilemap->height) * 16
+                : 0;
             return (this->*orig_set_sprite_offset)(x, y);
-            //return true;
         }
     };
 

@@ -59,9 +59,6 @@ namespace rm_modloader {
 	}
 
 	using SteamCCallbackRunner = void(*)(RubyValue recv, RubyID method, void* pv_param, bool failure);
-	//struct CallbackRunner {
-	//	virtual void run(void* pv_param, bool failure, uint64_t steam_api_call) = 0;
-	//};
 
 	void lobby_created_callback_runner(RubyValue recv, RubyID method, void* pv_param, bool failure) {
 		LobbyCreated_t* result = static_cast<LobbyCreated_t*>(pv_param);
@@ -121,7 +118,7 @@ namespace rm_modloader {
 		case GameLobbyJoinRequested_t::k_iCallback:
 			return lobby_join_requested_callback_runner;
 		default:
-			nullptr;
+			return nullptr;
 		}
 	}
 
@@ -178,7 +175,7 @@ namespace rm_modloader {
 
 		static RubyValue __cdecl alloc(RubyValue klass) {
 			SteamCCallResult* callback = static_cast<SteamCCallResult*>(alloc_rb_rdata(sizeof(SteamCCallResult)));
-			new(callback) SteamCCallResult();
+			callback = std::launder(new(callback) SteamCCallResult());
 
 			debug_mod_loader_log("Allocated steam callback: {:X}. klass = {}, fun klass = {}\n", reinterpret_cast<uintptr_t>(callback), SteamCCallResult::klass, klass);
 
@@ -199,9 +196,11 @@ namespace rm_modloader {
 		}
 
 		static RubyValue __cdecl set_ruby(RubyValue object, RubyValue api_call, RubyValue recv, RubyValue symbol) {
-			if (!is_rb_symbol(symbol)) {
-				rb_raise(*ruby_error_arg_error, "SteamCallbackBase: Expected symbol");
-				return ruby_nil;
+			if (!check_ruby_type(api_call, RUBY_T_FIXNUM)) {
+				rb_raise(*ruby_error_arg_error, "Expected api_call as fixnum");
+			}
+			if (!check_ruby_type(symbol, RUBY_T_SYMBOL)) {
+				rb_raise(*ruby_error_arg_error, "Expected symbol as symbol");
 			}
 			SteamCCallResult* callback = get_rb_data_data<SteamCCallResult>(object);
 			debug_mod_loader_log("Steam callback set. Pointer: {:X}. {} ({}), {}, {}\n",
@@ -217,9 +216,8 @@ namespace rm_modloader {
 		}
 
 		static RubyValue __cdecl register_ruby(RubyValue object, RubyValue recv, RubyValue symbol) {
-			if (!is_rb_symbol(symbol)) {
-				rb_raise(*ruby_error_arg_error, "SteamCallbackBase: Expected symbol");
-				return ruby_nil;
+			if (!check_ruby_type(symbol, RUBY_T_SYMBOL)) {
+				rb_raise(*ruby_error_arg_error, "Expected symbol as symbol");
 			}
 			SteamCCallResult* callback = get_rb_data_data<SteamCCallResult>(object);
 			debug_mod_loader_log("Steam callback register. Pointer: {:X}, {}, {}\n",
@@ -321,7 +319,7 @@ namespace rm_modloader {
 
 		static RubyValue __cdecl alloc(RubyValue klass) {
 			SteamCCallback* callback = static_cast<SteamCCallback*>(alloc_rb_rdata(sizeof(SteamCCallback)));
-			new(callback) SteamCCallback();
+			callback = std::launder(new(callback) SteamCCallback());
 
 			debug_mod_loader_log("Allocated steam callback: {:X}. klass = {}, fun klass = {}\n", reinterpret_cast<uintptr_t>(callback), SteamCCallback::klass, klass);
 
@@ -331,11 +329,9 @@ namespace rm_modloader {
 		static RubyValue __cdecl initialize(RubyValue object, RubyValue callback_type_value, RubyValue recv, RubyValue method) {
 			if (!check_ruby_type(callback_type_value, RUBY_T_FIXNUM)) {
 				rb_raise(*ruby_error_arg_error, "Expected callback type as fixnum");
-				return ruby_nil;
 			}
 			if (!check_ruby_type(method, RUBY_T_SYMBOL)) {
 				rb_raise(*ruby_error_arg_error, "Expected method as symbol");
-				return ruby_nil;
 			}
 
 			SteamCCallback* callback = get_rb_data_data<SteamCCallback>(object);
@@ -349,8 +345,8 @@ namespace rm_modloader {
 		static RubyValue __cdecl register_ruby(RubyValue object, RubyValue recv, RubyValue symbol) {
 			if (!is_rb_symbol(symbol)) {
 				rb_raise(*ruby_error_arg_error, "SteamCallbackBase: Expected symbol");
-				return ruby_nil;
 			}
+
 			SteamCCallback* callback = get_rb_data_data<SteamCCallback>(object);
 			debug_mod_loader_log("Steam callback register. Pointer: {:X}, {}, {}\n",
 				reinterpret_cast<uintptr_t>(callback),
@@ -410,9 +406,11 @@ namespace rm_modloader {
 		}
 
 		static RubyValue __cdecl initialize(RubyValue object, RubyValue type_value, RubyValue from_id_value, RubyValue data_value) {
+			if (!check_ruby_type(type_value, RUBY_T_FIXNUM)) {
+				rb_raise(*ruby_error_arg_error, "Expected type as fixnum");
+			}
 			if (!check_ruby_type(from_id_value, RUBY_T_FIXNUM, RUBY_T_BIGNUM)) {
 				rb_raise(*ruby_error_arg_error, "Expected from_id as fixnum or bignum");
-				return ruby_nil;
 			}
 
 			BasicNetworkPacket* packet = get_rb_data_data<BasicNetworkPacket>(object);
@@ -430,8 +428,11 @@ namespace rm_modloader {
 		}
 
 		static RubyValue __cdecl set_type_ruby(RubyValue object, RubyValue type_value) {
-			BasicNetworkPacket* packet = get_rb_data_data<BasicNetworkPacket>(object);
+			if (!check_ruby_type(type_value, RUBY_T_FIXNUM)) {
+				rb_raise(*ruby_error_arg_error, "Expected type as fixnum");
+			}
 
+			BasicNetworkPacket* packet = get_rb_data_data<BasicNetworkPacket>(object);
 			packet->type = rb_parse_int(type_value);
 
 			return type_value;
@@ -444,6 +445,10 @@ namespace rm_modloader {
 		}
 
 		static RubyValue __cdecl set_from_id_ruby(RubyValue object, RubyValue from_id_value) {
+			if (!check_ruby_type(from_id_value, RUBY_T_FIXNUM, RUBY_T_BIGNUM)) {
+				rb_raise(*ruby_error_arg_error, "Expected from_id as fixnum or bignum");
+			}
+
 			BasicNetworkPacket* packet = get_rb_data_data<BasicNetworkPacket>(object);
 
 			packet->from_id = rb_num2ull(from_id_value);
@@ -535,22 +540,14 @@ namespace rm_modloader {
 		static RubyValue __cdecl create_lobby_ruby(RubyValue object, RubyValue type_value, RubyValue max_players_value, RubyValue callback_value) {
 			if (!check_ruby_type(type_value, RUBY_T_FIXNUM)) {
 				rb_raise(*ruby_error_arg_error, "Expected type as fixnum");
-				return ruby_nil;
 			}
 			if (!check_ruby_type(max_players_value, RUBY_T_FIXNUM)) {
 				rb_raise(*ruby_error_arg_error, "Expected max_players as fixnum");
-				return ruby_nil;
 			}
-			//debug_mod_loader_log(
-			//	"callback type: {}, callback klass: {}, call result klass: {}",
-			//	static_cast<int>(rb_type(callback_value)),
-			//	check_ruby_type(callback_value, RUBY_T_DATA) ? dynamic_cast<SteamCCallResult*>(get_rb_data_data<CCallbackBase>(callback_value)) : 0,
-			//	SteamCCallResult::klass
-			//);
-			//if (callback_value != ruby_nil && (!check_ruby_type(callback_value, RUBY_T_DATA) || rb_get_value_klass(callback_value) != SteamCCallResult::klass)) {
-			//	rb_raise(*ruby_error_arg_error, "Expected callback as SteamCCallResult or nil");
-			//	return ruby_nil;
-			//}
+			if (!check_ruby_type(callback_value, RUBY_T_DATA)
+				|| rb_get_value_klass(callback_value) != SteamCCallResult::klass) {
+				rb_raise(*ruby_error_arg_error, "Expected callback as SteamCCallResult");
+			}
 
 			ELobbyType lobby_type = static_cast<ELobbyType>(rb_parse_int(type_value));
 			int max_players = rb_parse_int(max_players_value);
@@ -581,14 +578,16 @@ namespace rm_modloader {
 		}
 
 		static RubyValue __cdecl join_lobby_ruby(RubyValue object, RubyValue lobby_id_value, RubyValue callback_value) {
-			if (callback_value == ruby_nil) {
-				// ...
-				return ruby_nil;
-			}
 			if (!check_ruby_type(lobby_id_value, RUBY_T_FIXNUM, RUBY_T_BIGNUM)) {
 				rb_raise(*ruby_error_arg_error, "Expected lobby_id as fixnum or bignum");
 				return ruby_nil;
 			}
+			if (!check_ruby_type(callback_value, RUBY_T_DATA)
+				|| rb_get_value_klass(callback_value) != SteamCCallResult::klass) {
+				rb_raise(*ruby_error_arg_error, "Expected callback as SteamCCallResult");
+				return ruby_nil;
+			}
+
 			SteamCCallResult* callback = get_rb_data_data<SteamCCallResult>(callback_value);
 			CSteamID lobby_id = rb_num2ull(lobby_id_value);
 
@@ -601,7 +600,6 @@ namespace rm_modloader {
 		static RubyValue __cdecl get_lobby_owner_ruby(RubyValue object, RubyValue lobby_id_value) {
 			if (!check_ruby_type(lobby_id_value, RUBY_T_FIXNUM, RUBY_T_BIGNUM)) {
 				rb_raise(*ruby_error_arg_error, "Expected lobby_id as fixnum or bignum");
-				return ruby_nil;
 			}
 			CSteamID lobby_id = rb_num2ull(lobby_id_value);
 
@@ -614,15 +612,21 @@ namespace rm_modloader {
 		}
 
 		static RubyValue __cdecl send_message_to_user_ruby(RubyValue object, RubyValue user_id_value, RubyValue channel_value, RubyValue data_value, RubyValue flags_value) {
-			if (false) {
-				rb_raise(*ruby_error_arg_error, "Wrong arguments");
-				return ruby_nil;
+			if (!check_ruby_type(user_id_value, RUBY_T_FIXNUM, RUBY_T_BIGNUM)) {
+				rb_raise(*ruby_error_arg_error, "Expected user_id as fixnum or bignum");
 			}
+			if (!check_ruby_type(channel_value, RUBY_T_FIXNUM)) {
+				rb_raise(*ruby_error_arg_error, "Expected channel as fixnum");
+			}
+			if (!check_ruby_type(flags_value, RUBY_T_FIXNUM)) {
+				rb_raise(*ruby_error_arg_error, "Expected flags as fixnum");
+			}
+			std::string_view data = rb_get_string_data(&data_value);
+
 			SteamNetworkingIdentity identity;
 			identity.SetSteamID64(rb_num2ull(user_id_value));
 			int channel_id = rb_parse_int(channel_value);
 			int flags = rb_parse_int(flags_value);
-			std::string_view data = rb_get_string_data(&data_value);
 
 			debug_mod_loader_log("SteamAPI send message to {}, data: {}\n", identity.GetSteamID64(), data);
 			EResult result = SteamNetworkingMessages()->SendMessageToUser(identity, data.data(), data.size(), flags | k_nSteamNetworkingSend_AutoRestartBrokenSession, channel_id);
@@ -640,9 +644,14 @@ namespace rm_modloader {
 		}
 
 		static RubyValue __cdecl read_messages_on_channel_ruby(RubyValue object, RubyValue channel_value, RubyValue max_messages_value, RubyValue recv, RubyValue method_value) {
-			if (false) {
-				rb_raise(*ruby_error_arg_error, "Wrong arguments");
-				return ruby_nil;
+			if (!check_ruby_type(channel_value, RUBY_T_FIXNUM)) {
+				rb_raise(*ruby_error_arg_error, "Expected channel as fixnum");
+			}
+			if (!check_ruby_type(max_messages_value, RUBY_T_FIXNUM)) {
+				rb_raise(*ruby_error_arg_error, "Expected max_messages as fixnum");
+			}
+			if (!check_ruby_type(method_value, RUBY_T_SYMBOL)) {
+				rb_raise(*ruby_error_arg_error, "Expected method as symbol");
 			}
 			int channel_id = rb_parse_int(channel_value);
 			int max_messages = rb_parse_int(max_messages_value);
@@ -670,15 +679,16 @@ namespace rm_modloader {
 		static RubyValue __cdecl send_basic_packet_ruby(RubyValue object, RubyValue user_id_value, RubyValue channel_value, RubyValue packet_value, RubyValue flags_value) {
 			if (!check_ruby_type(user_id_value, RUBY_T_FIXNUM, RUBY_T_BIGNUM)) {
 				rb_raise(*ruby_error_arg_error, "Expected user_id as fixnum or bignum");
-				return ruby_nil;
 			}
 			if (!check_ruby_type(channel_value, RUBY_T_FIXNUM)) {
 				rb_raise(*ruby_error_arg_error, "Expected channel as fixnum");
-				return ruby_nil;
+			}
+			if (!check_ruby_type(packet_value, RUBY_T_DATA)
+				|| rb_get_value_klass(packet_value) != BasicNetworkPacket::klass) {
+				rb_raise(*ruby_error_arg_error, "Expected packet as BasicNetworkPacket");
 			}
 			if (!check_ruby_type(flags_value, RUBY_T_FIXNUM)) {
 				rb_raise(*ruby_error_arg_error, "Expected flags as fixnum");
-				return ruby_nil;
 			}
 
 			SteamNetworkingIdentity identity;
@@ -688,7 +698,6 @@ namespace rm_modloader {
 			BasicNetworkPacket* packet = get_rb_data_data<BasicNetworkPacket>(packet_value);
 
 			std::string raw_data_string = packet->to_raw_data();
-			// debug_mod_loader_log("Sending packet: {}", raw_data_string);
 
 			EResult result = SteamNetworkingMessages()->SendMessageToUser(
 				identity,
@@ -708,15 +717,12 @@ namespace rm_modloader {
 		static RubyValue __cdecl read_basic_packets_ruby(RubyValue object, RubyValue channel_value, RubyValue max_messages_value, RubyValue recv, RubyValue method_value) {
 			if (!check_ruby_type(channel_value, RUBY_T_FIXNUM)) {
 				rb_raise(*ruby_error_arg_error, "Expected channel as fixnum");
-				return ruby_nil;
 			}
 			if (!check_ruby_type(max_messages_value, RUBY_T_FIXNUM)) {
 				rb_raise(*ruby_error_arg_error, "Expected max_messages as fixnum");
-				return ruby_nil;
 			}
 			if (!check_ruby_type(method_value, RUBY_T_SYMBOL)) {
 				rb_raise(*ruby_error_arg_error, "Expected method as symbol");
-				return ruby_nil;
 			}
 
 			int channel_id = rb_parse_int(channel_value);
@@ -735,7 +741,7 @@ namespace rm_modloader {
 				const char* raw_data = reinterpret_cast<const char*>(message->GetData());
 				std::stringstream buffer;
 				buffer << "Packet data: [";
-				for (int i = 0; i < message->GetSize(); ++i) {
+				for (uint32_t i = 0; i < message->GetSize(); ++i) {
 					char byte = raw_data[i];
 					buffer << std::hex << static_cast<uint16_t>(byte) << ", ";
 				}

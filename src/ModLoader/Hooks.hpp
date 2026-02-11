@@ -4,6 +4,7 @@
 #include "Hooks/ControlsChangeHooks.hpp"
 #include "Hooks/IntegratedHooks.hpp"
 #include "Hooks/SteamSupportHooks.hpp"
+#include "Hooks/FileManagerHooks.hpp"
 
 #include <array>
 
@@ -15,6 +16,7 @@ namespace rm_modloader {
 		apply_hrfix,
 		apply_fast_render,
 		apply_steam_support_hooks,
-		apply_controls_change
+		apply_controls_change,
+		apply_file_manager_hooks
 	};
 }

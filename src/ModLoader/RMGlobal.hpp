@@ -11,6 +11,7 @@ namespace rm_modloader {
 
     extern HMODULE rgss_module;
     extern GameFrame** rgss_game;
+    extern FileRepository* file_repository;
 
     inline GameFrame* get_rgss_game() {
         return *rgss_game;
@@ -25,6 +26,12 @@ namespace rm_modloader {
     extern int(__thiscall GameFrame::* game_frame_resize_screen)(int width, int height);
     extern int(__thiscall Screen::* screen_resize_screen)(int width, int height, bool is_fullscreen);
 
+    extern int(FileRepository::* file_repository_file_count)();
+    extern RepositoryFileInfo*(FileRepository::* file_repository_file_at_index)(int index);
+
+    extern RxMemoryFile* (__cdecl* read_into_rx_memory_file)(const char* path);
+    extern RxMemoryFile* (RxMemoryFile::* rx_memory_file_dtx)(bool is_delete);
+
     extern RxInput* (__thiscall RxInput::* input_update_keys)();
 
     extern RubyValue(__cdecl* tilemap_initialize)(RubyValue self, int a2, void* a3);
@@ -32,6 +39,7 @@ namespace rm_modloader {
     extern RubyValue(__cdecl* tilemap_bitmaps)(RubyValue self);
 
     extern RubyValue(__cdecl* rb_str_new_cstr)(const char* ptr);
+    extern RubyValue(__cdecl* rb_str_new)(const char* ptr, long len);
     extern RubyValue(__cdecl* rb_define_module)(const char* name);
     extern RubyValue(__cdecl* rb_define_function)(const char* name, void* func, int arg_count);
     extern RubyValue(__cdecl* rb_define_class)(const char* name, RubyValue base);
@@ -43,12 +51,17 @@ namespace rm_modloader {
     extern RubyValue(__cdecl* eval_rb_cstr)(const char* script, const char* script_name, int* error_code);
     extern RubyValue(__cdecl* eval_rb_cstr_noerr)(const char* script);
     extern RubyValue(__cdecl* rb_funcall)(RubyValue recv, RubyID mid, int n, ...);
+    /// noreturn
     extern void(__cdecl* rb_raise)(RubyValue exc_class, const char* fmt, ...);
     extern int(__cdecl* get_rb_error_string)(WCHAR* error_buf, size_t buf_size, int*);
 
     extern RubyValue(__cdecl* rb_big_new)(int len, bool is_positive);
     extern void*(__cdecl* alloc_rb_rdata)(size_t size);
     extern RubyValue(__cdecl* make_rb_rdata)(RubyValue klass, void* data, void(__cdecl* dmark)(void*), void(__cdecl* dfree)(void*));
+
+    extern RubyValue(__cdecl* rb_ary_new)();
+    extern RubyValue(__cdecl* rb_ary_new2)(long capa);
+    extern int(__cdecl* rb_ary_push)(RubyValue arr, RubyValue value);
 
     extern int(__cdecl* load_data)(int self, int rb_filename);
     extern int(__cdecl* startup_scripts)(const wchar_t* scripts_file, StartupScriptsString* rgss3a_filepath);
@@ -60,6 +73,8 @@ namespace rm_modloader {
     extern RubyValue* ruby_error_arg_error;
     extern RubyValue* ruby_c_object;
     extern RubyValue* ruby_c_bignum;
+
+    extern RubyValue* rx_bitmap_class;
 
     /**
      * Initializes all global functions and method pointers
