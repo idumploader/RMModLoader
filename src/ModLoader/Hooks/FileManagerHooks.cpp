@@ -135,8 +135,8 @@ namespace rm_modloader {
 
 	void apply_file_manager_hooks() {
 		mod_loader->add_preinit_handler([] {
-			mod_loader->register_ruby_method("list_files", FileManagerModule::list_files);
-			mod_loader->register_ruby_method("read_file", FileManagerModule::read_file);
+			mod_loader->register_ruby_method("list_files",  FileManagerModule::list_files);
+			mod_loader->register_ruby_method("read_file",   FileManagerModule::read_file);
 			mod_loader->register_ruby_method("dump_as_bmp", FileManagerModule::dump_as_bmp);
 		});
 	}

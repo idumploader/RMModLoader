@@ -182,7 +182,7 @@ namespace rm_modloader {
 	void* ModLoaderCore::get_rgss_base() const {
 		return rgss_module;
 	}
-	void* ModLoaderCore::at_base_offset(intptr_t offset) const {
+	void* ModLoaderCore::at_base_offset(ptrdiff_t offset) const {
 		return at_offset<void*>(get_rgss_base(), offset);
 	}
 
