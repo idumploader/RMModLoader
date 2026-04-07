@@ -81,6 +81,11 @@ jobs:
           name: ModLoader-v${{ steps.get_version.outputs.version }}
           path: out/release/RMModLoader
 
+      - name: Compress to 7z
+        run: |
+          & "C:\Program Files\7-Zip\7z.exe" a -t7z -mx=9 "ModLoader-v${{ steps.get_version.outputs.version }}.7z" ".\out\release\RMModLoader\*"
+        shell: pwsh
+
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
