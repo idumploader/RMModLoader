@@ -1,4 +1,7 @@
 
+if not (Object.const_defined?(:SteamUserStatsLite) and Object.const_defined?(:SteamAPI))
+p "Multiplayer isn't available"
+else
 # --- BSMP DEFINITIONS ---
 
 class BSMPCallback
@@ -998,3 +1001,4 @@ end
 MLLocalizedStrings.add_required("bsmp")
 
 # --- BSMP END ---
+end # if Object.const_defined?(:SteamUserStatsLite) and Object.const_defined?(:SteamAPI)
