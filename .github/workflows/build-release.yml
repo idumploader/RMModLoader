@@ -1,0 +1,89 @@
+name: Build & Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (Windows x86 Release)
+    runs-on: windows-latest
+
+    env:
+      VCPKG_DEFAULT_TRIPLET: x86-windows
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x86
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: latest
+
+      - name: Configure CMake
+        run: |
+          cmake -B out/build `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x86-windows `
+            -G Ninja
+        shell: pwsh
+
+      - name: Build
+        run: cmake --build out/build --config Release --verbose
+
+      - name: Package release
+        run: |
+          # Copy built binaries
+          New-Item -ItemType Directory -Force -Path "out/release/RMModLoader"
+          Copy-Item "out/build/ModLoader.dll" "out/release/RMModLoader/"
+          Copy-Item "out/build/Loader.exe" "out/release/RMModLoader/"
+
+          # Copy mod_loader content
+          Copy-Item -Recurse "mod_loader" "out/release/RMModLoader/"
+
+          # Copy required runtime DLLs (vcpkg dependencies)
+          $vcpkg_installed = "out/build/vcpkg_installed/x86-windows/bin"
+          if (Test-Path $vcpkg_installed) {
+            Copy-Item "$vcpkg_installed/*.dll" "out/release/RMModLoader/" -ErrorAction SilentlyContinue
+          }
+          
+      - name: Read CMake version
+        id: cmake_version
+        uses: shenxn/read-cmake-version@v1
+        with:
+          path: CMakeLists.txt
+          string_to_extract: 'project\(.* VERSION ([\d\.]+)'
+          
+      - name: Compress to 7z
+        run: |
+          & "C:\Program Files\7-Zip\7z.exe" a -t7z -mx=9 "ModLoader-v${{ steps.cmake_version.outputs.version }}.7z" ".\out\release\RMModLoader\*"
+        shell: pwsh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ModLoader-v${{ steps.cmake_version.outputs.version }}
+          path: ModLoader-v${{ steps.cmake_version.outputs.version }}.7z
+
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ModLoader-v${{ steps.cmake_version.outputs.version }}.7z
+          name: v${{ steps.cmake_version.outputs.version }}
+          tag_name: v${{ steps.cmake_version.outputs.version }}
+          draft: true
+          prerelease: false
+          generate_release_notes: true
