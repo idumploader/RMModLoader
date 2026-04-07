@@ -427,7 +427,7 @@ class Game_Event
 	alias hrfix_orig_near_the_screen? :near_the_screen?
 
 	def near_the_screen?(dx = $game_map.screen_tile_x / 2 + 1, dy = $game_map.screen_tile_y / 2 + 1)
-		hrfix_orig_near_the_screen(dx, dy)
+		hrfix_orig_near_the_screen?(dx, dy)
 	end
 end
 
