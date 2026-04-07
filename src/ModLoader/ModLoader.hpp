@@ -84,7 +84,7 @@ namespace rm_modloader {
 		 * Get the address with offset from RGSS base address
 		 * @return offsetted address
 		 */
-		void* at_base_offset(intptr_t offset) const;
+		void* at_base_offset(ptrdiff_t offset) const;
 
 		/**
 		 * Get the address with offset from RGSS base address as the given type
@@ -93,7 +93,7 @@ namespace rm_modloader {
 		 * @return offsetted address
 		 */
 		template<typename T>
-		T at_base_offset_as(intptr_t offset) const {
+		T at_base_offset_as(ptrdiff_t offset) const {
 			return std::bit_cast<T>(at_base_offset(offset));
 		}
 
@@ -167,19 +167,19 @@ namespace rm_modloader {
 		 * @return Patch ID. Currently unused
 		 */
 		template<typename T>
-		ModLoaderPatchID hook_function(intptr_t offset, T hook_func, T* orig_func) {
+		ModLoaderPatchID hook_function(ptrdiff_t offset, T hook_func, T* orig_func) {
 			return hook_function(at_base_offset(offset), hook_func, orig_func);
 		}
 
 		/**
-		 * Hook function at given offset from RGSS. @ref at_base_offset
+		 * Hook class method (__thiscall) at given address. @ref at_base_offset
 		 * @tparam T Hook function pointer type
-		 * @param offset Offset from RGSS module base address
+		 * @param target Pointer to the hooked method
 		 * @param hook_func Hook function
 		 * @param orig_func Pointer to variable, reciving original (trampoline) function pointer
 		 * @return Patch ID. Currently unused
 		 */
-		template<typename T, typename THook, typename TMethod>
+		template<typename T, std::derived_from<T> THook, typename TMethod>
 		ModLoaderPatchID hook_method(TMethod(T::* target), TMethod(THook::* hook_method), TMethod(T::** orig_method)) {
 			return hook_function(std::bit_cast<void*>(target), std::bit_cast<void*>(hook_method), reinterpret_cast<void**>(orig_method));
 		}
@@ -194,8 +194,8 @@ namespace rm_modloader {
 		 * @param orig_method Pointer to variable, reciving original (trampoline) method pointer
 		 * @return Patch ID. Currently unused
 		 */
-		template<typename T, typename THook, typename TMethod>
-		ModLoaderPatchID hook_method(intptr_t offset, TMethod(THook::* hook_method), TMethod(T::** orig_method)) {
+		template<typename T, std::derived_from<T> THook, typename TMethod>
+		ModLoaderPatchID hook_method(ptrdiff_t offset, TMethod(THook::* hook_method), TMethod(T::** orig_method)) {
 			return hook_function(offset, std::bit_cast<void*>(hook_method), reinterpret_cast<void**>(orig_method));
 		}
 
@@ -220,7 +220,7 @@ namespace rm_modloader {
 		 * @param data Value to write to the offsetted address
 		 */
 		template<std::integral T>
-		void patch_memory(intptr_t offset, T data) {
+		void patch_memory(ptrdiff_t offset, T data) {
 			patch_memory(at_base_offset(offset), &data, sizeof(data));
 		}
 
@@ -231,7 +231,7 @@ namespace rm_modloader {
 		 * @param data Values to write to the offsetted address
 		 */
 		template<std::convertible_to<std::span<const char>> T>
-		void patch_memory(intptr_t offset, T data) {
+		void patch_memory(ptrdiff_t offset, T data) {
 			patch_memory(at_base_offset(offset), data.data(), data.size_bytes());
 		}
 
@@ -245,7 +245,7 @@ namespace rm_modloader {
 		 */
 		template<std::integral TPatchData, std::convertible_to<const TPatchData> T>
 			requires (sizeof(TPatchData) <= sizeof(T))
-		void patch_memory_as(intptr_t offset, T data) {
+		void patch_memory_as(ptrdiff_t offset, T data) {
 			patch_memory(at_base_offset(offset), &data, sizeof(TPatchData));
 		}
 
