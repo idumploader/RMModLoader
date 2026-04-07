@@ -58,32 +58,39 @@ jobs:
             Copy-Item "$vcpkg_installed/*.dll" "out/release/RMModLoader/" -ErrorAction SilentlyContinue
           }
           
-      - name: Read CMake version
-        id: cmake_version
-        uses: shenxn/read-cmake-version@v1
-        with:
-          path: CMakeLists.txt
-          string_to_extract: 'project\(.* VERSION ([\d\.]+)'
+      - name: Get version from CMakeLists.txt
+        id: get_version
+        shell: pwsh
+        run: |
+          $content = Get-Content -Path CMakeLists.txt -Raw
+          if ($content -match 'project\s*\([^)]*VERSION\s+(\d+(?:\.\d+)+)') {
+            $version = $matches[1]
+            Write-Host "Found version: $version"
+            echo "version=$version" >> $env:GITHUB_OUTPUT
+          } else {
+            Write-Host "::error::Version not found in CMakeLists.txt"
+            exit 1
+          }
           
       - name: Compress to 7z
         run: |
-          & "C:\Program Files\7-Zip\7z.exe" a -t7z -mx=9 "ModLoader-v${{ steps.cmake_version.outputs.version }}.7z" ".\out\release\RMModLoader\*"
+          & "C:\Program Files\7-Zip\7z.exe" a -t7z -mx=9 "ModLoader-v${{ steps.get_version.outputs.version }}.7z" ".\out\release\RMModLoader\*"
         shell: pwsh
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ModLoader-v${{ steps.cmake_version.outputs.version }}
-          path: ModLoader-v${{ steps.cmake_version.outputs.version }}.7z
+          name: ModLoader-v${{ steps.get_version.outputs.version }}
+          path: ModLoader-v${{ steps.get_version.outputs.version }}.7z
 
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            ModLoader-v${{ steps.cmake_version.outputs.version }}.7z
-          name: v${{ steps.cmake_version.outputs.version }}
-          tag_name: v${{ steps.cmake_version.outputs.version }}
+            ModLoader-v${{ steps.get_version.outputs.version }}.7z
+          name: v${{ steps.get_version.outputs.version }}
+          tag_name: v${{ steps.get_version.outputs.version }}
           draft: true
           prerelease: false
           generate_release_notes: true
