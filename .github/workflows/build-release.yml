@@ -1,6 +1,9 @@
 name: Build & Release
 
 on:
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:
 
 permissions:
@@ -71,17 +74,12 @@ jobs:
             Write-Host "::error::Version not found in CMakeLists.txt"
             exit 1
           }
-          
-      - name: Compress to 7z
-        run: |
-          & "C:\Program Files\7-Zip\7z.exe" a -t7z -mx=9 "ModLoader-v${{ steps.get_version.outputs.version }}.7z" ".\out\release\RMModLoader\*"
-        shell: pwsh
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ModLoader-v${{ steps.get_version.outputs.version }}
-          path: ModLoader-v${{ steps.get_version.outputs.version }}.7z
+          path: out/release/RMModLoader
 
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/')
