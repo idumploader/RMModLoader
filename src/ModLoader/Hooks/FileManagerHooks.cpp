@@ -8,7 +8,7 @@
 #pragma comment(lib, "Winmm.lib")
 
 namespace rm_modloader {
-	static RubyValue file_manager_module;
+	static RubyValue file_manager_module = ruby_nil;
 
 	struct MemoryFilePtrDeleter {
 		void operator()(RxMemoryFile* memory_file) const noexcept {
@@ -98,23 +98,24 @@ namespace rm_modloader {
 		}
 
 		static RubyValue __cdecl read_file(RubyValue module, RubyValue path_value) {
-			std::string_view path = rb_get_string_data(&path_value);
+			return wrap_ruby_exception_safe([&] {
+				std::string_view path = rb_get_string_data(&path_value);
 
-			auto game_file = MemoryFilePtr(read_into_rx_memory_file(path.data()));
-			if (!game_file) {
-				rb_raise(*ruby_error_arg_error, "Failed to open file");
-				return ruby_nil;
-			}
+				auto game_file = MemoryFilePtr(read_into_rx_memory_file(path.data()));
+				if (!game_file) {
+					throw RubyModException(*ruby_error_arg_error, "Failed to open file");
+				}
 
-			LONG file_size = mmioSeek(game_file->mm_io, 0, SEEK_END);
-			std::string file_data(file_size, 0);
+				LONG file_size = mmioSeek(game_file->mm_io, 0, SEEK_END);
+				std::string file_data(file_size, 0);
 
-			mmioSeek(game_file->mm_io, 0, SEEK_SET);
-			mmioRead(game_file->mm_io, file_data.data(), file_size);
+				mmioSeek(game_file->mm_io, 0, SEEK_SET);
+				mmioRead(game_file->mm_io, file_data.data(), file_size);
 
-			RubyValue data_value = rb_str_new(file_data.c_str(), file_data.length());
+				RubyValue data_value = rb_str_new(file_data.c_str(), file_data.length());
 
-			return data_value;
+				return data_value;
+			});
 		}
 
 		static RubyValue __cdecl dump_as_bmp(RubyValue module, RubyValue bitmap_value, RubyValue path_value) {

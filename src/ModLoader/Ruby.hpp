@@ -4,12 +4,48 @@
 
 namespace rm_modloader {
 	using RubyValue = unsigned int;
+
+	using RubyValueInnerType = RubyValue;
+	using RubyValueFlag      = RubyValue;
+
+	//using RubyValueInnerType = unsigned int;
+	//struct RubyValueFlag {
+	//	constexpr explicit RubyValueFlag(unsigned int val) : value(val) {}
+	//	RubyValueInnerType value;
+	//};
+
+	//struct RubyValue {
+	//	constexpr explicit RubyValue(unsigned int val) : value(val) {}
+
+	//	friend constexpr bool operator==(const RubyValue& lhs, const RubyValue& rhs) {
+	//		return lhs.value == rhs.value;
+	//	}
+
+	//	friend constexpr bool operator==(const RubyValue& lhs, const RubyValueFlag& rhs) {
+	//		return lhs.value == rhs.value;
+	//	}
+
+	//	friend constexpr RubyValue operator&(const RubyValue& lhs, const RubyValue& rhs) {
+	//		return RubyValue{ lhs.value & rhs.value };
+	//	}
+
+	//	friend constexpr RubyValue operator&(const RubyValue& lhs, const RubyValueFlag& rhs) {
+	//		return RubyValue{ lhs.value & rhs.value };
+	//	}
+
+	//	friend constexpr RubyValue operator>>(const RubyValue& lhs, const int& rhs) {
+	//		return RubyValue{ lhs.value >> rhs };
+	//	}
+
+	//	RubyValueInnerType value;
+	//};
+
 	using RubyID = unsigned int;
 
-	constexpr RubyValue ruby_false = 0;
-	constexpr RubyValue ruby_true = 2;
-	constexpr RubyValue ruby_nil = 4;
-	constexpr RubyValue ruby_undef = 6;
+	constexpr RubyValue ruby_false{ 0 };
+	constexpr RubyValue ruby_true { 2 };
+	constexpr RubyValue ruby_nil  { 4 };
+	constexpr RubyValue ruby_undef{ 6 };
 
 	enum RubyValueType {
 		RUBY_T_NONE = 0x00,
@@ -88,27 +124,28 @@ namespace rm_modloader {
 		} as;
 	};
 
-	constexpr int ruby_special_shift = 8;
-	constexpr int ruby_flags_ushift = 12;
-	constexpr int ruby_fixnum_flag = 0x1;
-	constexpr int ruby_symbol_flag = 0xe;
-	constexpr int ruby_immediate_mask = 0x3;
-	constexpr int ruby_flag_string_no_embed = 1 << (ruby_flags_ushift + 1);
+	constexpr int ruby_special_shift                 { 8 };
+	constexpr int ruby_flags_ushift                  { 12 };
+	constexpr RubyValueFlag ruby_fixnum_flag         { 0x1 };
+	constexpr RubyValueFlag ruby_symbol_flag         { 0xe };
+	constexpr RubyValueFlag ruby_immediate_mask      { 0x3 };
+	constexpr RubyValueFlag ruby_flag_string_no_embed{ 1 << (ruby_flags_ushift + 1) };
 
 	inline constexpr bool is_rb_symbol(RubyValue value) {
-		return (value & ~(~0 >> ruby_special_shift << ruby_special_shift)) == ruby_symbol_flag;
+		constexpr RubyValueFlag symbol_mask{ ~(~0 >> ruby_special_shift << ruby_special_shift) };
+		return (value & symbol_mask) == ruby_symbol_flag;
 	}
 
 	inline constexpr bool is_rb_fixnum(RubyValue value) {
-		return (value & ruby_fixnum_flag);
+		return (value & ruby_fixnum_flag) == ruby_fixnum_flag;
 	}
 
 	inline constexpr bool is_rb_immediate(RubyValue value) {
-		return value & ruby_immediate_mask;
+		return (value & ruby_immediate_mask) == ruby_immediate_mask;
 	}
 
 	inline constexpr RubyID rb_sym2id(RubyValue sym) {
-		return sym >> ruby_special_shift;
+		return RubyID{ static_cast<RubyValueInnerType>(sym >> ruby_special_shift) };
 	}
 
 	template<typename T>
