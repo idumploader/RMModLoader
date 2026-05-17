@@ -204,6 +204,10 @@ def mod_reset
 	
 	scripts_dir = File.join(ModLoader.data_directory, "scripts")
 	scripts_files = Dir.entries(scripts_dir)
+	scripts_files.reject! do |file|
+		not file.end_with?(".rb")
+	end
+	
 	scripts_files.sort! do |left, right|
 		left_number = right_number = 0
 	

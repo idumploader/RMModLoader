@@ -40,6 +40,118 @@ namespace rm_modloader::detail {
 }
 
 namespace rm_modloader {
+	static RubyValue rb_call_cfunc_copy(RubyValue recv, RubyValue* argv, int argc, void* func) {
+		switch (argc) {
+		case -2: {
+			using FuncType = RubyValue(*)(RubyValue, RubyValue);
+
+			RubyValue args_array = rb_ary_new4(argc, argv);
+			return reinterpret_cast<FuncType>(func)(recv, args_array);
+		}
+
+		case -1: {
+			using FuncType = RubyValue(*)(int, RubyValue*, RubyValue);
+			return reinterpret_cast<FuncType>(func)(argc, argv, recv);
+		}
+
+		case 0: {
+			using FuncType = RubyValue(*)(RubyValue);
+			return reinterpret_cast<FuncType>(func)(recv);
+		}
+
+		case 1: {
+			using FuncType = RubyValue(*)(RubyValue, RubyValue);
+			return reinterpret_cast<FuncType>(func)(recv, argv[0]);
+		}
+
+		case 2: {
+			using FuncType = RubyValue(*)(RubyValue, RubyValue, RubyValue);
+			return reinterpret_cast<FuncType>(func)(recv, argv[0], argv[1]);
+		}
+
+		case 3: {
+			using FuncType = RubyValue(*)(RubyValue, RubyValue, RubyValue, RubyValue);
+			return reinterpret_cast<FuncType>(func)(recv, argv[0], argv[1], argv[2]);
+		}
+
+		case 4: {
+			using FuncType = RubyValue(*)(RubyValue, RubyValue, RubyValue, RubyValue, RubyValue);
+			return reinterpret_cast<FuncType>(func)(recv, argv[0], argv[1], argv[2], argv[3]);
+		}
+
+		case 5: {
+			using FuncType = RubyValue(*)(RubyValue, RubyValue, RubyValue, RubyValue, RubyValue, RubyValue);
+			return reinterpret_cast<FuncType>(func)(recv, argv[0], argv[1], argv[2], argv[3], argv[4]);
+		}
+
+		case 6: {
+			using FuncType = RubyValue(*)(RubyValue, RubyValue, RubyValue, RubyValue, RubyValue, RubyValue, RubyValue);
+			return reinterpret_cast<FuncType>(func)(recv, argv[0], argv[1], argv[2], argv[3], argv[4], argv[5]);
+		}
+
+		case 7: {
+			using FuncType = RubyValue(*)(RubyValue, RubyValue, RubyValue, RubyValue, RubyValue, RubyValue, RubyValue, RubyValue);
+			return reinterpret_cast<FuncType>(func)(recv, argv[0], argv[1], argv[2], argv[3], argv[4], argv[5], argv[6]);
+		}
+
+		case 8: {
+			using FuncType = RubyValue(*)(RubyValue, RubyValue, RubyValue, RubyValue, RubyValue, RubyValue, RubyValue, RubyValue, RubyValue);
+			return reinterpret_cast<FuncType>(func)(recv, argv[0], argv[1], argv[2], argv[3], argv[4], argv[5], argv[6], argv[7]);
+		}
+
+		case 9: {
+			using FuncType = RubyValue(*)(RubyValue, RubyValue, RubyValue, RubyValue, RubyValue, RubyValue, RubyValue, RubyValue, RubyValue, RubyValue);
+			return reinterpret_cast<FuncType>(func)(recv, argv[0], argv[1], argv[2], argv[3], argv[4], argv[5], argv[6], argv[7], argv[8]);
+		}
+
+		case 10: {
+			using FuncType = RubyValue(*)(RubyValue, RubyValue, RubyValue, RubyValue, RubyValue, RubyValue, RubyValue, RubyValue, RubyValue, RubyValue, RubyValue);
+			return reinterpret_cast<FuncType>(func)(recv, argv[0], argv[1], argv[2], argv[3], argv[4], argv[5],
+				argv[6], argv[7], argv[8], argv[9]);
+		}
+
+		case 11: {
+			using FuncType = RubyValue(*)(RubyValue, RubyValue, RubyValue, RubyValue, RubyValue, RubyValue, RubyValue,
+				RubyValue, RubyValue, RubyValue, RubyValue, RubyValue);
+			return reinterpret_cast<FuncType>(func)(recv, argv[0], argv[1], argv[2], argv[3], argv[4], argv[5],
+				argv[6], argv[7], argv[8], argv[9], argv[10]);
+		}
+
+		case 12: {
+			using FuncType = RubyValue(*)(RubyValue, RubyValue, RubyValue, RubyValue, RubyValue, RubyValue, RubyValue,
+				RubyValue, RubyValue, RubyValue, RubyValue, RubyValue, RubyValue);
+			return reinterpret_cast<FuncType>(func)(recv, argv[0], argv[1], argv[2], argv[3], argv[4], argv[5],
+				argv[6], argv[7], argv[8], argv[9], argv[10], argv[11]);
+		}
+
+		case 13: {
+			using FuncType = RubyValue(*)(RubyValue, RubyValue, RubyValue, RubyValue, RubyValue, RubyValue, RubyValue,
+				RubyValue, RubyValue, RubyValue, RubyValue, RubyValue, RubyValue, RubyValue);
+			return reinterpret_cast<FuncType>(func)(recv, argv[0], argv[1], argv[2], argv[3], argv[4], argv[5],
+				argv[6], argv[7], argv[8], argv[9], argv[10], argv[11], argv[12]);
+		}
+
+		case 14: {
+			using FuncType = RubyValue(*)(RubyValue, RubyValue, RubyValue, RubyValue, RubyValue, RubyValue, RubyValue,
+				RubyValue, RubyValue, RubyValue, RubyValue, RubyValue, RubyValue, RubyValue, RubyValue);
+			return reinterpret_cast<FuncType>(func)(recv, argv[0], argv[1], argv[2], argv[3], argv[4], argv[5],
+				argv[6], argv[7], argv[8], argv[9], argv[10], argv[11],
+				argv[12], argv[13]);
+		}
+
+		case 15: {
+			using FuncType = RubyValue(*)(RubyValue, RubyValue, RubyValue, RubyValue, RubyValue, RubyValue, RubyValue,
+				RubyValue, RubyValue, RubyValue, RubyValue, RubyValue, RubyValue, RubyValue, RubyValue, RubyValue);
+			return reinterpret_cast<FuncType>(func)(recv, argv[0], argv[1], argv[2], argv[3], argv[4], argv[5],
+				argv[6], argv[7], argv[8], argv[9], argv[10], argv[11],
+				argv[12], argv[13], argv[14]);
+		}
+
+		default:
+			rb_raise(*ruby_error_arg_error, "too many arguments(%d)", argc);
+		}
+	}
+
 	struct ModLoaderRubyModule {
 		static RubyValue __cdecl hrfix_enabled(RubyValue module) {
 			return mod_loader->get_config().is_hrfix_enabled() ? ruby_true : ruby_false;
@@ -202,6 +314,14 @@ namespace rm_modloader {
 	void ModLoaderCore::register_ruby_method(std::string_view name, void* function, int argument_count) {
 		rb_define_singleton_method(ruby_module_, name.data(), function, argument_count);
 	}
+
+	//void ModLoaderCore::define_ruby_method(RubyValue klass, std::string_view name, void* function, int argument_count) {
+
+	//}
+
+	//void ModLoaderCore::define_ruby_singleton_method(RubyValue klass, std::string_view name, void* function, int argument_count) {
+
+	//}
 
 	ModLoaderPatchID ModLoaderCore::hook_function_internal(void* target, void* hook_func, void** orig_func) {
 		MH_CreateHook(target, hook_func, orig_func);
@@ -368,6 +488,13 @@ namespace rm_modloader {
 
 	void ModLoaderCore::remove_postinit_handler(ModLoaderHandlerID handler_id) {
 		postinit_handlers_.erase(handler_id);
+	}
+
+	RubyModException::RubyModException(RubyValue klass, const char* message) : klass_(klass), std::exception(message)
+	{}
+
+	RubyValue RubyModException::klass() const {
+		return klass_;
 	}
 
 #define STRINGIFY_(a) #a

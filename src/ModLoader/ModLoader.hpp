@@ -306,8 +306,11 @@ namespace rm_modloader {
 		const ModLoaderConfig& get_config() const;
 
 		/**
-		 * Register ruby "ModLoader" module method
-		 * It can be called from ruby script
+		 * Register ruby "ModLoader" module method.
+		 * It can be called from ruby script.
+		 * @note Inside the method body, you should raise RubyModException instead of rb_raise.
+		 *       Otherwise, local variables in method body may not be properly released, which can cause memory leak.
+		 * @note You can only register after preinit stage. @see add_preinit_handler
 		 * @param name Name of the method
 		 * @param function Method body function, it executed when called from ruby script
 		 * @param argument_count Method arguments count
@@ -315,8 +318,36 @@ namespace rm_modloader {
 		void register_ruby_method(std::string_view name, void* function, int argument_count);
 
 		/**
+		 * Define ruby class/module method.
+		 * It can be then called from ruby script.
+		 * @note Inside the method body, you should raise RubyModException instead of rb_raise.
+		 *       Otherwise, local variables in method body may not be properly released, which can cause memory leak.
+		 * @note You can only register after preinit stage. @see add_preinit_handler
+		 * @param klass Ruby class/module
+		 * @param name Name of the method
+		 * @param function Method body function, it executed when called from ruby script
+		 * @param argument_count Method arguments count
+		 */
+		//void define_ruby_method(RubyValue klass, std::string_view name, void* function, int argument_count);
+
+		/**
+		 * Define ruby class/module singleton method (static method).
+		 * It can be then called from ruby script.
+		 * @note Inside the method body, you should raise RubyModException instead of rb_raise.
+		 *       Otherwise, local variables in method body may not be properly released, which can cause memory leak.
+		 * @note You can only register after preinit stage. @see add_preinit_handler
+		 * @param klass Ruby class/module
+		 * @param name Name of the method
+		 * @param function Method body function, it executed when called from ruby script
+		 * @param argument_count Method arguments count
+		 */
+		//void define_ruby_singleton_method(RubyValue klass, std::string_view name, void* function, int argument_count);
+
+		/**
 		 * Register ruby "ModLoader" module method
 		 * It can be called from ruby script
+		 * @note Inside the method body, you should raise RubyModException instead of rb_raise.
+		 *       Otherwise, local variables in method body may not be properly released, which can cause memory leak.
 		 * @note You can only register after preinit stage. @see add_preinit_handler
 		 * @tparam TRet return type of function
 		 * @tparam TArgs ... method function arguments
@@ -327,6 +358,41 @@ namespace rm_modloader {
 		void register_ruby_method(std::string_view name, TRet(__cdecl *function)(RubyValue, TArgs...)) {
 			register_ruby_method(name, function, sizeof...(TArgs));
 		}
+
+		/**
+		 * Define ruby class/module method.
+		 * It can be then called from ruby script.
+		 * @note Inside the method body, you should raise RubyModException instead of rb_raise.
+		 *       Otherwise, local variables in method body may not be properly released, which can cause memory leak.
+		 * @note You can only register after preinit stage. @see add_preinit_handler
+		 * @param klass Ruby class/module
+		 * @tparam TRet return type of function
+		 * @tparam TArgs ... method function arguments
+		 * @param name Name of the method
+		 * @param function Method body function, it executed when called from ruby script
+		 */
+		//template<typename TRet, typename ... TArgs>
+		//void define_ruby_method(RubyValue klass, std::string_view name, TRet(__cdecl* function)(RubyValue, TArgs...)) {
+		//	define_ruby_method(klass, name, function, sizeof...(TArgs));
+		//}
+
+		/**
+		 * Define ruby class/module singleton method (static method).
+		 * It can be then called from ruby script.
+		 * @note Inside the method body, you should raise RubyModException instead of rb_raise.
+		 *       Otherwise, local variables in method body may not be properly released, which can cause memory leak.
+		 * @note You can only register after preinit stage. @see add_preinit_handler
+		 * @param klass Ruby class/module
+		 * @tparam TRet return type of function
+		 * @tparam TArgs ... method function arguments
+		 * @param name Name of the method
+		 * @param function Method body function, it executed when called from ruby script
+		 */
+		//template<typename TRet, typename ... TArgs>
+		//void define_ruby_singleton_method(RubyValue klass, std::string_view name, TRet(__cdecl* function)(RubyValue, TArgs...)) {
+		//	define_ruby_singleton_method(klass, name, function, sizeof...(TArgs));
+		//}
+
 		
 	private:
 
@@ -402,6 +468,27 @@ namespace rm_modloader {
 		ModLoaderConfig config_;
 		RubyValue ruby_module_;
 	};
+
+	class RubyModException : public std::exception {
+	public:
+		RubyModException(RubyValue klass, const char* message);
+
+		RubyValue klass() const;
+
+	private:
+		RubyValue klass_;
+	};
+
+	template<typename T>
+	RubyValue wrap_ruby_exception_safe(T func) {
+		try {
+			return func();
+		}
+		catch (const RubyModException& e) {
+			rb_raise(e.klass(), e.what());
+			return ruby_nil; // to fix warning
+		}
+	}
 
 	/**
 	 * Global pointer to ModLoader. Used to hook, patch game, execute scripts and print information.
