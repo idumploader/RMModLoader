@@ -42,7 +42,7 @@ namespace rm_modloader {
     const char* (__cdecl* rb_get_string_data)(RubyValue* rb_string) = nullptr;
     RubyValue(__cdecl* eval_rb_cstr)(const char* script, const char* script_name, int* error_code) = nullptr;
     RubyValue(__cdecl* eval_rb_cstr_noerr)(const char* script) = nullptr;
-    RubyValue(__cdecl* rb_funcall)(RubyValue recv, RubyValue mid, int n, ...) = nullptr;
+    RubyValue(__cdecl* rb_funcall)(RubyValue recv, RubyID mid, int n, ...) = nullptr;
     void(__cdecl* rb_raise)(RubyValue exc_class, const char* fmt, ...) = nullptr;
     int(__cdecl* get_rb_error_string)(WCHAR* error_buf, size_t buf_size, int*) = nullptr;
 
@@ -52,6 +52,7 @@ namespace rm_modloader {
 
     RubyValue(__cdecl* rb_ary_new)() = nullptr;
     RubyValue(__cdecl* rb_ary_new2)(long capa) = nullptr;
+    RubyValue(__cdecl* rb_ary_new4)(long n, const RubyValue* elts) = nullptr;
     int(__cdecl* rb_ary_push)(RubyValue arr, RubyValue value) = nullptr;
 
     int(__cdecl* load_data)(int self, int rb_filename) = nullptr;
@@ -113,6 +114,7 @@ namespace rm_modloader {
 
         rb_ary_new = at_offset<decltype(rb_ary_new)>(rgss_module, 0x88F70);
         rb_ary_new2 = at_offset<decltype(rb_ary_new2)>(rgss_module, 0x88F50);
+        rb_ary_new4 = at_offset<decltype(rb_ary_new4)>(rgss_module, 0x89000);
         rb_ary_push = at_offset<decltype(rb_ary_push)>(rgss_module, 0x8D450);
 
         load_data = at_offset<decltype(load_data)>(rgss_module, 0xCDE0);

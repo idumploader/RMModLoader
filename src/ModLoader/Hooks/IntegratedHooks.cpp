@@ -57,14 +57,14 @@ namespace rm_modloader {
 			return;
 		}
 
-		immediate_current_keys[keys::key_down] |= gamepad_axed(gamepad_state, GLFW_GAMEPAD_AXIS_LEFT_Y, true) || gamepad_pressed(gamepad_state, GLFW_GAMEPAD_BUTTON_DPAD_DOWN);
-		immediate_current_keys[keys::key_left] |= gamepad_axed(gamepad_state, GLFW_GAMEPAD_AXIS_LEFT_X, true) || gamepad_pressed(gamepad_state, GLFW_GAMEPAD_BUTTON_DPAD_LEFT);
-		immediate_current_keys[keys::key_up] |= gamepad_axed(gamepad_state, GLFW_GAMEPAD_AXIS_LEFT_Y, false) || gamepad_pressed(gamepad_state, GLFW_GAMEPAD_BUTTON_DPAD_UP);
+		immediate_current_keys[keys::key_down]  |= gamepad_axed(gamepad_state, GLFW_GAMEPAD_AXIS_LEFT_Y, true) || gamepad_pressed(gamepad_state, GLFW_GAMEPAD_BUTTON_DPAD_DOWN);
+		immediate_current_keys[keys::key_left]  |= gamepad_axed(gamepad_state, GLFW_GAMEPAD_AXIS_LEFT_X, true) || gamepad_pressed(gamepad_state, GLFW_GAMEPAD_BUTTON_DPAD_LEFT);
+		immediate_current_keys[keys::key_up]    |= gamepad_axed(gamepad_state, GLFW_GAMEPAD_AXIS_LEFT_Y, false) || gamepad_pressed(gamepad_state, GLFW_GAMEPAD_BUTTON_DPAD_UP);
 		immediate_current_keys[keys::key_right] |= gamepad_axed(gamepad_state, GLFW_GAMEPAD_AXIS_LEFT_X, false) || gamepad_pressed(gamepad_state, GLFW_GAMEPAD_BUTTON_DPAD_RIGHT);
 
-		immediate_current_keys[key_binds[keys::bind_z]] |= gamepad_pressed(gamepad_state, gamepad_binds[keys::z_symbol_index]);
-		immediate_current_keys[key_binds[keys::bind_x]] |= gamepad_pressed(gamepad_state, gamepad_binds[keys::x_symbol_index]);
-		immediate_current_keys[key_binds[keys::bind_shift]] |= gamepad_pressed(gamepad_state, gamepad_binds[keys::shift_symbol_index]);
+		immediate_current_keys[key_binds[keys::bind_z]] |= static_cast<BYTE>(gamepad_pressed(gamepad_state, gamepad_binds[keys::z_symbol_index]));
+		immediate_current_keys[key_binds[keys::bind_x]] |= static_cast<BYTE>(gamepad_pressed(gamepad_state, gamepad_binds[keys::x_symbol_index]));
+		immediate_current_keys[key_binds[keys::bind_shift]] |= static_cast<BYTE>(gamepad_pressed(gamepad_state, gamepad_binds[keys::shift_symbol_index]));
 	}
 
 	bool ExtendedControlSet::gamepad_pressed(const GLFWgamepadstate& gamepad_state, int key) {

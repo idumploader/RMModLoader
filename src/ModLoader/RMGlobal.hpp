@@ -61,6 +61,7 @@ namespace rm_modloader {
 
     extern RubyValue(__cdecl* rb_ary_new)();
     extern RubyValue(__cdecl* rb_ary_new2)(long capa);
+    extern RubyValue(__cdecl* rb_ary_new4)(long n, const RubyValue* elts);
     extern int(__cdecl* rb_ary_push)(RubyValue arr, RubyValue value);
 
     extern int(__cdecl* load_data)(int self, int rb_filename);
