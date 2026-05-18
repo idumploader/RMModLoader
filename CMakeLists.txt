@@ -32,6 +32,7 @@ add_library(ModLoader SHARED
 	"src/ModLoader/Hooks/IntegratedHooks.cpp"
 	"src/ModLoader/Hooks/SteamSupportHooks.cpp"
 	"src/ModLoader/GLFWMisc.cpp"
+	"src/ModLoader/Logger.cpp"
 	"src/ModLoader/Hooks/FileManagerHooks.cpp"
 )
 

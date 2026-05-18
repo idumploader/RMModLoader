@@ -3,6 +3,7 @@
 #include "RMGlobal.hpp"
 #include "GLFWMisc.hpp"
 #include "Hooks.hpp"
+#include "Logger.hpp"
 
 #include <fstream>
 #include <locale>
@@ -23,16 +24,31 @@ BOOL WINAPI is_debugger_present_hook() {
 namespace rm_modloader::detail {
 
 	int ModLoaderBooter::init() {
-		MH_Initialize();
-		init_functionset();
-		mod_loader = std::make_shared<ModLoaderCore>(std::filesystem::current_path());
-		mod_loader->setup_modloader_hooks();
+		if (MH_Initialize() != MH_OK) {
+			return -1;
+		}
+		if (Logger::init(named_pipe_name) != 0) {
+			return -1;
+		}
+		try {
+			init_functionset();
+			mod_loader = std::make_shared<ModLoaderCore>(std::filesystem::current_path());
+			mod_loader->setup_modloader_hooks();
+		} catch (const std::exception& ex) {
+			Logger::critical(std::string("\x1B[0;31mFailed to initialize mod loader: ") + ex.what() + "\x1B[0m");
+			// don't deinit logger, because log window will close
+			//(void)Logger::deinit();
+			MH_Uninitialize();
+			return -1;
+		}
 		return 0;
 	}
 
 	int ModLoaderBooter::deinit() {
 		mod_loader->clear_modloader_hooks();
 		mod_loader = nullptr;
+		// don't deinit logger, because log window will close
+		//(void)Logger::deinit();
 		MH_Uninitialize();
 		return 0;
 	}
@@ -266,8 +282,7 @@ namespace rm_modloader {
 	ModLoaderCore::ModLoaderCore(std::filesystem::path loader_root_path) :
 		modloader_root_(std::move(loader_root_path)),
 		last_patch_id_(0),
-		last_handler_id_(0),
-		debug_pipe_handle_(CreateFileA(named_pipe_name.data(), FILE_WRITE_ACCESS, 0, nullptr, OPEN_EXISTING, 0, nullptr))
+		last_handler_id_(0)
 	{
 		try {
 			config_ = ModLoaderConfig(modloader_root_ / modloader_data_dir / "mod_loader.json");
@@ -280,7 +295,7 @@ namespace rm_modloader {
 	}
 
 	ModLoaderCore::~ModLoaderCore() {
-		CloseHandle(debug_pipe_handle_);
+
 	}
 
 	const std::filesystem::path& ModLoaderCore::get_game_dir() const {
@@ -303,8 +318,7 @@ namespace rm_modloader {
 	}
 
 	void ModLoaderCore::log(std::string_view msg) const {
-		DWORD written;
-		WriteFile(debug_pipe_handle_, msg.data(), msg.size(), &written, nullptr);
+		Logger::log(LogLevel::Info, msg);
 	}
 
 	const ModLoaderConfig& ModLoaderCore::get_config() const {
@@ -421,6 +435,11 @@ namespace rm_modloader {
 
 	void ModLoaderCore::setup_modloader_hooks() {
 		hook_api_function(L"kernel32.dll", "IsDebuggerPresent", is_debugger_present_hook, &orig_IsDebuggerPresent);
+
+		if (get_rgss_base() == nullptr) {
+			log_critical("Failed to get RGSS base address (RGSS301). ModLoader cannot work without it. Aborting hook setup.\n");
+			return;
+		}
 
 		hook_function(load_data, &ModLoaderCoreHooks::load_data_hook, &ModLoaderCoreHooks::orig_load_data);
 		hook_function(startup_scripts, &ModLoaderCoreHooks::startup_scripts_hook, &ModLoaderCoreHooks::orig_startup_scripts);
