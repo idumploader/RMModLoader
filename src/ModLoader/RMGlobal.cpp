@@ -69,7 +69,8 @@ namespace rm_modloader {
     RubyValue* rx_bitmap_class = nullptr;
 
     void init_functionset() {
-        rgss_module = GetModuleHandle(TEXT("System\\RGSS301.dll"));
+		// Cannot GetModuleHandle because RGSS301.dll is not loaded at the time of loading this DLL, so we have to load it manually
+        rgss_module = LoadLibrary(TEXT("System\\RGSS301.dll"));
         if (rgss_module == nullptr) {
             throw std::runtime_error("Failed to get RGSS301.dll");
         }
