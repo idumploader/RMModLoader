@@ -282,7 +282,7 @@ namespace rm_modloader {
 		}
 
 		/**
-		 * Print errror log to user
+		 * Print error log to user
 		 * @tparam TArgs Format arguments types
 		 * @param fmt Format string. @ref std::format
 		 * @param args ... Format arguments
@@ -290,6 +290,18 @@ namespace rm_modloader {
 		template<typename ... TArgs>
 		void log_error(const std::format_string<TArgs...> fmt, TArgs&& ... args) const {
 			std::string msg = "\x1B[0;31m[ModLoader INFO] " + std::format(std::move(fmt), std::forward<TArgs>(args) ...) + "\x1B[0m";
+			log(msg);
+		}
+
+		/**
+		 * Print critical error log to user
+		 * @tparam TArgs Format arguments types
+		 * @param fmt Format string. @ref std::format
+		 * @param args ... Format arguments
+		 */
+		template<typename ... TArgs>
+		void log_critical(const std::format_string<TArgs...> fmt, TArgs&& ... args) const {
+			std::string msg = "\x1B[41;37m[ModLoader INFO] " + std::format(std::move(fmt), std::forward<TArgs>(args) ...) + "\x1B[0m";
 			log(msg);
 		}
 
@@ -462,8 +474,6 @@ namespace rm_modloader {
 		ModLoaderHandlerID last_handler_id_;
 		std::unordered_map<ModLoaderHandlerID, PreinitHandler> preinit_handlers_;
 		std::unordered_map<ModLoaderHandlerID, PostinitHandler> postinit_handlers_;
-
-		HANDLE debug_pipe_handle_;
 
 		ModLoaderConfig config_;
 		RubyValue ruby_module_;
