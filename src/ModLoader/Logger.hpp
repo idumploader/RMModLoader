@@ -1,5 +1,6 @@
 #pragma once
 #include <string_view>
+#include <optional>
 
 namespace rm_modloader {
 	enum class LogLevel {
@@ -18,7 +19,7 @@ namespace rm_modloader {
 		 * @param output_name File name to log to
 		 * @return 0 on success, -1 on failure
 		 */
-		static int init(std::string_view output_name) noexcept;
+		static int init(std::optional<std::string_view> output_name) noexcept;
 
 		/**
 		 * Deinitialize logger

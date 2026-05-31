@@ -5,6 +5,7 @@
 #include "Hooks/IntegratedHooks.hpp"
 #include "Hooks/SteamSupportHooks.hpp"
 #include "Hooks/FileManagerHooks.hpp"
+#include "Hooks/SteamOverlayHooks.hpp"
 
 #include <array>
 
@@ -17,6 +18,7 @@ namespace rm_modloader {
 		apply_fast_render,
 		apply_steam_support_hooks,
 		apply_controls_change,
-		apply_file_manager_hooks
+		apply_file_manager_hooks,
+		apply_steam_overlay_hooks
 	};
 }

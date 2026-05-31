@@ -21,11 +21,16 @@ namespace rm_modloader {
 		}
 	}
 
-	int Logger::init(std::string_view output_name) noexcept {
+	int Logger::init(std::optional<std::string_view> output_name) noexcept {
 		if (logger_output_handle != INVALID_HANDLE_VALUE) {
 			return -1;
 		}
-		logger_output_handle = CreateFileA(output_name.data(), FILE_WRITE_ACCESS, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+		if (output_name) {
+			logger_output_handle = CreateFileA(output_name->data(), FILE_WRITE_ACCESS, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+		}
+		else {
+			logger_output_handle = GetStdHandle(STD_OUTPUT_HANDLE);
+		}
 		return logger_output_handle != INVALID_HANDLE_VALUE ? 0 : -1;
 	}
 

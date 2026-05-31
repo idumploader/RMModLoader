@@ -3,6 +3,7 @@
 	"fast_render": false,
 	"controls_change": true,
 	"steam_support": false,
+	"steam_overlay": true,
 	"width": 1500,
 	"height": 840
 }
