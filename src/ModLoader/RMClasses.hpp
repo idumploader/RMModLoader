@@ -6,23 +6,21 @@
 #include <string_view>
 
 #define __cppobj
-
-// TODO: change
-#pragma pointers_to_members(full_generality, single_inheritance)
+#define RM_CLASS __single_inheritance
 
 namespace rm_modloader {
 
-	struct RxTilemap;
-	struct Screen;
-	struct Surface;
-	struct DrawLocal_DynamicDraw;
-	struct RxSprite;
-	struct Sprite;
-	struct RxFontList;
-	struct RxInput;
-	struct SurfaceSprite;
-	struct ImageLoader;
-	struct BIDImage;
+	struct RM_CLASS RxTilemap;
+	struct RM_CLASS Screen;
+	struct RM_CLASS Surface;
+	struct RM_CLASS DrawLocal_DynamicDraw;
+	struct RM_CLASS RxSprite;
+	struct RM_CLASS Sprite;
+	struct RM_CLASS RxFontList;
+	struct RM_CLASS RxInput;
+	struct RM_CLASS SurfaceSprite;
+	struct RM_CLASS ImageLoader;
+	struct RM_CLASS BIDImage;
 
 	struct SpriteVFTable {
 		void* (__thiscall Sprite::* destructor)(char a1);
@@ -33,11 +31,11 @@ namespace rm_modloader {
 		void(__thiscall Sprite::* unk14)(DWORD a1, DWORD a2);
 		int(__thiscall Sprite::* set_render_rect)(RECT* rect);
 		Sprite* (__thiscall Sprite::* set_ancestor)(Sprite* ancestor);
-		void(__thiscall* unk20)();
-		int(__thiscall* unk24)(Surface*, int);
-		void(__thiscall* unk28)(int a1); // Almost every is empty function
-		int(__thiscall* unk2C)(int, int);
-		void(__thiscall* unk30)(RECT*);
+		void(__thiscall* Sprite::* unk20)();
+		int(__thiscall* Sprite::* unk24)(Surface*, int);
+		void(__thiscall* Sprite::* unk28)(int a1); // Almost every is empty function
+		int(__thiscall* Sprite::* unk2C)(int, int);
+		void(__thiscall* Sprite::* unk30)(RECT*);
 	};
 
 	struct ImageLoaderVFTable {
@@ -46,10 +44,10 @@ namespace rm_modloader {
 		BIDImage* (__thiscall ImageLoader::* read_image)(BYTE* data); // data size?
 	};
 
-	static_assert(sizeof(SpriteVFTable::set_sprite_offset) == 0x4);
+	static_assert(sizeof(SpriteVFTable::set_sprite_offset) == sizeof(void*));
 
 	/* 23 */
-	struct Sprite
+	struct RM_CLASS Sprite
 	{
 		static constexpr std::string_view type_name = "class CNxSprite";
 
@@ -74,12 +72,12 @@ namespace rm_modloader {
 		Sprite** child_end;
 	};
 
-	struct SurfaceSpriteVFTable : SpriteVFTable {
+	struct RM_CLASS SurfaceSpriteVFTable : SpriteVFTable {
 
 	};
 
 	/* 30 */
-	struct SurfaceSprite : Sprite
+	struct RM_CLASS SurfaceSprite : Sprite
 	{
 		static constexpr std::string_view type_name = "class CNxSurfaceSprite";
 
@@ -93,7 +91,7 @@ namespace rm_modloader {
 	};
 
 	/* 16 */
-	struct RxTilemapSprite : SurfaceSprite
+	struct RM_CLASS RxTilemapSprite : SurfaceSprite
 	{
 		static constexpr std::string_view type_name = "class CRxTilemapSprite";
 
@@ -102,7 +100,7 @@ namespace rm_modloader {
 	};
 
 	/* 24 */
-	struct Window : Sprite
+	struct RM_CLASS Window : Sprite
 	{
 		static constexpr std::string_view type_name = "class CNxWindow";
 
@@ -113,7 +111,7 @@ namespace rm_modloader {
 	};
 
 	/* 22 */
-	struct Screen : Window
+	struct RM_CLASS Screen : Window
 	{
 		static constexpr std::string_view type_name = "class CNxScreen";
 
@@ -125,7 +123,7 @@ namespace rm_modloader {
 	};
 
 	/* 20 */
-	struct RxTilemap {
+	struct RM_CLASS RxTilemap {
 		DWORD vftable;
 		Sprite* viewport;
 		RxTilemapSprite* tilemap_sprite8;
@@ -148,12 +146,12 @@ namespace rm_modloader {
 	};
 
 
-	struct RxPatchTilemap : RxTilemap {
+	struct RM_CLASS RxPatchTilemap : RxTilemap {
 		int map_id;
 	};
 
 	/* 21 */
-	struct GameFrame
+	struct RM_CLASS GameFrame
 	{
 		static constexpr std::string_view type_name = "class CGameFrame";
 
@@ -185,7 +183,7 @@ namespace rm_modloader {
 	};
 
 	/* 25 */
-	struct BIDImage
+	struct RM_CLASS BIDImage
 	{
 		DWORD vftable;
 		DWORD gap4[1];
@@ -195,15 +193,17 @@ namespace rm_modloader {
 	};
 
 
-	union __declspec(align(4)) SurfaceBitmapInfo
+	union SurfaceBitmapInfo
 	{
 		BITMAPINFO* bitmap;
 		DWORD bit_count;
 	};
 
+	static_assert(sizeof(SurfaceBitmapInfo) == 4);
+	static_assert(alignof(SurfaceBitmapInfo) == 4);
 
 	/* 26 */
-	struct Surface
+	struct RM_CLASS Surface
 	{
 		DWORD vftable;
 		BIDImage image;
@@ -220,7 +220,7 @@ namespace rm_modloader {
 	};
 
 	/* 31 */
-	struct __cppobj RxSprite : SurfaceSprite
+	struct __cppobj RM_CLASS RxSprite : SurfaceSprite
 	{
 		static constexpr std::string_view type_name = "class CRxSprite";
 
@@ -254,7 +254,7 @@ namespace rm_modloader {
 	};
 
 	/* 36 */
-	struct RxInput
+	struct RM_CLASS RxInput
 	{
 		DWORD vftable;
 		DWORD gap4[7];
@@ -271,14 +271,14 @@ namespace rm_modloader {
 
 
 	/* 35 */
-	struct RxFontList
+	struct RM_CLASS RxFontList
 	{
 		DWORD vftable;
 		DWORD gap4[7];
 	};
 
 	/* 27 */
-	struct DrawLocal_DynamicDraw
+	struct RM_CLASS DrawLocal_DynamicDraw
 	{
 		DWORD vftable;
 		DWORD unk4;
@@ -286,12 +286,12 @@ namespace rm_modloader {
 	};
 
 	/* 28 */
-	struct DrawLocal_DynamicDraw8 : DrawLocal_DynamicDraw
+	struct RM_CLASS DrawLocal_DynamicDraw8 : DrawLocal_DynamicDraw
 	{
 	};
 
 	/* 29 */
-	struct DrawLocal_DynamicDraw32 : DrawLocal_DynamicDraw
+	struct RM_CLASS DrawLocal_DynamicDraw32 : DrawLocal_DynamicDraw
 	{
 		DWORD unk20;
 		DWORD unk24;
@@ -299,7 +299,7 @@ namespace rm_modloader {
 	};
 
 	/* 31 */
-	struct __cppobj RxViewport : Sprite
+	struct __cppobj RM_CLASS RxViewport : Sprite
 	{
 		static constexpr std::string_view type_name = "class CRxViewport";
 
@@ -309,7 +309,7 @@ namespace rm_modloader {
 	};
 
 	/* 32 */
-	struct RxPlane : SurfaceSprite {
+	struct RM_CLASS RxPlane : SurfaceSprite {
 		static constexpr std::string_view type_name = "class CRxPlane";
 
 		DWORD gapCC[3];
@@ -320,47 +320,47 @@ namespace rm_modloader {
 	};
 
 	/* 33 */
-	struct ImageLoader {
+	struct RM_CLASS ImageLoader {
 		ImageLoaderVFTable* vftable;
 	};
 
 	/* 34 */
-	struct DrawLocal_ImageLoader {
+	struct RM_CLASS DrawLocal_ImageLoader {
 		DWORD vftable;
 		ImageLoader* image_loader;
 	};
 
-	struct RxSurface : Surface {
+	struct RM_CLASS RxSurface : Surface {
 		static constexpr std::string_view type_name = "class CRxSurface";
 
 		DWORD unk58;
 	};
 
-	struct RxBitmap {
+	struct RM_CLASS RxBitmap {
 		static constexpr std::string_view type_name = "class CRxBitmap";
 
 		BYTE gap0[8];
 		RxSurface* surface;
 	};
 
-	struct File {
+	struct RM_CLASS File {
 		DWORD vftable;
 		HMMIO mm_io;
 		DWORD gap4[7];
 	};
 
-	struct RxMemoryFile : File {
+	struct RM_CLASS RxMemoryFile : File {
 		DWORD unk24;
 	};
 
-	struct RepositoryFileInfo {
+	struct RM_CLASS RepositoryFileInfo {
 		DWORD offset;
 		DWORD file_size;
 		DWORD unk8;
 		char filename[MAX_PATH];
 	};
 
-	struct FileRepository {
+	struct RM_CLASS FileRepository {
 		DWORD unk0;
 		DWORD unk4;
 		DWORD unk8;
@@ -391,4 +391,6 @@ namespace rm_modloader {
 	static_assert(sizeof(FileRepository) == 0x18);
 
 };
+
 #undef __cppobj
+#undef RM_CLASS
