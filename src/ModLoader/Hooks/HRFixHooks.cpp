@@ -121,10 +121,10 @@ namespace rm_modloader {
 
         auto loc = get_object_locator(this);
 
-        static Sprite* tilemap_ancestor = nullptr;
-        static int map_offset_x = 0, map_offset_y = 0;
-        static bool is_last_disabled = 0;
-        if (loc->type_info->name() == RxTilemapSprite::type_name) {
+        static thread_local Sprite* tilemap_ancestor = nullptr;
+        static thread_local int map_offset_x = 0, map_offset_y = 0;
+        static thread_local bool is_last_disabled = 0;
+        if (is_vlocation<RxTilemapSprite>(loc)) {
             auto tilemap_sprite = reinterpret_cast<RxTilemapSprite*>(this);
             if (tilemap_ancestor != ancestor
                 || tilemap_sprite->tilemap->width != current_map_width

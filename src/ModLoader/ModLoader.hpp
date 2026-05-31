@@ -181,6 +181,8 @@ namespace rm_modloader {
 		 */
 		template<typename T, std::derived_from<T> THook, typename TMethod>
 		ModLoaderPatchID hook_method(TMethod(T::* target), TMethod(THook::* hook_method), TMethod(T::** orig_method)) {
+			static_assert(sizeof(hook_method) == sizeof(void*),
+				"This method must be called to RM_CLASS class. T is without single inheritance");
 			return hook_function(std::bit_cast<void*>(target), std::bit_cast<void*>(hook_method), reinterpret_cast<void**>(orig_method));
 		}
 
@@ -196,6 +198,8 @@ namespace rm_modloader {
 		 */
 		template<typename T, std::derived_from<T> THook, typename TMethod>
 		ModLoaderPatchID hook_method(ptrdiff_t offset, TMethod(THook::* hook_method), TMethod(T::** orig_method)) {
+			static_assert(sizeof(hook_method) == sizeof(void*),
+				"This method must be called to RM_CLASS class. T is without single inheritance");
 			return hook_function(offset, std::bit_cast<void*>(hook_method), reinterpret_cast<void**>(orig_method));
 		}
 
