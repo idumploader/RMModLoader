@@ -132,16 +132,16 @@ namespace rm_modloader {
 	constexpr RubyValueFlag ruby_flag_string_no_embed{ 1 << (ruby_flags_ushift + 1) };
 
 	inline constexpr bool is_rb_symbol(RubyValue value) {
-		constexpr RubyValueFlag symbol_mask{ ~(~0 >> ruby_special_shift << ruby_special_shift) };
+		constexpr RubyValueFlag symbol_mask{ (1u << ruby_special_shift) - 1u };
 		return (value & symbol_mask) == ruby_symbol_flag;
 	}
 
 	inline constexpr bool is_rb_fixnum(RubyValue value) {
-		return (value & ruby_fixnum_flag) == ruby_fixnum_flag;
+		return (value & ruby_fixnum_flag);
 	}
 
 	inline constexpr bool is_rb_immediate(RubyValue value) {
-		return (value & ruby_immediate_mask) == ruby_immediate_mask;
+		return (value & ruby_immediate_mask);
 	}
 
 	inline constexpr RubyID rb_sym2id(RubyValue sym) {
