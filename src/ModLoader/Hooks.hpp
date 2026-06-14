@@ -8,6 +8,7 @@
 #include "Hooks/SteamOverlayHooks.hpp"
 #include "Hooks/SpriteDisposeFixHooks.hpp"
 #include "Hooks/HttpServerHooks.hpp"
+#include "Hooks/FocusPauseHooks.hpp"
 
 #include <array>
 
@@ -23,6 +24,7 @@ namespace rm_modloader {
 		apply_file_manager_hooks,
 		apply_steam_overlay_hooks,
 		apply_sprite_dispose_fix,
-		apply_http_server_hooks
+		apply_http_server_hooks,
+		apply_focus_pause_hooks
 	};
 }
