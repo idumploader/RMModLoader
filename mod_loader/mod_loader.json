@@ -4,6 +4,7 @@
 	"controls_change": true,
 	"steam_support": false,
 	"steam_overlay": true,
+	"disable_focus_pause": false,
 	"width": 1500,
 	"height": 840
 }

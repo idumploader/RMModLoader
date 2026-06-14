@@ -53,6 +53,7 @@ The `mod_loader/mod_loader.json` file contains loader settings:
 | `controls_change` | Enable/disable ControlsChange (default `true`) |
 | `fast_render` | Fast rendering (default `false`). **Does not work**, no point enabling |
 | `steam_support` | Steam support (default `false`) |
+| `disable_focus_pause` | Keep the game ticking when the window loses focus (default `false`). Filters `WM_ACTIVATEAPP`/`WM_KILLFOCUS`/`WM_ACTIVATE` out of the message queue so the engine never marks itself inactive. Useful for tools that need the game to keep running in the background. |
 | `width` | Window width. Only applies when `hrfix_enable` is enabled |
 | `height` | Window height. Only applies when `hrfix_enable` is enabled |
 
