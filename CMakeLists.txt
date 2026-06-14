@@ -11,7 +11,7 @@ if (CMAKE_TOOLCHAIN_FILE MATCHES "vcpkg.cmake")
   include(${CMAKE_TOOLCHAIN_FILE})
 endif()
 
-project(rmforge LANGUAGES CXX C VERSION 2.9)
+project(rmforge LANGUAGES CXX C VERSION 3.0)
 
 include(CMakePackageConfigHelpers)
 
@@ -23,6 +23,7 @@ find_package(GLFW3 REQUIRED)
 find_package(glm REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(minhook REQUIRED)
+find_package(httplib CONFIG REQUIRED)
 
 # -- ModLoader
 
@@ -43,6 +44,7 @@ add_library(ModLoader SHARED
   "src/ModLoader/Hooks/FileManagerHooks.cpp"
   "src/ModLoader/Hooks/SteamOverlayHooks.cpp"
   "src/ModLoader/Hooks/SpriteDisposeFixHooks.cpp"
+  "src/ModLoader/Hooks/HttpServerHooks.cpp"
 
   "src/ModLoader/SteamOverlay/DLLResolver.cpp"
   "src/ModLoader/SteamOverlay/IPCStreams.cpp"
@@ -70,6 +72,7 @@ target_link_libraries(ModLoader PRIVATE
     glm::glm
     nlohmann_json
     minhook::minhook
+    httplib::httplib
 #    mkxp-z
   >
 )

@@ -5,6 +5,7 @@
 		"glm",
 		"nlohmann-json",
 		"glfw3",
-		"minhook"
+		"minhook",
+		"cpp-httplib"
 	]
 }
