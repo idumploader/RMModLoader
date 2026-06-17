@@ -1,3 +1,7 @@
+$imported ||= {}
+if not $imported["IDL-HRFix"]
+$imported["IDL-HRFix"] = "1.0"
+
 if ModLoader.hrfix_enabled
 
 #Graphics.resize_screen(1920, 1080)
@@ -432,3 +436,5 @@ class Game_Event
 end
 
 end # ModLoader.hrfix_enabled
+
+end # not $imported["IDL-HRFix"]

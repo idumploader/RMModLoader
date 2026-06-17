@@ -1,3 +1,7 @@
+$imported ||= {}
+if not $imported["IDL-LocalizedStrings"]
+$imported["IDL-LocalizedStrings"] = "1.0"
+
 
 module MLLocalizedStrings
 	LOCALIZED_STRINGS_PATH = ModLoader.data_directory + "/strings"
@@ -48,3 +52,5 @@ if not Dir.exist?(MLLocalizedStrings::LOCALIZED_STRINGS_PATH)
 end
 
 MLLocalizedStrings.load(MLLocalizedStrings::DEFAULT_LANG)
+
+end # not $imported["IDL-LocalizedStrings"]

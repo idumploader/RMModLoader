@@ -1,3 +1,7 @@
+$imported ||= {}
+if not $imported["IDL-ControlsChangeKeys"]
+$imported["IDL-ControlsChangeKeys"] = "1.0"
+
 # if ModLoader.controls_change_enabled
 
 module VKKeys
@@ -245,3 +249,5 @@ module GamepadButtons
 end
 
 # end # ModLoader.controls_change_enabled
+
+end # not $imported["IDL-ControlsChangeKeys"]

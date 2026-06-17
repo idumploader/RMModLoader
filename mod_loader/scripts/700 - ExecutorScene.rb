@@ -1,3 +1,7 @@
+$imported ||= {}
+if not $imported["IDL-ExecutorScene"]
+$imported["IDL-ExecutorScene"] = "1.0"
+
 if ModLoader.version != "2.4"
 
 module ExecutorModule
@@ -306,3 +310,5 @@ module ExecutorEnvironment
 end
 
 end # ModLoader.version != "2.4"
+
+end # not $imported["IDL-ExecutorScene"]

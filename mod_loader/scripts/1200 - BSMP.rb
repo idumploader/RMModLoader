@@ -1,3 +1,7 @@
+$imported ||= {}
+if not $imported["IDL-BSMP"]
+$imported["IDL-BSMP"] = "1.0"
+
 
 if not (Object.const_defined?(:SteamUserStatsLite) and Object.const_defined?(:SteamAPI))
 p "Multiplayer isn't available"
@@ -1002,3 +1006,5 @@ MLLocalizedStrings.add_required("bsmp")
 
 # --- BSMP END ---
 end # if Object.const_defined?(:SteamUserStatsLite) and Object.const_defined?(:SteamAPI)
+
+end # not $imported["IDL-BSMP"]

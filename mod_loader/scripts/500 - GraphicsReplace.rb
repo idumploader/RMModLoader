@@ -1,3 +1,7 @@
+$imported ||= {}
+if not $imported["IDL-GraphicsReplace"]
+$imported["IDL-GraphicsReplace"] = "1.0"
+
 module GraphicsReplace
 	REPLACE_DIR = ModLoader.data_directory + "\\"
 	
@@ -76,3 +80,5 @@ end
 if not Dir.exist?(GraphicsReplace::REPLACE_DIR)
 	Dir.mkdir(GraphicsReplace::REPLACE_DIR)
 end
+
+end # not $imported["IDL-GraphicsReplace"]
