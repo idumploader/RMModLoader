@@ -1,25 +1,25 @@
 #==============================================================================
-# LinesCheckerServer — ПОТРЕБИТЕЛЬ HttpRouter (1040). Регистрирует эндпоинты
-# проверки длины/ширины текста средствами реального RGSS3-рендера. Листен,
-# поллинг и диспетч — целиком на стороне мастера ModLoader::Http.
+# LinesCheckerServer — CONSUMER of HttpRouter (1040). Registers the text
+# length/width checking endpoints, measured with the real RGSS3 renderer.
+# Listen, polling and dispatch live entirely in the ModLoader::Http master.
 #
-# Зависимости:
-#   • 1040 - HttpRouter      (ModLoader::Http — роутер/поллер/JSON)
-#   • 1050 - LinesChecker    (LinesChecker.text_width — измерение ширины)
+# Dependencies:
+#   • 1040 - HttpRouter      (ModLoader::Http — router/poller/JSON)
+#   • 1050 - LinesChecker    (LinesChecker.text_width — width measurement)
 #
-# Контексты и лимиты (см. Contexts ниже):
-#   dialog          → 614px, без лимита строк
-#   dialog_portrait → 502px (614 - аватарка 112), без лимита строк
-#   description     → 616px, до 4 строк
-#   choice          → 616px, ровно 1 строка
-#   scroll          → 51 символ (char-based, нестабильная геометрия окна)
+# Contexts and limits (see Contexts below):
+#   dialog          → 614px, no line limit
+#   dialog_portrait → 502px (614 - 112 portrait), no line limit
+#   description     → 616px, up to 4 lines
+#   choice          → 616px, exactly 1 line
+#   scroll          → 51 chars (char-based, unstable window geometry)
 #
-# Эндпоинты:
+# Endpoints:
 #   GET  /ping
 #     resp: "pong"
 #
 #   POST /measure
-#     body: {"text": "строка с \\n", "context": "<имя контекста>"}
+#     body: {"text": "line with \\n", "context": "<context name>"}
 #     resp: {
 #       "ok": true, "context": "...", "max_width": 614, "max_lines": null,
 #       "max_chars": null,
@@ -28,11 +28,11 @@
 #     }
 #
 #   POST /measure_batch
-#     body: NDJSON — по объекту {"text":"...","context":"..."} на строку,
-#           разделитель — реальный \n; внутри JSON-строки реальных \n быть не
-#           должно (только escape \\n).
+#     body: NDJSON — one {"text":"...","context":"..."} object per line,
+#           separator is a real \n; inside the JSON string there must be no
+#           real \n (only the escape \\n).
 #     resp: {"ok": true, "count": N, "results": [<measure response>, ...]}
-#     Обработка синхронная; на N сотен записей блокирует кадр.
+#     Processing is synchronous; for hundreds of entries it blocks the frame.
 #==============================================================================
 
 $imported ||= {}
@@ -41,14 +41,14 @@ if not $imported["IDL-LinesCheckerServer"] and defined?(ModLoader::Http) and
 $imported["IDL-LinesCheckerServer"] = "0.3"
 
 module LinesChecker
-  # ---- Контексты ----
+  # ---- Contexts ----
   module Contexts
     ALL = {
       "dialog"          => { :max_width => 614,       :max_lines => nil, :max_chars => nil },
       "dialog_portrait" => { :max_width => 614 - 112, :max_lines => nil, :max_chars => nil },
       "description"     => { :max_width => 616,       :max_lines => 4,   :max_chars => nil },
-      # Window_ChoiceList: width капается Graphics.width = 640, contents_width = 616.
-      # max_lines: 1 — окно односторочное на пункт, \n ломает рендер.
+      # Window_ChoiceList: width capped at Graphics.width = 640, contents_width = 616.
+      # max_lines: 1 — window is single-line per item, \n breaks the render.
       "choice"          => { :max_width => 616,       :max_lines => 1,   :max_chars => nil },
       "scroll"          => { :max_width => nil,       :max_lines => nil, :max_chars => 51  },
     }
@@ -60,7 +60,7 @@ module LinesChecker
     end
   end
 
-  # ---- Измерение (вся доменная логика; транспорт — у ModLoader::Http) ----
+  # ---- Measurement (all domain logic; transport in ModLoader::Http) ----
   module Measurer
     def self.measure_one(text, ctx_name)
       text     = (text     || "").to_s
@@ -96,9 +96,9 @@ module LinesChecker
       end
     end
 
-    # NDJSON-конверт (JSON не парсит вложенные массивы): тело — пачка объектов
-    # {"text":"...","context":"..."}, разделённых реальным "\n". Внутри
-    # JSON-строки реальных \n нет — только escape \\n.
+    # NDJSON envelope (our JSON can't parse nested arrays): the body is a batch
+    # of {"text":"...","context":"..."} objects separated by a real "\n".
+    # Inside a JSON string there is no real \n — only the escape \\n.
     def self.measure_batch(body)
       results = []
       body.to_s.split("\n").each do |line|
@@ -111,7 +111,7 @@ module LinesChecker
   end
 end
 
-# ---- Регистрация эндпоинтов в мастере ----
+# ---- Endpoint registration in the master ----
 http = ModLoader::Http
 
 http.get("/ping") { "pong" }

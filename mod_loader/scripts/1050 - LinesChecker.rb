@@ -1,17 +1,17 @@
 #==============================================================================
-# LinesChecker — проверка длины и ширины переводов в базах данных и на картах.
+# LinesChecker — checks length and width of translations in databases and maps.
 #
-# Что проверяет:
-#   • Текст в диалоговых окнах   (101 + 401)
-#   • Пункты выбора              (102)
-#   • Прокручиваемый текст       (105 + 405)
-#   • Описания предметов/навыков (Items, Skills, Weapons, Armors — @description)
+# What it checks:
+#   • Text in dialog windows     (101 + 401)
+#   • Choice items               (102)
+#   • Scrolling text             (105 + 405)
+#   • Item/skill descriptions    (Items, Skills, Weapons, Armors — @description)
 #
-# Запуск:
-#   • Вручную: mapcheck
-#   • Автоматически при старте игры — раскомментировать строку в Scene_Title#start
+# Running:
+#   • Manually: mapcheck
+#   • Automatically on game start — uncomment the line in Scene_Title#start
 #
-# Отчёт сохраняется в LongDialogLines.txt в папке проекта.
+# The report is saved to LongDialogLines.txt in the project folder.
 #==============================================================================
 
 $imported ||= {}
@@ -19,29 +19,29 @@ if not $imported["IDL-LinesChecker"]
 $imported["IDL-LinesChecker"] = "2.0"
 
 module LinesChecker
-  # ---- Лимиты ----
+  # ---- Limits ----
 
-  # Прокручиваемый текст — char-based (геометрия окна нестабильна).
+  # Scrolling text — char-based (window geometry is unstable).
   MAX_LEN = 51
 
-  # Диалоговое окно (101 + 401)
+  # Dialog window (101 + 401)
   DIALOG_MAX_WIDTH          = 614
-  DIALOG_PORTRAIT_DEDUCTION = 112  # сужение под аватарку слева
+  DIALOG_PORTRAIT_DEDUCTION = 112  # narrowing for the left-side portrait
 
-  # Описания в Window_Help.
+  # Descriptions in Window_Help.
   # contents_width = Graphics.width - standard_padding * 2 = 640 - 24 = 616.
-  # 4 строки — в WindowFix.rb Window_Help увеличен с 2 до 4 строк.
+  # 4 lines — WindowFix.rb bumps Window_Help from 2 to 4 lines.
   DESCRIPTION_MAX_WIDTH = 616
   DESCRIPTION_MAX_LINES = 4
 
-  # Window_ChoiceList авторазмер по тексту, но капается Graphics.width = 640.
-  # При cap contents_width = 640 - padding*2 = 616. Escape-коды (\C[n], \N[n])
-  # съедаются draw_text_ex и не занимают места — потому только пикселями.
+  # Window_ChoiceList auto-sizes to text but is capped at Graphics.width = 640.
+  # At the cap contents_width = 640 - padding*2 = 616. Escape codes (\C[n], \N[n])
+  # are eaten by draw_text_ex and take no space — so measure by pixels only.
   CHOICE_MAX_WIDTH = 616
 
   REPORT_FILE = "LongDialogLines.txt"
 
-  # Базы данных с полем @description
+  # Databases that have a @description field
   DESCRIPTION_DATABASES = {
     "Items"   => "item",
     "Skills"  => "skill",
@@ -49,14 +49,14 @@ module LinesChecker
     "Armors"  => "armor",
   }
 
-  # ---- Вспомогательный Window для измерения ширины ----
+  # ---- Helper Window for width measurement ----
 
   class MeasureWindow < Window_Base
     def process_normal_character(c, pos)
       pos[:x] += text_size(c).width
     end
 
-    # Полное измерение с учётом RGSS escape-кодов (\C[n], \N[n] и т.п.).
+    # Full measurement honoring RGSS escape codes (\C[n], \N[n], etc.).
     def measure(text)
       reset_font_settings
       text = convert_escape_characters(text)
@@ -65,17 +65,17 @@ module LinesChecker
       pos[:x]
     end
 
-    # Быстрый путь для строк без escape-кодов: один text_size вместо char-by-char.
-    # reset_font_settings на случай если предыдущий measure() оставил font в \C[n].
+    # Fast path for strings without escape codes: one text_size, not char-by-char.
+    # reset_font_settings in case a previous measure() left the font in \C[n].
     def measure_plain(text)
       reset_font_settings
       contents.text_size(text).width
     end
   end
 
-  # Память: при массовых проходах (mapcheck, HTTP /measure_batch) одна и та же
-  # строка часто встречается десятки раз — кэш даёт x5-10 ускорение даже без
-  # fast-path.
+  # Memory: during bulk passes (mapcheck, HTTP /measure_batch) the same string
+  # often appears dozens of times — the cache gives a x5-10 speedup even
+  # without the fast path.
   def self.text_width(text)
     @measure_window  ||= MeasureWindow.new(0, 0, 0, 0)
     @text_width_cache ||= {}
@@ -87,10 +87,10 @@ module LinesChecker
     width
   end
 
-  # ---- Точка входа ----
+  # ---- Entry point ----
 
   def self.run
-    # Имя игрока на максимум — тестируем худший случай для \N[1]
+    # Player name at maximum — test the worst case for \N[1]
     $game_actors[1].name = "щщщщщщ"
 
     issues = []
@@ -107,7 +107,7 @@ module LinesChecker
     msgbox "Ошибка при проверке: #{e.message}\n#{e.backtrace.first}"
   end
 
-  # ---- Карты: диалоги, выбор, прокрутка ----
+  # ---- Maps: dialogs, choices, scrolling ----
 
   def self.check_all_maps(issues)
     Dir.glob("Data/Map*.rvdata2").sort.each do |file|
@@ -149,8 +149,8 @@ module LinesChecker
     i
   end
 
-  # 102 (Show Choices). Окно выбора одностольно — \n не переносит на новую
-  # строку, а ломает рендер; отдельно репортим многосторочные пункты.
+  # 102 (Show Choices). The choice window is single-line — \n does not wrap to a
+  # new line, it breaks the render; report multi-line items separately.
   def self.check_choices(cmd, source, issues)
     choices = cmd.parameters[0]
     return unless choices.is_a?(Array)
@@ -174,7 +174,7 @@ module LinesChecker
     i
   end
 
-  # ---- Описания @description в Items/Skills/Weapons/Armors ----
+  # ---- @description fields in Items/Skills/Weapons/Armors ----
 
   def self.check_all_descriptions(issues)
     DESCRIPTION_DATABASES.each do |basename, kind|
@@ -205,7 +205,7 @@ module LinesChecker
     end
   end
 
-  # ---- Хелперы записи в отчёт ----
+  # ---- Report-writing helpers ----
 
   def self.report_too_wide(line, max_width, source, issues)
     return unless line.is_a?(String)
@@ -227,7 +227,7 @@ module LinesChecker
   end
 end
 
-# Автоматический запуск при старте игры
+# Automatic run on game start
 class Scene_Title
   alias :lines_checker_orig_start :start
   def start

@@ -1,12 +1,12 @@
 #==============================================================================
-# HttpRouter — единый мастер HTTP-роутинга поверх ModLoader.http_* .
+# HttpRouter — the single HTTP routing master on top of ModLoader.http_* .
 #
-# Зачем: транспорт (C++ HttpServer) — это одна общая очередь запросов, которую
-# извлекающе дренит ModLoader.http_poll. Дренить её должен РОВНО ОДИН поллер,
-# иначе несколько скриптов воруют запросы друг у друга. Поэтому листен, поллинг,
-# диспетч и общий JSON живут здесь, а фичи-скрипты только регистрируют роуты.
+# Why: the transport (C++ HttpServer) is one shared request queue that is
+# drained destructively by ModLoader.http_poll. EXACTLY ONE poller must drain
+# it, else several scripts steal each other's requests. So listen, polling,
+# dispatch and the shared JSON live here, and feature scripts only add routes.
 #
-# Использование из другого скрипта (грузится ПОСЛЕ этого, т.е. префикс > 1040):
+# Usage from another script (loaded AFTER this one, i.e. prefix > 1040):
 #
 #   if defined?(ModLoader::Http)
 #     ModLoader::Http.get("/ping") { "pong" }                 # String -> 200 text
@@ -17,15 +17,15 @@
 #     ModLoader::Http.get("/item/:id") { |req, p| "id=#{p[:id]}" }
 #   end
 #
-# Хендлер получает (req, params) и может вернуть:
-#   • [status, content_type, body]   — явный кортеж
+# A handler receives (req, params) and may return:
+#   • [status, content_type, body]   — explicit tuple
 #   • String                         — 200 text/plain
 #   • Hash / Array                   — 200 application/json
 #   • nil                            — 204 No Content
-# Исключение в хендлере изолируется -> 500 (поллер и прочие роуты живы).
+# An exception in a handler is isolated -> 500 (poller and other routes live).
 #
-# Сервер стартует лениво на первом кадре (после загрузки всех скриптов), порт —
-# из конфига mod_loader.json ("http_port") либо DEFAULT_PORT.
+# The server starts lazily on the first frame (after all scripts load); port
+# from mod_loader.json ("http_port") or DEFAULT_PORT.
 #==============================================================================
 
 $imported ||= {}
@@ -37,15 +37,15 @@ module ModLoader
     DEFAULT_PORT = 27420
 
     #--------------------------------------------------------------------------
-    # Минимальный JSON (RGSS3 не имеет json в stdlib). Плоская форма
-    # string->string для запросов + полноценный encode для ответов.
+    # Minimal JSON (RGSS3 has no json in stdlib). Flat string->string form
+    # for requests + a full encode for responses.
     #--------------------------------------------------------------------------
     module Json
-      # Char-by-char парсер. Регулярка с [^"\\]* + multi-byte UTF-8 строкой в
-      # Ruby 1.9 ведёт себя неконсистентно (молча не матчит длинные Cyrillic
-      # значения). Извлекаем только пары "key":"string_value"; остальные значения
-      # (число, объект, массив, null, bool) пропускаем — для конвертов и плоских
-      # запросов этого хватает.
+      # Char-by-char parser. A regex with [^"\\]* over a multi-byte UTF-8
+      # string behaves inconsistently in Ruby 1.9 (silently skips long
+      # Cyrillic values). We extract only "key":"string_value" pairs; other
+      # values (number, object, array, null, bool) are skipped — enough for
+      # envelopes and flat requests.
       def self.parse(str)
         result = {}
         s = str.to_s
@@ -143,8 +143,8 @@ module ModLoader
         end
       end
 
-      # Block-based чтобы gsub не интерпретировал спец-последовательности в
-      # строке-замене.
+      # Block-based so gsub doesn't interpret special sequences in the
+      # replacement string.
       def self.escape(s)
         s.gsub(/[\\"\n\r\t]/) do |c|
           case c
@@ -157,8 +157,8 @@ module ModLoader
         end
       end
 
-      # Один проход слева-направо. Цепочка gsub'ов давала неправильный порядок:
-      # для входа "\\n" сначала ловит "\\n" -> newline, оставляя orphan '\'.
+      # Single left-to-right pass. A gsub chain gave the wrong order:
+      # for input "\\n" it catches "\\n" -> newline first, leaving orphan '\'.
       def self.unescape(s)
         s.gsub(/\\(.)/m) do
           case $1
@@ -174,18 +174,18 @@ module ModLoader
     end
 
     #--------------------------------------------------------------------------
-    # Роутер + поллер.
+    # Router + poller.
     #--------------------------------------------------------------------------
     Route = Struct.new(:verb, :matcher, :keys, :handler)
 
     @routes  = []
-    @started = false   # пытались ли уже стартовать листен
-    @up      = false   # листен реально поднялся
+    @started = false   # whether we already tried to start listening
+    @up      = false   # the listen actually came up
 
     class << self
       attr_reader :routes
 
-      # --- регистрация ---
+      # --- registration ---
       def route(method, path, &blk)
         raise ArgumentError, "ModLoader::Http.route requires a block" unless blk
         matcher, keys = compile(path)
@@ -202,18 +202,18 @@ module ModLoader
       def put(p, &b);    route("PUT",    p, &b); end
       def delete(p, &b); route("DELETE", p, &b); end
 
-      # --- ответные хелперы для хендлеров ---
+      # --- response helpers for handlers ---
       def json(obj, status = 200); [status, "application/json", Json.encode(obj)]; end
       def text(str, status = 200); [status, "text/plain", str.to_s]; end
 
-      # --- разбор пути ---
+      # --- path parsing ---
       # Regexp        -> [rx, []]
       # "/item/:id"   -> [/\A\/item\/([^\/]+)\z/, [:id]]
-      # обычная строка-> точное совпадение
+      # plain string -> exact match
       #
-      # Разбиваем по сегментам "/": literal-сегменты экранируем, ":name" целиком
-      # становится захватом ([^/]+). Так точки/спецсимволы в пути остаются
-      # литералами, а параметры не зависят от поведения Regexp.escape.
+      # Split on "/" segments: literals are escaped, ":name" becomes a whole
+      # capture ([^/]+). This keeps dots/special chars in the path as
+      # literals, and params stay independent of Regexp.escape behavior.
       def compile(path)
         return [path, []] if path.is_a?(Regexp)
         keys = []
@@ -228,7 +228,7 @@ module ModLoader
         [/\A#{parts.join("/")}\z/, keys]
       end
 
-      # --- диспетч (один на всех) ---
+      # --- dispatch (one for all) ---
       def dispatch(req)
         meth = req["method"].to_s
         path = req["path"].to_s
@@ -245,7 +245,7 @@ module ModLoader
         [500, "text/plain", "#{e.class}: #{e.message}\n#{e.backtrace.first}"]
       end
 
-      # Нормализация того, что вернул хендлер, в [status, content_type, body].
+      # Normalize whatever the handler returned into [status, content_type, body].
       def coerce(result)
         case result
         when Array
@@ -263,7 +263,7 @@ module ModLoader
         end
       end
 
-      # --- единственный поллер: дренит очередь раз в кадр ---
+      # --- the single poller: drains the queue once per frame ---
       def tick
         ensure_listening
         return unless @up
@@ -294,7 +294,7 @@ module ModLoader
   end
 end
 
-# Единственная точка дренажа очереди — раз в кадр в главном Ruby-потоке.
+# The only queue-drain point — once per frame on the main Ruby thread.
 class Scene_Base
   alias :ml_http_router_update_basic :update_basic
   def update_basic
