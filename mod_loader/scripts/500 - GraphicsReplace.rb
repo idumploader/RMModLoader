@@ -1,3 +1,14 @@
+#==============================================================================
+# GraphicsReplace — overrides game graphics from an external directory and
+# auto-scales selected parallax/background images to the current resolution.
+#
+# Passive — patches Cache.load_bitmap / Cache.normal_bitmap to look for a
+# replacement file under REPLACE_DIR (<data_directory>) before falling back to
+# the original. RESIZE_MAPPING lists paths that get stretched to a target size.
+#
+# No user commands, no config gate.
+#==============================================================================
+
 $imported ||= {}
 if not $imported["IDL-GraphicsReplace"]
 $imported["IDL-GraphicsReplace"] = "1.0"

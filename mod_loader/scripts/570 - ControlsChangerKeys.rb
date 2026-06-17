@@ -1,3 +1,14 @@
+#==============================================================================
+# ControlsChangerKeys — virtual key-code constants used across the loader.
+#
+# Defines:
+#   VKKeys         — Windows virtual key codes (VK_A, VK_RETURN, VK_F9, ...)
+#   GamepadButtons — gamepad button ids (A/B/X/Y, bumpers, d-pad, sticks, ...)
+#
+# Pure constants, no config gate. Loaded early (570) because ControlsChanger
+# (600), ExecutorScene (700) and others reference VKKeys.
+#==============================================================================
+
 $imported ||= {}
 if not $imported["IDL-ControlsChangeKeys"]
 $imported["IDL-ControlsChangeKeys"] = "1.0"

@@ -1,3 +1,16 @@
+#==============================================================================
+# HRFix — high-resolution fix: rescales UI, pictures, parallaxes, enemies and
+# the tilemap for screen sizes larger than the original 640x480.
+#
+# Passive — hooks engine classes (Game_Map scroll, Game_Interpreter picture
+# commands 231/232, Spriteset_Map/Battle, Window_Base, Game_Troop). No user
+# commands. RESIZE_BLACKLIST excludes specific images from scaling.
+#
+# Config gate:  ModLoader.hrfix_enabled
+# Version note: on versions other than "2.4"/"2.5" also enables the tileset
+#               offset feature (ModLoader.hrfix_tileset_offset_enabled).
+#==============================================================================
+
 $imported ||= {}
 if not $imported["IDL-HRFix"]
 $imported["IDL-HRFix"] = "1.0"

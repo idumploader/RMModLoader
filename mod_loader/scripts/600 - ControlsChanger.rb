@@ -1,3 +1,14 @@
+#==============================================================================
+# ControlsChanger — applies the custom keyboard and gamepad bindings (WASD
+# movement, remapped confirm/cancel/page keys, gamepad deadzone/axes/buttons).
+#
+# Calls ModLoader.hook_key / gamepad_* to install the remaps; edit the bindings
+# block at the top to taste.
+#
+# Dependencies: VKKeys, GamepadButtons (570).
+# Config gate:  ModLoader.controls_change_enabled
+#==============================================================================
+
 $imported ||= {}
 if not $imported["IDL-ControlsChange"]
 $imported["IDL-ControlsChange"] = "1.0"

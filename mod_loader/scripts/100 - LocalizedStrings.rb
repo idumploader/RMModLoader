@@ -1,3 +1,20 @@
+#==============================================================================
+# LocalizedStrings — localized string table loaded from .rvdata2 files.
+#
+# Strings live in <data_directory>/strings as "<name>_<lang>.rvdata2" and are
+# cached in memory. Default language is "ru". The strings directory is created
+# automatically on load.
+#
+# Public surface (module MLLocalizedStrings):
+#   MLLocalizedStrings[key]                  — lookup (returns key if missing)
+#   MLLocalizedStrings[key] = value          — set
+#   MLLocalizedStrings.add_required(name, auto_load)
+#   MLLocalizedStrings.load(lang)            — (re)load required files for lang
+#   MLLocalizedStrings.save_to(name)         — persist current strings
+#
+# Dependencies: ModLoader.data_directory.
+#==============================================================================
+
 $imported ||= {}
 if not $imported["IDL-LocalizedStrings"]
 $imported["IDL-LocalizedStrings"] = "1.0"

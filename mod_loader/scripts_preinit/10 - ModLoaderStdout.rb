@@ -1,3 +1,13 @@
+#==============================================================================
+# ModLoaderStdout — redirects Ruby $stdout into the ModLoader log.
+#
+# Preinit script: installs a CustomOutputRedirector so every puts/print/p (and
+# anything writing to $stdout) is forwarded to ModLoader.log. Runs before the
+# game's own scripts, so their output is captured too.
+#
+# Version gate: ModLoader.version != "2.4"
+#==============================================================================
+
 if ModLoader.version != "2.4"
 
 class CustomOutputRedirector
