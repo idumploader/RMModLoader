@@ -1,0 +1,237 @@
+#==============================================================================
+# DisposeTrigger — детерминированный тест каскадного двойного освобождения.
+#
+#   F6  — Сценарий A: viewport.dispose (каскад освобождает спрайты) -> sprite.dispose.
+#         Это паттерн краша. БЕЗ фикса -> вылет (0xC0000005 в std::find).
+#         С фиксом -> переживает, спрайты исчезают с экрана.
+#
+#   F7  — Сценарий B: viewport.dispose -> sprite.x= / sprite.update.
+#         НЕЗАЩИЩЁННЫЙ путь (доступ к освобождённому нативу). Может крашить/портить
+#         кучу — отдельная клавиша специально, жми осознанно.
+#
+#   F8  — Сценарий D: heap-reuse проба. Спрайты -> освобождаем -> засеваем кучу
+#         Rect с эталонными значениями -> повторный dispose (UAF-запись) ->
+#         сверяем Rect с эталоном. CORRUPTED в логе = фикс не сработал.
+#
+# Работает на обычных Sprite/Viewport, поэтому скрипт 2500 на него не влияет.
+# Лог пишется в <папка игры>\dispose_test.log
+#==============================================================================
+
+$imported ||= {}
+if not $imported["IDL-DisposeTrigger"]
+$imported["IDL-DisposeTrigger"] = true
+
+module DisposeTest
+  LOG_FILE = "dispose_test.log"
+
+  module_function
+
+  def log(msg)
+    line = "[#{Time.now.strftime('%H:%M:%S')}] #{msg}"
+    begin
+      File.open(LOG_FILE, "a") { |f| f.puts(line) }
+    rescue
+    end
+    # ModLoader.log НЕ добавляет перевод строки сам — дописываем явно.
+    ModLoader.log(line + "\n") if defined?(ModLoader) && ModLoader.respond_to?(:log)
+  end
+
+  # VK через ModLoader (надёжнее RGSS Input), с откатом на Input.trigger?
+  def key?(vk, sym)
+    if defined?(ModLoader) && ModLoader.respond_to?(:input_trigger?)
+      ModLoader.input_trigger?(vk)
+    else
+      (Input.trigger?(sym) rescue false)
+    end
+  end
+
+  def make_sprite(viewport, color)
+    s = Sprite.new(viewport)
+    s.bitmap = Bitmap.new(64, 64)
+    s.bitmap.fill_rect(0, 0, 64, 64, color)
+    s.x = 40 + rand(Graphics.width  - 120)
+    s.y = 40 + rand(Graphics.height - 120)
+    s.z = 5000
+    s
+  end
+
+  # --- A: viewport.dispose -> sprite.dispose (паттерн краша) ---
+  def test_double_dispose
+    log "=== A: double dispose (viewport -> sprites) START ==="
+    vp = Viewport.new
+    color = Color.new(255, 40, 40)
+    sprites = Array.new(4) { make_sprite(vp, color) }
+    log "created viewport + #{sprites.size} sprites (visible red squares)"
+
+    vp.dispose
+    log "viewport.dispose done (cascade freed children at C++ level)"
+
+    sprites.each_with_index do |s, i|
+      begin
+        was = (s.disposed? rescue "?")
+        s.dispose
+        log "  sprite[#{i}].dispose OK (disposed? before=#{was}, after=#{s.disposed? rescue '?'})"
+      rescue => e
+        log "  sprite[#{i}].dispose RAISED #{e.class}: #{e.message}"
+      end
+    end
+    log "=== A SURVIVED (no native crash) ==="
+  end
+
+  # --- C: только viewport.dispose, спрайты не диспозим (визуальная проверка) ---
+  def test_cascade_only
+    log "=== C: viewport.dispose only, no sprite.dispose ==="
+    vp = Viewport.new
+    color = Color.new(40, 120, 255)
+    sprites = Array.new(4) { make_sprite(vp, color) }
+    log "created viewport + #{sprites.size} blue sprites"
+    vp.dispose
+    log "viewport.dispose done — синие квадраты должны ИСЧЕЗНУТЬ (если висят — баг)"
+    # намеренно не диспозим спрайты: проверяем, что каскад убрал их с экрана
+    log "=== C done ==="
+  end
+
+  def run_safe
+    log "########## SAFE RUN (A + C) START ##########"
+    test_double_dispose
+    test_cascade_only
+    log "########## SAFE RUN END (process alive) ##########"
+  end
+
+  # --- B: доступ после каскадного освобождения (НЕЗАЩИЩЁННЫЙ путь) ---
+  def test_access_after_free
+    log "=== B: access after viewport.dispose (UNPROTECTED) START ==="
+    vp = Viewport.new
+    s = make_sprite(vp, Color.new(255, 255, 40))
+    log "created viewport + 1 sprite"
+    vp.dispose
+    log "viewport.dispose done; native of sprite freed, Ruby wrapper dangles"
+
+    begin
+      log "  calling sprite.disposed? ..."
+      log "  -> disposed? = #{s.disposed?}"
+    rescue => e
+      log "  disposed? RAISED #{e.class}: #{e.message}"
+    end
+    begin
+      log "  calling sprite.x = 100 ..."
+      s.x = 100
+      log "  -> x= OK"
+    rescue => e
+      log "  x= RAISED #{e.class}: #{e.message}"
+    end
+    begin
+      log "  calling sprite.update ..."
+      s.update
+      log "  -> update OK"
+    rescue => e
+      log "  update RAISED #{e.class}: #{e.message}"
+    end
+    (s.dispose rescue nil)
+    log "=== B SURVIVED ==="
+  end
+
+  def run_unsafe
+    log "########## UNSAFE RUN (B) START ##########"
+    test_access_after_free
+    log "########## UNSAFE RUN END (process alive) ##########"
+  end
+
+  # --- D: heap-reuse проба ---------------------------------------------------
+  #   Классический детектор dangling-write: освобождаем нативные структуры
+  #   спрайтов, тут же засеваем кучу Rect с детерминированными значениями (чтобы
+  #   их нативные структуры заняли только что освобождённые блоки), затем
+  #   триггерим баг (повторный dispose уже освобождённых спрайтов). БЕЗ фикса
+  #   нативный scalar-деструктор пишет в чужую теперь память -> порча Rect.
+  #   С фиксом (Ruby или нативным) повторный dispose — no-op, Rect целы.
+  #
+  #   ОГОВОРКА: размер-класс Rect != Sprite, поэтому перекрытие вероятностное.
+  #   Берём много Rect, чтобы поднять шанс попадания в освобождённые блоки.
+  #   Если двойной dispose вообще валит процесс (std::find по dangling-предку),
+  #   до VERIFY мы не доживём — это сам по себе сигнал "фикса нет".
+  SPRITE_COUNT = 32
+  RECT_COUNT   = 4000
+
+  def test_heap_probe
+    log "=== D: heap-reuse UAF probe START (sprites=#{SPRITE_COUNT}, rects=#{RECT_COUNT}) ==="
+    vp = Viewport.new
+    color = Color.new(40, 255, 120)
+    sprites = Array.new(SPRITE_COUNT) { make_sprite(vp, color) }
+    log "created viewport + #{SPRITE_COUNT} sprites (green squares)"
+
+    # 1) Освобождаем нативы спрайтов каскадом через вьюпорт.
+    vp.dispose
+    log "viewport.dispose done -> #{SPRITE_COUNT} sprite natives freed"
+
+    # 2) Засеваем Rect с эталонными значениями.
+    rects = []
+    ref   = []
+    RECT_COUNT.times do |i|
+      x = i & 0xffff
+      y = (i * 7)  & 0xffff
+      w = (i * 13) & 0xffff
+      h = (i * 31) & 0xffff
+      rects << Rect.new(x, y, w, h)
+      ref   << [x, y, w, h]
+    end
+    log "sprayed #{RECT_COUNT} Rect с эталонными значениями"
+
+    # 3) Триггерим баг: повторный dispose освобождённых спрайтов (окно UAF-записи).
+    #    Логируем ПЕРЕД каждым dispose (строка уже на диске), чтобы при фатальном
+    #    AV точно знать, на каком индексе процесс умер.
+    sprites.each_with_index do |s, i|
+      begin
+        log "  -> about to dispose sprite[#{i}]"
+        s.dispose
+      rescue => e
+        log "  sprite[#{i}].dispose RAISED #{e.class}: #{e.message}"
+      end
+    end
+    log "second dispose pass done (UAF write window passed)"
+
+    # 4) Сверяем Rect с эталоном.
+    corrupted = 0
+    first = nil
+    rects.each_with_index do |r, i|
+      cur = [r.x, r.y, r.width, r.height]
+      if cur != ref[i]
+        corrupted += 1
+        first ||= "Rect[#{i}] эталон=#{ref[i].inspect} стало=#{cur.inspect}"
+      end
+    end
+    if corrupted == 0
+      log "VERIFY: OK — все #{RECT_COUNT} Rect целы (порчи кучи не обнаружено)"
+    else
+      log "VERIFY: CORRUPTED — #{corrupted}/#{RECT_COUNT} Rect повреждены! #{first}"
+    end
+    log "=== D done (corrupted=#{corrupted}) ==="
+  end
+
+  def run_heap
+    log "########## HEAP PROBE (D) START ##########"
+    test_heap_probe
+    log "########## HEAP PROBE END (process alive) ##########"
+  end
+end
+
+# Баннер окружения: сразу видно, активен ли Ruby-фикс и пропатчен ли dispose.
+DisposeTest.log "---- DisposeTrigger loaded ----"
+DisposeTest.log "  SpriteDisposeFix module: #{defined?(SpriteDisposeFix) ? 'YES' : 'no'}"
+DisposeTest.log "  Sprite#dispose patched:  #{Sprite.method_defined?(:__sdf_dispose) ? 'YES' : 'no'}"
+DisposeTest.log "  Viewport#dispose patched:#{Viewport.method_defined?(:__sdf_dispose) ? 'YES' : 'no'}"
+
+class Scene_Base
+  alias idl_dispose_trigger_update update
+  def update
+    idl_dispose_trigger_update
+    if DisposeTest.key?(0x75, :F6)      # VK_F6
+      DisposeTest.run_safe
+    elsif DisposeTest.key?(0x76, :F7)   # VK_F7
+      DisposeTest.run_unsafe
+    elsif DisposeTest.key?(0x77, :F8)   # VK_F8
+      DisposeTest.run_heap
+    end
+  end
+end
+
+end # not $imported["IDL-DisposeTrigger"]
