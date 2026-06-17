@@ -2,13 +2,17 @@
 #include "../ModLoader.hpp"
 
 #include <Windows.h>
+#include <mmsystem.h> // joyGetPosEx / JOYINFOEX / JOYERR_NOCANDO
+
+#include <atomic>
+#include <cstring>
 
 namespace rm_modloader {
 
 	namespace {
 
-		// Two layers of defense for keeping the game ticking when its window
-		// loses focus:
+		// Keeping the game ticking when its window loses focus, WITHOUT letting it
+		// act on background input. Three layers:
 		//
 		// 1. Subclass the game's main window. RGSS3's own WindowProc sets an
 		//    internal "is_active" flag from WM_ACTIVATEAPP / WM_KILLFOCUS /
@@ -19,6 +23,16 @@ namespace rm_modloader {
 		// 2. Hook WaitMessage to return immediately with a short Sleep, plus
 		//    lie about GetActiveWindow / GetForegroundWindow. These cover any
 		//    fallback code paths that don't go through the WindowProc.
+		//
+		// 3. Gate input on the REAL focus. With pause disabled the still-running
+		//    engine keeps polling input; but RGSS reads keys via GetKeyState
+		//    (RxInput_update_keys does GetKeyState(vk) < 0), the legacy joystick
+		//    via joyGetPosEx, and ModLoader's own ExtendedControlSet via
+		//    GetKeyboardState. Those are focus-independent (global/async, or
+		//    message-synced state that sticks "down" on focus loss because no
+		//    WM_KEYUP is delivered), so the game would act on keys pressed in
+		//    other apps / stuck keys ("plays itself" — can wipe a save). We force
+		//    them to report "nothing pressed" whenever the app isn't foreground.
 
 		decltype(&WaitMessage)         orig_WaitMessage         = nullptr;
 		decltype(&GetActiveWindow)     orig_GetActiveWindow     = nullptr;
@@ -27,10 +41,46 @@ namespace rm_modloader {
 		WNDPROC orig_wnd_proc = nullptr;
 		HWND    g_game_hwnd   = nullptr;
 
+		// Real app-foreground state, maintained from WM_ACTIVATEAPP (see the
+		// WindowProc). Starts true so input works before the first activation msg.
+		std::atomic<bool> g_window_focused{ true };
+
+		decltype(&GetKeyState)      orig_GetKeyState      = nullptr;
+		decltype(&GetAsyncKeyState) orig_GetAsyncKeyState = nullptr;
+		decltype(&GetKeyboardState) orig_GetKeyboardState = nullptr;
+		decltype(&joyGetPosEx)      orig_joyGetPosEx      = nullptr;
+
+		// While unfocused, report all keys up / no joystick without reading
+		// further; otherwise read the real state through the chain trampoline.
+		SHORT WINAPI get_key_state_hook(int nVirtKey) {
+			return g_window_focused.load(std::memory_order_relaxed) ? orig_GetKeyState(nVirtKey) : 0;
+		}
+
+		SHORT WINAPI get_async_key_state_hook(int vKey) {
+			return g_window_focused.load(std::memory_order_relaxed) ? orig_GetAsyncKeyState(vKey) : 0;
+		}
+
+		BOOL WINAPI get_keyboard_state_hook(PBYTE lpKeyState) {
+			if (!g_window_focused.load(std::memory_order_relaxed)) {
+				std::memset(lpKeyState, 0, 256);
+				return TRUE;
+			}
+			return orig_GetKeyboardState(lpKeyState);
+		}
+
+		MMRESULT WINAPI joy_get_pos_ex_hook(UINT uJoyID, LPJOYINFOEX pji) {
+			if (!g_window_focused.load(std::memory_order_relaxed)) {
+				return JOYERR_NOCANDO;
+			}
+			return orig_joyGetPosEx(uJoyID, pji);
+		}
+
 		LRESULT CALLBACK subclassed_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 			switch (msg) {
 			case WM_ACTIVATEAPP:
-				// Force "activating" so the engine's flag stays true.
+				// Record the REAL app-foreground state for input gating, THEN
+				// force "activating" so the engine's own flag stays true.
+				g_window_focused.store(wp != FALSE, std::memory_order_relaxed);
 				wp = TRUE;
 				break;
 			case WM_ACTIVATE:
@@ -99,6 +149,15 @@ namespace rm_modloader {
 		mod_loader->hook_api_function(L"user32.dll", "WaitMessage",         wait_message_hook,          &orig_WaitMessage);
 		mod_loader->hook_api_function(L"user32.dll", "GetActiveWindow",     get_active_window_hook,     &orig_GetActiveWindow);
 		mod_loader->hook_api_function(L"user32.dll", "GetForegroundWindow", get_foreground_window_hook, &orig_GetForegroundWindow);
+
+		// Input gating by real focus. These compose with other input hooks via
+		// the loader's hook chain (e.g. ControlsChangeHooks also hooks
+		// GetKeyState). Order is irrelevant for safety: while unfocused this hook
+		// returns "up" without reading deeper, so the whole chain yields no input.
+		mod_loader->hook_api_function(L"user32.dll", "GetKeyState",      get_key_state_hook,       &orig_GetKeyState);
+		mod_loader->hook_api_function(L"user32.dll", "GetAsyncKeyState", get_async_key_state_hook, &orig_GetAsyncKeyState);
+		mod_loader->hook_api_function(L"user32.dll", "GetKeyboardState", get_keyboard_state_hook,  &orig_GetKeyboardState);
+		mod_loader->hook_api_function(L"winmm.dll",  "joyGetPosEx",      joy_get_pos_ex_hook,      &orig_joyGetPosEx);
 
 		// Main weapon: subclass the WindowProc once the game window exists. We
 		// queue this into the post-init phase because at hook-application time
