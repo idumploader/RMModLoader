@@ -7,17 +7,9 @@ $imported["IDL-ModResetter"] = "1.0"
 
 module ModResetter
 
-	class ClassMethodSnapshot
-		attr_accessor :msymbol
-		attr_accessor :orig_object
-	end
+	ClassMethodSnapshot = Struct.new(:msymbol, :orig_object)
 
-	class ClassSnapshot
-		attr_accessor :object_symbol
-		attr_accessor :singletons
-		attr_accessor :methods
-		attr_accessor :orig_object
-	end
+	ClassSnapshot = Struct.new(:object_symbol, :singletons, :methods, :orig_object)
 
 	BLACKLIST_CLASSES = [
 		:Object,
@@ -99,11 +91,6 @@ module ModResetter
 		# p @classes_snapshot
 	end
 	
-	
-	def self.inject_into(cls)
-		return cls.method(:instance_eval)
-	end
-	
 	def self.restore_classes_snapshot
 		@classes_snapshot.each do |snapshot|
 			# remove excess singletons
@@ -157,45 +144,6 @@ module ModResetter
 	end
 end
 
-# ---- Test zone -----------
-# class TestClass
-	# def self.foo_singleton
-		# return "foo"
-	# end
-	
-	# def foo_method
-		# return "foo"
-	# end
-# end
-
-# ModResetter.snapshot_all_if_needed
-
-# $test_class = TestClass.new
-# $test_singleton = TestClass.method(:foo_singleton)
-# $test_method = $test_class.method(:foo_method)
-
-# p "TestClass before hook: (singleton) #{TestClass.foo_singleton}, (method) #{$test_class.foo_method}"
-
-# class TestClass
-	# def self.foo_singleton
-		# return "bar"
-	# end
-	
-	# def foo_method
-		# return "bar"
-	# end
-# end
-
-# p "TestClass hooked"
-# p "TestClass bound method: (singleton) #{$test_singleton.call}, (method) #{$test_method.call}"
-# p "TestClass after hook: (singleton) #{TestClass.foo_singleton}, (method) #{$test_class.foo_method}"
-
-# ModResetter.restore_snapshot
-
-# p "TestClass after restore: (singleton) #{TestClass.foo_singleton}, (method) #{$test_class.foo_method}"
-
-# ---- Helper function -------
-
 ModResetter.snapshot_all_if_needed
 
 def mod_reset
@@ -223,7 +171,7 @@ def mod_reset
 		left_number <=> right_number
 	end
 	
-	scripts_files.select do |filename|
+	scripts_files.each do |filename|
 		filepath = File.join(scripts_dir, filename)
 		next if File.directory?(filepath)
 		begin
