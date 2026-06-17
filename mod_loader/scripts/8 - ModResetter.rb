@@ -142,46 +142,50 @@ module ModResetter
 	def self.restore_snapshot
 		restore_classes_snapshot
 	end
+
+	def self.execute_all_scripts
+
+		# Clear the bundled scripts' IDL- $imported guards so they re-run on reload
+		# (keep our own, or ModResetter would re-snapshot itself). Without this the
+		# version guards on every script would skip re-execution after a reset.
+		$imported.delete_if { |key, _| key.is_a?(String) && key.start_with?("IDL-") && key != "IDL-ModResetter" } if $imported
+
+		files_match_re = /(\d+) ?- ?\w+\.rb/
+
+		scripts_dir = File.join(ModLoader.data_directory, "scripts")
+		scripts_files = Dir.entries(scripts_dir)
+		scripts_files.reject! do |file|
+			not file.end_with?(".rb")
+		end
+
+		scripts_files.sort! do |left, right|
+			left_number = right_number = 0
+
+			left_number = $1.to_i if left =~ files_match_re
+			right_number = $1.to_i if right =~ files_match_re
+
+			left_number <=> right_number
+		end
+
+		scripts_files.each do |filename|
+			filepath = File.join(scripts_dir, filename)
+			next if File.directory?(filepath)
+			begin
+				# load(filepath, encoding: 'UTF-8')
+				content = File.read(filepath, encoding: 'UTF-8')
+				eval(content, TOPLEVEL_BINDING, filepath)
+			rescue Exception => err
+				p "Failed to execute script: #{filepath}. #{err}"
+			end
+		end
+	end
 end
 
 ModResetter.snapshot_all_if_needed
 
 def mod_reset
 	ModResetter.restore_snapshot
-
-	# Clear the bundled scripts' IDL- $imported guards so they re-run on reload
-	# (keep our own, or ModResetter would re-snapshot itself). Without this the
-	# version guards on every script would skip re-execution after a reset.
-	$imported.delete_if { |key, _| key.is_a?(String) && key.start_with?("IDL-") && key != "IDL-ModResetter" } if $imported
-
-	files_match_re = /(\d+) ?- ?\w+\.rb/
-	
-	scripts_dir = File.join(ModLoader.data_directory, "scripts")
-	scripts_files = Dir.entries(scripts_dir)
-	scripts_files.reject! do |file|
-		not file.end_with?(".rb")
-	end
-	
-	scripts_files.sort! do |left, right|
-		left_number = right_number = 0
-	
-		left_number = $1.to_i if left =~ files_match_re
-		right_number = $1.to_i if right =~ files_match_re
-		
-		left_number <=> right_number
-	end
-	
-	scripts_files.each do |filename|
-		filepath = File.join(scripts_dir, filename)
-		next if File.directory?(filepath)
-		begin
-			# load(filepath, encoding: 'UTF-8')
-			content = File.read(filepath, encoding: 'UTF-8')
-			eval(content, TOPLEVEL_BINDING, filepath)
-		rescue Exception => err
-			p "Failed to execute script: #{filepath}. #{err}"
-		end
-	end
+	ModResetter.execute_all_scripts
 end
 
 module ExecutorEnvironment
