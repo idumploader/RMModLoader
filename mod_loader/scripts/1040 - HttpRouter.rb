@@ -29,8 +29,8 @@
 #==============================================================================
 
 $imported ||= {}
-if not $imported["HttpRouter"] and ModLoader.respond_to?(:http_poll)
-$imported["HttpRouter"] = "1.0"
+if not $imported["IDL-HttpRouter"] and ModLoader.respond_to?(:http_poll)
+$imported["IDL-HttpRouter"] = "1.0"
 
 module ModLoader
   module Http
@@ -303,4 +303,4 @@ class Scene_Base
   end
 end
 
-end # not $imported["HttpRouter"]
+end # not $imported["IDL-HttpRouter"]

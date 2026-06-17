@@ -36,9 +36,9 @@
 #==============================================================================
 
 $imported ||= {}
-if not $imported["LinesCheckerServer"] and defined?(ModLoader::Http) and
+if not $imported["IDL-LinesCheckerServer"] and defined?(ModLoader::Http) and
    defined?(LinesChecker) and LinesChecker.respond_to?(:text_width)
-$imported["LinesCheckerServer"] = "0.3"
+$imported["IDL-LinesCheckerServer"] = "0.3"
 
 module LinesChecker
   # ---- Контексты ----
@@ -127,4 +127,4 @@ end
 
 puts "[LinesCheckerServer] registered GET /ping, POST /measure, POST /measure_batch"
 
-end # not $imported["LinesCheckerServer"]
+end # not $imported["IDL-LinesCheckerServer"]
