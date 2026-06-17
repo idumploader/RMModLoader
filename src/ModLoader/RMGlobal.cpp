@@ -2,6 +2,10 @@
 #include "Hook.hpp"
 
 #include <stdexcept>
+#include <string>
+#include <vector>
+
+#pragma comment(lib, "version.lib") // GetFileVersionInfo / VerQueryValue
 
 namespace rm_modloader {
 
@@ -68,12 +72,64 @@ namespace rm_modloader {
 
     RubyValue* rx_bitmap_class = nullptr;
 
-    void init_functionset() {
-		// Cannot GetModuleHandle because RGSS301.dll is not loaded at the time of loading this DLL, so we have to load it manually
-        rgss_module = LoadLibrary(TEXT("System\\RGSS301.dll"));
-        if (rgss_module == nullptr) {
-            throw std::runtime_error("Failed to get RGSS301.dll");
+    namespace {
+        // All offsets below are resolved against RGSS301 v3.0.1.1. Other RGSS
+        // builds (e.g. RGSS300 = 3.0.0.1) lay everything out differently, so we
+        // must refuse them rather than hook garbage addresses and crash.
+        constexpr WORD supported_rgss_version[4] = { 3, 0, 1, 1 };
+
+        // Read the DLL's VS_FIXEDFILEINFO file version into out[major,minor,build,rev].
+        bool read_file_version(const std::filesystem::path& path, WORD out[4]) {
+            DWORD ignored = 0;
+            const DWORD size = GetFileVersionInfoSizeW(path.c_str(), &ignored);
+            if (size == 0) {
+                return false;
+            }
+            std::vector<BYTE> buffer(size);
+            if (!GetFileVersionInfoW(path.c_str(), 0, size, buffer.data())) {
+                return false;
+            }
+            VS_FIXEDFILEINFO* info = nullptr;
+            UINT info_len = 0;
+            if (!VerQueryValueW(buffer.data(), L"\\", reinterpret_cast<void**>(&info), &info_len) || info == nullptr) {
+                return false;
+            }
+            out[0] = HIWORD(info->dwFileVersionMS);
+            out[1] = LOWORD(info->dwFileVersionMS);
+            out[2] = HIWORD(info->dwFileVersionLS);
+            out[3] = LOWORD(info->dwFileVersionLS);
+            return true;
         }
+    }
+
+    void init_functionset(const std::filesystem::path& rgss_dll_path) {
+		// RGSS isn't loaded yet when this DLL is injected, so we load it ourselves.
+		// The path is resolved by the caller (Game.ini [Game] Library= or override);
+		// the game later shares this same module handle.
+        rgss_module = LoadLibraryW(rgss_dll_path.c_str());
+        if (rgss_module == nullptr) {
+            throw std::runtime_error("Failed to load RGSS library: " + rgss_dll_path.string());
+        }
+
+        // Version guard: our offsets only match RGSS301 3.0.1.1. Applying them to
+        // any other build crashes once hooking starts, so bail with a clear error.
+        WORD version[4] = {};
+        if (!read_file_version(rgss_dll_path, version)) {
+            FreeLibrary(rgss_module);
+            rgss_module = nullptr;
+            throw std::runtime_error("Could not read RGSS version info from: " + rgss_dll_path.string());
+        }
+        if (version[0] != supported_rgss_version[0] || version[1] != supported_rgss_version[1] ||
+            version[2] != supported_rgss_version[2] || version[3] != supported_rgss_version[3]) {
+            const std::string detected = std::to_string(version[0]) + "." + std::to_string(version[1]) + "." +
+                                         std::to_string(version[2]) + "." + std::to_string(version[3]);
+            FreeLibrary(rgss_module);
+            rgss_module = nullptr;
+            throw std::runtime_error(
+                "Unsupported RGSS version " + detected + " (" + rgss_dll_path.string() +
+                "). ModLoader targets RGSS301 3.0.1.1; aborting to avoid crashes.");
+        }
+
         rgss_game = at_offset<GameFrame**>(rgss_module, 0x25EB00);
         file_repository = at_offset<FileRepository*>(rgss_module, 0x26304C);
 

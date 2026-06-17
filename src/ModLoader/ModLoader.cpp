@@ -23,6 +23,34 @@ BOOL WINAPI is_debugger_present_hook() {
 
 namespace rm_modloader::detail {
 
+	namespace {
+		// Resolve the RGSS runtime DLL path the way the game does: an explicit
+		// "rgss_library" override in mod_loader.json (rare — for protected or
+		// non-standard games), otherwise the [Game] Library= key in Game.ini next
+		// to Game.exe. Throws if neither is present, so we fail loudly instead of
+		// LoadLibrary'ing a hard-coded guess.
+		std::filesystem::path resolve_rgss_library_path(const ModLoaderConfig& config) {
+			if (const nlohmann::json* forced = config.get("rgss_library");
+				forced && forced->is_string()) {
+				const std::string forced_path = forced->get<std::string>();
+				if (!forced_path.empty()) {
+					return std::filesystem::path(forced_path);
+				}
+			}
+
+			const std::wstring ini_path = (std::filesystem::current_path() / "Game.ini").wstring();
+			wchar_t library[MAX_PATH] = {};
+			const DWORD len = GetPrivateProfileStringW(L"Game", L"Library", L"", library, MAX_PATH, ini_path.c_str());
+			if (len > 0 && library[0] != L'\0') {
+				return std::filesystem::path(std::wstring(library, len));
+			}
+
+			throw std::runtime_error(
+				"Could not determine the RGSS library to load: no \"rgss_library\" key in "
+				"mod_loader.json and no [Game] Library= entry in Game.ini");
+		}
+	}
+
 	int ModLoaderBooter::init() {
 		if (MH_Initialize() != MH_OK) {
 			return -1;
@@ -31,8 +59,11 @@ namespace rm_modloader::detail {
 			return -1;
 		}
 		try {
-			init_functionset();
+			// Create the core first so the config is loaded before we resolve and
+			// load the RGSS DLL (the "rgss_library" override lives in the config).
+			// The ctor touches no RGSS state, so this ordering is safe.
 			mod_loader = std::make_shared<ModLoaderCore>(std::filesystem::current_path());
+			init_functionset(resolve_rgss_library_path(mod_loader->get_config()));
 			mod_loader->setup_modloader_hooks();
 		} catch (const std::exception& ex) {
 			Logger::critical(std::string("\x1B[0;31mFailed to initialize mod loader: ") + ex.what() + "\x1B[0m");

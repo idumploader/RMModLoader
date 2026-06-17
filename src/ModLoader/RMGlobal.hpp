@@ -2,6 +2,8 @@
 #include "RMClasses.hpp"
 #include "Ruby.hpp"
 
+#include <filesystem>
+
 namespace rm_modloader {
 
     struct StartupScriptsString {
@@ -78,8 +80,11 @@ namespace rm_modloader {
     extern RubyValue* rx_bitmap_class;
 
     /**
-     * Initializes all global functions and method pointers
+     * Loads the RGSS runtime DLL at the given path and resolves all global
+     * function and method pointers from it.
+     * @param rgss_dll_path Path to the RGSS runtime DLL (e.g. System\RGSS301.dll)
+     * @throws std::runtime_error if the DLL fails to load
      */
-    extern void init_functionset();
+    extern void init_functionset(const std::filesystem::path& rgss_dll_path);
 
 };
