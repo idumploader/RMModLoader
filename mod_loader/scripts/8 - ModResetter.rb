@@ -200,6 +200,12 @@ ModResetter.snapshot_all_if_needed
 
 def mod_reset
 	ModResetter.restore_snapshot
+
+	# Clear the bundled scripts' IDL- $imported guards so they re-run on reload
+	# (keep our own, or ModResetter would re-snapshot itself). Without this the
+	# version guards on every script would skip re-execution after a reset.
+	$imported.delete_if { |key, _| key.is_a?(String) && key.start_with?("IDL-") && key != "IDL-ModResetter" } if $imported
+
 	files_match_re = /(\d+) ?- ?\w+\.rb/
 	
 	scripts_dir = File.join(ModLoader.data_directory, "scripts")
