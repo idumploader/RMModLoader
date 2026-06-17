@@ -842,6 +842,7 @@ namespace rm_modloader {
 	void apply_steam_support_hooks() {
 		auto config_value = mod_loader->get_config().get("steam_support");
 		if (!config_value || !config_value->get<bool>()) {
+			mod_loader->log_info("Steam support disabled in config\n");
 			return;
 		}
 

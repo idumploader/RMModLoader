@@ -1287,6 +1287,7 @@ namespace rm_modloader {
 
 	void apply_fast_render() {
 		if (!mod_loader->get_config().is_fast_render_enabled()) {
+			mod_loader->log_info("FastRender disabled in config\n");
 			return;
 		}
 

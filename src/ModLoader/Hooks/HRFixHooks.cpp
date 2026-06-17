@@ -396,6 +396,7 @@ namespace rm_modloader {
 
     void apply_hrfix() {
         if (!mod_loader->get_config().is_hrfix_enabled()) {
+            mod_loader->log_info("HRFix disabled in config\n");
             return;
         }
 
