@@ -10,10 +10,12 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -30,10 +32,8 @@ namespace rm_modloader {
 
 		// Synchronous TaskQueue that runs each task on the calling thread.
 		// httplib::Server's default new_task_queue spins up a std::thread pool of
-		// 8 workers, which internally use std::mutex / std::condition_variable.
-		// Those crash in our process (same root cause as the earlier std::mutex
-		// fix). Translator++ throughput is tiny — sync dispatch in the accept
-		// loop handles it fine.
+		// 8 workers. We don't need them: translator++ throughput is tiny, so sync
+		// dispatch in the accept loop handles it fine and keeps thread count down.
 		class SyncTaskQueue : public httplib::TaskQueue {
 		public:
 			bool enqueue(std::function<void()> fn) override {
@@ -43,24 +43,10 @@ namespace rm_modloader {
 			void shutdown() override {}
 		};
 
-		// Win32 primitives instead of std::mutex / std::condition_variable.
-		// Reason: std::mutex from MSVC stdlib was crashing on first lock() inside
-		// the RGSS3 process — likely a CRT init mismatch when the DLL is injected
-		// before the game's normal startup. SRWLOCK + CONDITION_VARIABLE live in
-		// NTDLL/KernelBase, no CRT dependency, work unconditionally.
-
-		struct SrwGuard {
-			explicit SrwGuard(SRWLOCK& l) : lock_(l) { AcquireSRWLockExclusive(&lock_); }
-			~SrwGuard() { ReleaseSRWLockExclusive(&lock_); }
-			SrwGuard(const SrwGuard&) = delete;
-			SrwGuard& operator=(const SrwGuard&) = delete;
-			SRWLOCK& lock_;
-		};
-
 		// Per-request slot the connection thread sleeps on until Ruby calls respond().
 		struct ResponseSlot {
-			SRWLOCK lock = SRWLOCK_INIT;
-			CONDITION_VARIABLE cv = CONDITION_VARIABLE_INIT;
+			std::mutex mtx;
+			std::condition_variable cv;
 			int status = 504;
 			std::string content_type = "text/plain";
 			std::string body = "request timed out";
@@ -77,7 +63,7 @@ namespace rm_modloader {
 			}
 
 			bool listen(int port) {
-				SrwGuard lock(mu_);
+				std::lock_guard<std::mutex> lock(mu_);
 				if (running_) {
 					return port_ == port; // idempotent on same port
 				}
@@ -85,9 +71,8 @@ namespace rm_modloader {
 				port_ = port;
 				server_ = std::make_unique<httplib::Server>();
 				// Replace the default ThreadPool with our sync queue BEFORE any
-				// handler can fire. httplib's std::thread/std::mutex-based pool
-				// crashes inside the RGSS3 process; sync dispatch is plenty for
-				// translator++ throughput.
+				// handler can fire — sync dispatch is plenty for translator++
+				// throughput and avoids spinning 8 worker threads.
 				server_->new_task_queue = [] { return new SyncTaskQueue(); };
 
 				// CORS: permissive defaults + explicit preflight handler.
@@ -130,20 +115,20 @@ namespace rm_modloader {
 
 			void stop() {
 				{
-					SrwGuard lock(mu_);
+					std::lock_guard<std::mutex> lock(mu_);
 					if (!running_) return;
 					if (server_) server_->stop();
 
 					// Wake any in-flight requests with 503 so their threads exit cleanly.
 					for (auto& [id, slot] : pending_) {
 						{
-							SrwGuard sl(slot->lock);
+							std::lock_guard<std::mutex> sl(slot->mtx);
 							slot->status = 503;
 							slot->content_type = "text/plain";
 							slot->body = "server shutting down";
 							slot->ready = true;
 						}
-						WakeAllConditionVariable(&slot->cv);
+						slot->cv.notify_all();
 					}
 					pending_.clear();
 					ready_queue_.clear();
@@ -153,14 +138,14 @@ namespace rm_modloader {
 					server_thread_.join();
 				}
 
-				SrwGuard lock(mu_);
+				std::lock_guard<std::mutex> lock(mu_);
 				server_.reset();
 				running_ = false;
 			}
 
 			// Called from Ruby main thread. Empty string == queue empty.
 			std::string poll() {
-				SrwGuard lock(mu_);
+				std::lock_guard<std::mutex> lock(mu_);
 				if (ready_queue_.empty()) return {};
 				std::string json = std::move(ready_queue_.front());
 				ready_queue_.pop_front();
@@ -171,25 +156,25 @@ namespace rm_modloader {
 			bool respond(std::string_view id, int status, std::string_view content_type, std::string_view body) {
 				std::shared_ptr<ResponseSlot> slot;
 				{
-					SrwGuard lock(mu_);
+					std::lock_guard<std::mutex> lock(mu_);
 					auto it = pending_.find(std::string(id));
 					if (it == pending_.end()) return false;
 					slot = it->second;
 					pending_.erase(it);
 				}
 				{
-					SrwGuard sl(slot->lock);
+					std::lock_guard<std::mutex> sl(slot->mtx);
 					slot->status = status;
 					slot->content_type = std::string(content_type);
 					slot->body = std::string(body);
 					slot->ready = true;
 				}
-				WakeAllConditionVariable(&slot->cv);
+				slot->cv.notify_all();
 				return true;
 			}
 
 			size_t inflight_count() {
-				SrwGuard lock(mu_);
+				std::lock_guard<std::mutex> lock(mu_);
 				return pending_.size();
 			}
 
@@ -226,26 +211,20 @@ namespace rm_modloader {
 				};
 
 				{
-					SrwGuard lock(mu_);
+					std::lock_guard<std::mutex> lock(mu_);
 					pending_.emplace(id, slot);
 					ready_queue_.push_back(req_json.dump());
 				}
 
 				// Block this connection thread until Ruby responds (or timeout / stop).
 				{
-					SrwGuard sl(slot->lock);
-					const ULONGLONG deadline = GetTickCount64() + 30000;
-					while (!slot->ready) {
-						ULONGLONG now = GetTickCount64();
-						if (now >= deadline) break;
-						DWORD wait_ms = static_cast<DWORD>(deadline - now);
-						SleepConditionVariableSRW(&slot->cv, &slot->lock, wait_ms, 0);
-					}
+					std::unique_lock<std::mutex> sl(slot->mtx);
+					slot->cv.wait_for(sl, std::chrono::seconds(30), [&] { return slot->ready; });
 				}
 
 				if (!slot->ready) {
 					// Timed out — clean up the pending entry if it's still there.
-					SrwGuard lock(mu_);
+					std::lock_guard<std::mutex> lock(mu_);
 					pending_.erase(id);
 				}
 
@@ -260,7 +239,7 @@ namespace rm_modloader {
 				return std::to_string(t) + "-" + std::to_string(n);
 			}
 
-			SRWLOCK mu_ = SRWLOCK_INIT;
+			std::mutex mu_;
 			std::unique_ptr<httplib::Server> server_;
 			std::thread server_thread_;
 			std::unordered_map<std::string, std::shared_ptr<ResponseSlot>> pending_;
