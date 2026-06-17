@@ -6,6 +6,7 @@
 #include "Hooks/SteamSupportHooks.hpp"
 #include "Hooks/FileManagerHooks.hpp"
 #include "Hooks/SteamOverlayHooks.hpp"
+#include "Hooks/SpriteDisposeFixHooks.hpp"
 
 #include <array>
 
@@ -19,6 +20,7 @@ namespace rm_modloader {
 		apply_steam_support_hooks,
 		apply_controls_change,
 		apply_file_manager_hooks,
-		apply_steam_overlay_hooks
+		apply_steam_overlay_hooks,
+		apply_sprite_dispose_fix
 	};
 }

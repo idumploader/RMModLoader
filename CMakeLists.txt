@@ -1,5 +1,11 @@
 ﻿cmake_minimum_required (VERSION 3.8)
 
+# Honor MSVC_RUNTIME_LIBRARY (static /MT) instead of baking the flag into CMAKE_*_FLAGS.
+# Must be set before project() so the abstraction is active for the toolchain probe.
+if (POLICY CMP0091)
+  cmake_policy(SET CMP0091 NEW)
+endif()
+
 if (CMAKE_TOOLCHAIN_FILE MATCHES "vcpkg.cmake")
   message(STATUS "Using vcpkg: ${CMAKE_TOOLCHAIN_FILE}")
   include(${CMAKE_TOOLCHAIN_FILE})
@@ -36,6 +42,7 @@ add_library(ModLoader SHARED
   "src/ModLoader/Hooks/SteamSupportHooks.cpp"
   "src/ModLoader/Hooks/FileManagerHooks.cpp"
   "src/ModLoader/Hooks/SteamOverlayHooks.cpp"
+  "src/ModLoader/Hooks/SpriteDisposeFixHooks.cpp"
 
   "src/ModLoader/SteamOverlay/DLLResolver.cpp"
   "src/ModLoader/SteamOverlay/IPCStreams.cpp"
@@ -49,6 +56,11 @@ target_compile_definitions(ModLoader PUBLIC
   -DRM_MODLOADER_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
   -DRM_MODLOADER_VERSION_MINOR=${PROJECT_VERSION_MINOR}
 )
+
+# Use the pre-17.10 std::mutex constructor layout (avoids the VS 2022 17.10 ABI
+# break that crashes std::mutex when an older msvcp140 is present).
+target_compile_definitions(ModLoader PRIVATE _DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR)
+target_link_options(ModLoader PRIVATE "/MAP")
 #target_precompile_headers(ModLoader PRIVATE "src/pch.h")
 
 target_link_libraries(ModLoader PRIVATE
