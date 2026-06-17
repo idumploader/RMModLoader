@@ -8,6 +8,8 @@
 #include <functional>
 #include <span>
 #include <iostream>
+#include <vector>
+#include <mutex>
 
 namespace rm_modloader {
 	namespace detail {
@@ -41,6 +43,10 @@ namespace rm_modloader {
 
 	using ModLoaderHandlerID = int64_t;
 	using ModLoaderPatchID = int64_t;
+
+	// Returned by the hook_* functions when installing a hook failed; never a
+	// valid id, so it is safe to pass to unhook() (which ignores it).
+	constexpr ModLoaderPatchID invalid_patch_id = -1;
 
 	class ModLoaderCore {
 		friend class detail::ModLoaderBooter;
@@ -146,12 +152,17 @@ namespace rm_modloader {
 		void remove_postinit_handler(ModLoaderHandlerID handler_id);
 
 		/**
-		 * Hook function at given address.
+		 * Hook function at given address. The same target may be hooked more than
+		 * once; the hooks form a chain in install order (call orig_func to continue
+		 * down it to the real function) and can be removed individually via @ref unhook.
 		 * @tparam T Hook function pointer type
 		 * @param target Address of the function to be hooked
 		 * @param hook_func Hook function
-		 * @param orig_func Pointer to variable, reciving original (trampoline) function pointer
-		 * @return Patch ID. Currently unused
+		 * @param orig_func Pointer to variable, receiving original (trampoline) function
+		 *                  pointer. MUST point to storage that outlives the hook
+		 *                  (e.g. a static/global): the chain reads and rewrites it.
+		 * @return Patch ID, used to remove the hook (@ref unhook), or invalid_patch_id
+		 *         if installation failed.
 		 */
 		template<typename T>
 		ModLoaderPatchID hook_function(void* target, T hook_func, T* orig_func) {
@@ -216,6 +227,14 @@ namespace rm_modloader {
 		ModLoaderPatchID hook_api_function(std::wstring_view lib_name, std::string_view function_name, T hook_func, T* orig_func) {
 			return hook_api_function_internal(lib_name, function_name, hook_func, reinterpret_cast<void**>(orig_func));
 		}
+
+		/**
+		 * Remove a previously installed hook by its patch id. Multiple hooks may be
+		 * installed on the same target (they form a chain); removing one re-links the
+		 * neighbours so the remaining hooks keep working.
+		 * @param patch_id Id returned by hook_function / hook_method / hook_api_function
+		 */
+		void unhook(ModLoaderPatchID patch_id);
 
 		/**
 		 * Write data to memory at offset from RGSS base address
@@ -415,6 +434,28 @@ namespace rm_modloader {
 		ModLoaderPatchID hook_function_internal(void* target, void* hook_func, void** orig_func);
 		ModLoaderPatchID hook_api_function_internal(std::wstring_view lib_name, std::string_view function_name, void* hook_func, void** orig_func);
 
+		// One installed hook. orig_slot is the caller-owned `orig` pointer variable
+		// (e.g. a static member): it MUST outlive the hook, since the chain reads it
+		// on every call and rewrites it when neighbours are added/removed. We store
+		// the slot address by value, so growing the entries vector never invalidates
+		// it -- only the pointed-to variable must stay put.
+		struct HookEntry {
+			ModLoaderPatchID id;
+			void* detour;
+			void** orig_slot;
+		};
+
+		// Per-target hook chain. MinHook is installed once on the target with the
+		// head entry's detour; intermediate links are wired through the entries' orig
+		// slots, and only the tail's orig is the MinHook trampoline (the real
+		// function). A single hook is therefore identical to a plain direct hook.
+		struct HookChain {
+			void* trampoline = nullptr;
+			std::vector<HookEntry> entries;
+		};
+
+		ModLoaderPatchID append_to_chain(HookChain& chain, void* hook_func, void** orig_func, void* target);
+
 		/**
 		 * Internal ruby log method
 		 * @tparam TArgs Format arguments types
@@ -476,6 +517,10 @@ namespace rm_modloader {
 		
 		ModLoaderPatchID last_patch_id_;
 		ModLoaderHandlerID last_handler_id_;
+
+		std::unordered_map<void*, HookChain> hook_chains_;          // target -> hook chain
+		std::unordered_map<ModLoaderPatchID, void*> patch_targets_; // patch id -> target
+		std::mutex hook_registry_mutex_;
 		std::unordered_map<ModLoaderHandlerID, PreinitHandler> preinit_handlers_;
 		std::unordered_map<ModLoaderHandlerID, PostinitHandler> postinit_handlers_;
 

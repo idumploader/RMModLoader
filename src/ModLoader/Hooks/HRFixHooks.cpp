@@ -443,9 +443,9 @@ namespace rm_modloader {
         mod_loader->patch_memory_as<int>(0x10E6A7, hrfix_render_width);
         mod_loader->patch_memory_as<int>(0x10E6C4, hrfix_render_height);
 
-        // enable fullscreen by key
+        // enable fullscreen by key (also hooked by IntegratedHooks; the hook chain
+        // handles both, so no manual re-pointing of input_update_keys is needed)
         mod_loader->hook_method(input_update_keys, &RxInputHRFixHook::update_keys_hook, &RxInputHRFixHook::orig_update_keys);
-        input_update_keys = static_cast<decltype(input_update_keys)>(&RxInputHRFixHook::update_keys_hook);
 
         mod_loader->hook_method(screen_resize_screen, &DisableFullscreenHook::resize_screen_hook, &DisableFullscreenHook::orig_resize_screen);
 
