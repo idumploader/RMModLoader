@@ -1,7 +1,7 @@
 ﻿cmake_minimum_required (VERSION 3.8)
 
-# Honor MSVC_RUNTIME_LIBRARY (static /MT) instead of baking the flag into CMAKE_*_FLAGS.
-# Must be set before project() so the abstraction is active for the toolchain probe.
+# Honor CMAKE_MSVC_RUNTIME_LIBRARY (CMP0091). Without NEW it is ignored and the
+# runtime is baked into the per-config flags the old way.
 if (POLICY CMP0091)
   cmake_policy(SET CMP0091 NEW)
 endif()
@@ -14,6 +14,26 @@ endif()
 project(rmforge LANGUAGES CXX C VERSION 3.0)
 
 include(CMakePackageConfigHelpers)
+
+# Pin the dynamic *release* CRT/STL for every config. The DLL is injected into
+# the game, a release process that uses msvcp140.dll. A Debug build otherwise
+# defaults to /MDd (msvcp140d.dll) + _ITERATOR_DEBUG_LEVEL=2 — a different STL
+# ABI and a second runtime in the process, and it also drags in the debug
+# variants of dependency DLLs (e.g. minhook.x32d.dll) that have to be shipped
+# next to the game. Forcing /MD keeps a single runtime matching the host, so a
+# Debug build behaves like Release (just with symbols / -Od) and needs no debug
+# runtime/deps. Needs CMP0091 NEW (set above) to take effect.
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
+
+# CMP0091 injects the runtime as a separate -MD flag, but the vcpkg toolchain
+# still leaves a /MDd in the per-config flag vars, so cl gets both and warns
+# D9025 "overriding /MDd with /MD". Strip the stale slash-form runtime tokens
+# (the abstraction's dash-form -MD is added independently and is untouched).
+foreach(flag_var
+    CMAKE_C_FLAGS_DEBUG   CMAKE_C_FLAGS_RELEASE   CMAKE_C_FLAGS_RELWITHDEBINFO   CMAKE_C_FLAGS_MINSIZEREL
+    CMAKE_CXX_FLAGS_DEBUG CMAKE_CXX_FLAGS_RELEASE CMAKE_CXX_FLAGS_RELWITHDEBINFO CMAKE_CXX_FLAGS_MINSIZEREL)
+  string(REGEX REPLACE "/M[DT]d?" "" ${flag_var} "${${flag_var}}")
+endforeach()
 
 # -- find packages
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/cmake")
