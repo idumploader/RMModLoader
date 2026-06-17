@@ -1,3 +1,15 @@
+#==============================================================================
+# MapExecutorWindow — on-map UI for handing items/weapons/armor to the player.
+# Companion to the executor "give" flow.
+#
+# Hotkey: T opens the give window (freezes player movement while open).
+#
+# Dependencies: ExecutorModule (700), VKKeys (570), ModLoader,
+#               $data_items / $data_weapons / $data_armors.
+# Config gate:  ExecutorModule::ENABLED
+# Defines: ExecutorGive_Window, ExecutorGiveSwitch_Window, ExecutorGiveList_Window
+#==============================================================================
+
 $imported ||= {}
 if not $imported["IDL-MapExecutorWindow"]
 $imported["IDL-MapExecutorWindow"] = "1.0"

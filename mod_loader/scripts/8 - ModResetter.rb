@@ -1,3 +1,21 @@
+#==============================================================================
+# ModResetter — hot-reload of all bundled scripts without restarting the game.
+#
+# Snapshots every class/singleton method at first load, then on `mod_reset`
+# restores that snapshot (removing methods added since) and re-evaluates all
+# scripts in mod_loader/scripts in numeric order. Backs the executor's
+# reset/reload flow.
+#
+# Public surface:
+#   mod_reset                       — restore snapshot + re-run all scripts
+#   ModResetter.execute_all_scripts — re-run all scripts only (no restore)
+#   ExecutorEnvironment.reset       — console-facing alias of mod_reset
+#
+# Notes:
+#   • Clears every "IDL-" $imported guard (except its own) before re-running so
+#     the version-guarded scripts actually re-execute on reload.
+#   • BLACKLIST_CLASSES are core types never snapshotted/restored.
+#==============================================================================
 
 $imported ||= {}
 

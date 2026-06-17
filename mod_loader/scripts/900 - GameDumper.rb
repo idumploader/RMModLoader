@@ -1,3 +1,15 @@
+#==============================================================================
+# GameDumper — exports all packed game files (.rvdata2 and assets) from the
+# loader to a folder on disk, for backup or inspection.
+#
+# Public surface:
+#   GameDumper.dump_all(folder)   — write every loader file under <folder>
+#   dump_rvdata(folder)           — console command (when executor enabled)
+#
+# Dependencies: ModLoader.list_files / read_file, ExecutorModule (700).
+# Version gate: ModLoader.version_major > 2 or ModLoader.version_minor >= 7
+#==============================================================================
+
 $imported ||= {}
 if not $imported["IDL-GameDumper"]
 $imported["IDL-GameDumper"] = "1.0"

@@ -1,3 +1,21 @@
+#==============================================================================
+# BSMP — Steam peer-to-peer multiplayer framework: lobby create/join, client/
+# server messaging, remote-player sprites with nicknames, and synced state
+# (position, movement, character, map, speed).
+#
+# Console commands:
+#   make_server(type, max_players)   make_test_client    make_test_player
+#   delete_test_player               send_c2s_packet(type, data)
+#   read_s2c_packets                 set_skin(actor_id)  set_nick(nick)
+#   show_test_window                 mech
+#
+# Dependencies: Steam runtime (SteamUserStatsLite, SteamAPI, SteamCCallResult,
+#               SteamCCallback, BasicNetworkPacket), MLLocalizedStrings (100).
+# Gate: only loads when SteamUserStatsLite and SteamAPI are defined.
+# Defines: BSMPConfig/Events/Client/Server/ServerClient, BSMPPlayer_Character,
+#          BSMPPlayers, BSMP_Window, BSMPProgress_Window; $bsmp_* globals.
+#==============================================================================
+
 $imported ||= {}
 if not $imported["IDL-BSMP"]
 $imported["IDL-BSMP"] = "1.0"

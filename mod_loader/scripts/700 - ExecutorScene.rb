@@ -1,3 +1,19 @@
+#==============================================================================
+# ExecutorScene — in-game developer console: run arbitrary Ruby during play,
+# with command history and error highlighting.
+#
+# Hotkey: F9 toggles the console (only while ExecutorModule::ENABLED).
+#
+# Console commands (ExecutorEnvironment):
+#   give(id, amount)     maptp(id)            tp(x, y)
+#   run_event(id)        setvar(id, value)    setswitch(id, value)
+#   toggleswitch(id)     reset                — plus raw eval()
+#
+# Dependencies: VKKeys (570), ModLoader input API.
+# Version gate: ModLoader.version != "2.4"
+# Defines: ExecutorModule, ExecutorEnvironment, Executor_Window, ExecutedCommand
+#==============================================================================
+
 $imported ||= {}
 if not $imported["IDL-ExecutorScene"]
 $imported["IDL-ExecutorScene"] = "1.0"
