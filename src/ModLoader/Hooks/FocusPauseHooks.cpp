@@ -142,6 +142,7 @@ namespace rm_modloader {
 	void apply_focus_pause_hooks() {
 		auto config_value = mod_loader->get_config().get("disable_focus_pause");
 		if (!config_value || !config_value->get<bool>()) {
+			mod_loader->log_info("focus_pause: disable_focus_pause off in config — game pauses on focus loss\n");
 			return;
 		}
 

@@ -33,6 +33,7 @@ namespace rm_modloader {
 	void apply_steam_overlay_hooks() {
 		auto steam_overlay_config = mod_loader->get_config().get("steam_overlay");
 		if (!steam_overlay_config || !steam_overlay_config->get<bool>()) {
+			mod_loader->log_info("Steam overlay disabled in config\n");
 			return;
 		}
 
