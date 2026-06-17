@@ -337,17 +337,130 @@ namespace rm_modloader {
 
 	//}
 
+	// Splice a new hook onto the tail of an existing chain. The old tail used to
+	// call the real function (its orig == trampoline); now it calls the new detour,
+	// and the new hook becomes the tail that calls the real function. Touches no
+	// MinHook state -- only two pointer stores.
+	ModLoaderPatchID ModLoaderCore::append_to_chain(HookChain& chain, void* hook_func, void** orig_func, void* target) {
+		*chain.entries.back().orig_slot = hook_func;
+		*orig_func = chain.trampoline;
+		ModLoaderPatchID id = last_patch_id_++;
+		chain.entries.push_back({ id, hook_func, orig_func });
+		patch_targets_[id] = target;
+		return id;
+	}
+
 	ModLoaderPatchID ModLoaderCore::hook_function_internal(void* target, void* hook_func, void** orig_func) {
-		MH_CreateHook(target, hook_func, orig_func);
+		std::lock_guard<std::mutex> lock(hook_registry_mutex_);
+
+		if (auto it = hook_chains_.find(target); it != hook_chains_.end()) {
+			return append_to_chain(it->second, hook_func, orig_func, target);
+		}
+
+		HookChain& chain = hook_chains_[target];
+		if (MH_CreateHook(target, hook_func, &chain.trampoline) != MH_OK) {
+			hook_chains_.erase(target);
+			log_error("hook_function: MH_CreateHook failed for {}\n", target);
+			return invalid_patch_id;
+		}
+		*orig_func = chain.trampoline;
+		ModLoaderPatchID id = last_patch_id_++;
+		chain.entries.push_back({ id, hook_func, orig_func });
+		patch_targets_[id] = target;
 		MH_EnableHook(target);
-		return last_patch_id_++;
+		return id;
 	}
 
 	ModLoaderPatchID ModLoaderCore::hook_api_function_internal(std::wstring_view lib_name, std::string_view function_name, void* hook_func, void** orig_func) {
-		void* target;
-		MH_CreateHookApiEx(lib_name.data(), function_name.data(), hook_func, orig_func, &target);
-		MH_EnableHook(target);
-		return last_patch_id_++;
+		std::lock_guard<std::mutex> lock(hook_registry_mutex_);
+
+		// Resolve the export so a second hook on the same function chains instead of
+		// failing inside MinHook with MH_ERROR_ALREADY_CREATED.
+		void* target = nullptr;
+		if (HMODULE module = GetModuleHandleW(std::wstring(lib_name).c_str())) {
+			target = reinterpret_cast<void*>(GetProcAddress(module, std::string(function_name).c_str()));
+		}
+		if (target) {
+			if (auto it = hook_chains_.find(target); it != hook_chains_.end()) {
+				return append_to_chain(it->second, hook_func, orig_func, target);
+			}
+		}
+
+		HookChain chain;
+		void* mh_target = nullptr;
+		if (MH_CreateHookApiEx(std::wstring(lib_name).c_str(), std::string(function_name).c_str(),
+				hook_func, &chain.trampoline, &mh_target) != MH_OK) {
+			log_error("hook_api_function: MH_CreateHookApiEx failed for {}\n", std::string(function_name));
+			return invalid_patch_id;
+		}
+		*orig_func = chain.trampoline;
+		ModLoaderPatchID id = last_patch_id_++;
+		chain.entries.push_back({ id, hook_func, orig_func });
+		hook_chains_[mh_target] = std::move(chain);
+		patch_targets_[id] = mh_target;
+		MH_EnableHook(mh_target);
+		return id;
+	}
+
+	void ModLoaderCore::unhook(ModLoaderPatchID patch_id) {
+		if (patch_id == invalid_patch_id) {
+			return;
+		}
+
+		std::lock_guard<std::mutex> lock(hook_registry_mutex_);
+
+		auto pit = patch_targets_.find(patch_id);
+		if (pit == patch_targets_.end()) {
+			log_warning("unhook: unknown patch id {}\n", patch_id);
+			return;
+		}
+		void* target = pit->second;
+		patch_targets_.erase(pit);
+
+		auto cit = hook_chains_.find(target);
+		if (cit == hook_chains_.end()) {
+			return;
+		}
+		HookChain& chain = cit->second;
+		std::vector<HookEntry>& entries = chain.entries;
+
+		size_t index = entries.size();
+		for (size_t k = 0; k < entries.size(); ++k) {
+			if (entries[k].id == patch_id) { index = k; break; }
+		}
+		if (index == entries.size()) {
+			return;
+		}
+
+		// Last hook on this target: tear the MinHook down completely.
+		if (entries.size() == 1) {
+			MH_DisableHook(target);
+			MH_RemoveHook(target);
+			hook_chains_.erase(cit);
+			return;
+		}
+
+		// Head removal: the target's jmp points at this detour and MinHook owns it,
+		// so re-create the hook on the next detour (the only case that touches
+		// MinHook), then re-point the tail's orig at the freshly allocated trampoline.
+		if (index == 0) {
+			void* new_head = entries[1].detour;
+			MH_DisableHook(target);
+			MH_RemoveHook(target);
+			if (MH_CreateHook(target, new_head, &chain.trampoline) != MH_OK) {
+				log_error("unhook: MH_CreateHook (re-head) failed for {}\n", target);
+				return;
+			}
+			*entries.back().orig_slot = chain.trampoline;
+			MH_EnableHook(target);
+			entries.erase(entries.begin());
+			return;
+		}
+
+		// Middle or tail: just re-point the predecessor's orig past the removed node.
+		void* next = (index + 1 < entries.size()) ? entries[index + 1].detour : chain.trampoline;
+		*entries[index - 1].orig_slot = next;
+		entries.erase(entries.begin() + index);
 	}
 
 	void ModLoaderCore::on_preinit() {

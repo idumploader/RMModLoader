@@ -161,18 +161,19 @@ namespace rm_modloader {
 	}
 
 	void apply_integrated_hooks() {
+		// input_update_keys is also hooked by HRFixHooks; the hook chain composes
+		// both, so we no longer re-point input_update_keys at our detour by hand.
 		mod_loader->hook_method(input_update_keys, &ExtendedControlSet::update_keys_hook, &ExtendedControlSet::orig_update_keys);
-		input_update_keys = static_cast<decltype(input_update_keys)>(&ExtendedControlSet::update_keys_hook);
 
 		mod_loader->add_preinit_handler([] {
 			mod_loader->register_ruby_method("gamepad_deadzone=", &ExtendedControlSet::mod_loader_gamepad_set_deadzone);
-			mod_loader->register_ruby_method("gamepad_bind", &ExtendedControlSet::mod_loader_gamepad_bind);
+			mod_loader->register_ruby_method("gamepad_bind",      &ExtendedControlSet::mod_loader_gamepad_bind);
 			mod_loader->register_ruby_method("gamepad_invert_x=", &ExtendedControlSet::mod_loader_gamepad_set_invert_x);
 			mod_loader->register_ruby_method("gamepad_invert_y=", &ExtendedControlSet::mod_loader_gamepad_set_invert_y);
 
-			mod_loader->register_ruby_method("input_trigger?", &ExtendedControlSet::mod_loader_input_trigger);
-			mod_loader->register_ruby_method("input_repeat?", &ExtendedControlSet::mod_loader_input_repeat);
-			mod_loader->register_ruby_method("map_char", &ExtendedControlSet::mod_loader_map_to_char);
+			mod_loader->register_ruby_method("input_trigger?",    &ExtendedControlSet::mod_loader_input_trigger);
+			mod_loader->register_ruby_method("input_repeat?",     &ExtendedControlSet::mod_loader_input_repeat);
+			mod_loader->register_ruby_method("map_char",          &ExtendedControlSet::mod_loader_map_to_char);
 		});
 	}
 }
