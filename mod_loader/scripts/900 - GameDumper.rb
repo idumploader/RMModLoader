@@ -1,3 +1,7 @@
+$imported ||= {}
+if not $imported["IDL-GameDumper"]
+$imported["IDL-GameDumper"] = "1.0"
+
 if ModLoader.version_major > 2 or ModLoader.version_minor >= 7
 
 module GameDumper
@@ -47,3 +51,5 @@ def t2
 end
 
 end # ModLoader.version_major > 2 or ModLoader.version_minor >= 7
+
+end # not $imported["IDL-GameDumper"]

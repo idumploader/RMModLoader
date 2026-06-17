@@ -1,3 +1,7 @@
+$imported ||= {}
+if not $imported["IDL-MapExecutorWindow"]
+$imported["IDL-MapExecutorWindow"] = "1.0"
+
 if ExecutorModule::ENABLED
 
 module ExecutorModule
@@ -301,3 +305,5 @@ class ExecutorGive_Window < Window_Base
 end
 
 end # ExecutorModule::ENABLED
+
+end # not $imported["IDL-MapExecutorWindow"]

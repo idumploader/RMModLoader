@@ -1,3 +1,7 @@
+$imported ||= {}
+if not $imported["IDL-ControlsChange"]
+$imported["IDL-ControlsChange"] = "1.0"
+
 if ModLoader.controls_change_enabled
 
 # --- CONTROLS SETTINGS ---
@@ -28,3 +32,5 @@ ModLoader.gamepad_bind(GamepadButtons::RIGHT_BUMPER, :SHIFT)
 # --- GAMEPAD CONTROLS SETTINGS ---
 
 end # ModLoader.controls_change_enabled
+
+end # not $imported["IDL-ControlsChange"]
