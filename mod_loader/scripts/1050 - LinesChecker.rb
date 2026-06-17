@@ -15,8 +15,8 @@
 #==============================================================================
 
 $imported ||= {}
-if not $imported["LinesChecker"]
-$imported["LinesChecker"] = "2.0"
+if not $imported["IDL-LinesChecker"]
+$imported["IDL-LinesChecker"] = "2.0"
 
 module LinesChecker
   # ---- Лимиты ----
@@ -244,4 +244,4 @@ def mapcheck
   LinesChecker.run
 end
 
-end # not $imported["LinesChecker"]
+end # not $imported["IDL-LinesChecker"]
