@@ -1,5 +1,6 @@
 #include "IntegratedHooks.hpp"
 #include "ControlsChangeHooks.hpp"
+#include "FocusPauseHooks.hpp"
 #include "../ModLoader.hpp"
 #include "../Hook.hpp"
 
@@ -35,7 +36,13 @@ namespace rm_modloader {
 
 	void ExtendedControlSet::process_extended_control_set() {
 		prev_keyboard_state = current_keyboard_state;
-		if (!GetKeyboardState(current_keyboard_state.data())) {
+		if (!is_window_focused()) {
+			// Report all keys up while the window isn't foreground: GetKeyboardState
+			// returns global async state that bypasses the focus-pause hooks, so
+			// background / stuck keys would otherwise drive input ("plays itself").
+			current_keyboard_state.fill(0);
+		}
+		else if (!GetKeyboardState(current_keyboard_state.data())) {
 			// error
 		}
 
@@ -51,6 +58,11 @@ namespace rm_modloader {
 	}
 
 	void ExtendedControlSet::process_gamepad_inputs() {
+		// GLFW reads the controller globally, bypassing the focus-pause WinAPI hooks;
+		// skip it entirely while the game window isn't the foreground one.
+		if (!is_window_focused()) {
+			return;
+		}
 		GLFWgamepadstate gamepad_state;
 		bool is_connected = glfwGetGamepadState(0, &gamepad_state);
 		if (!is_connected) {
