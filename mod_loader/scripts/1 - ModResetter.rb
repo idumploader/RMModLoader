@@ -27,7 +27,7 @@ module ModResetter
 
   ClassMethodSnapshot = Struct.new(:msymbol, :orig_object)
 
-  ClassSnapshot = Struct.new(:object_symbol, :singletons, :methods, :orig_object)
+  ClassSnapshot = Struct.new(:object_symbol, :singletons, :methods, :private_methods, :orig_object)
 
   BLACKLIST_CLASSES = [
     :Object,
@@ -73,7 +73,13 @@ module ModResetter
       method_snapshot
     end
 
-    class_snapshot.methods = cls.instance_methods(false).collect do |method_symbol|
+    # Include private instance methods: instance_methods(false) omits them, but
+    # initialize (and friends) are private, so without this they survive reset
+    # un-restored and a re-aliasing script recurses into itself.
+    privates = cls.private_instance_methods(false)
+    class_snapshot.private_methods = privates
+
+    class_snapshot.methods = (cls.instance_methods(false) + privates).collect do |method_symbol|
       method_snapshot = ClassMethodSnapshot.new
       method_snapshot.msymbol = method_symbol
       method_snapshot.orig_object = cls.instance_method(method_symbol)
@@ -124,11 +130,13 @@ module ModResetter
         end
       end
 
-      # remove excess methods
+      # remove excess methods (private included, else a patched initialize stays)
       all_methods = snapshot.methods.collect do |method_snapshot|
         method_snapshot.msymbol
       end
-      snapshot.orig_object.instance_methods(false).each do |method_symbol|
+      current_methods = snapshot.orig_object.instance_methods(false) +
+                        snapshot.orig_object.private_instance_methods(false)
+      current_methods.each do |method_symbol|
         next if all_methods.include?(method_symbol)
         # p "excess symbol: #{method_symbol} for #{snapshot.object_symbol}"
 
@@ -152,6 +160,14 @@ module ModResetter
           define_method(
             method_snapshot.msymbol,
             method_snapshot.orig_object)
+        end
+      end
+
+      # define_method publishes methods, so re-privatize the ones that were
+      # private at snapshot time (keeps initialize and other privates private).
+      unless snapshot.private_methods.empty?
+        snapshot.orig_object.instance_eval do
+          private(*snapshot.private_methods)
         end
       end
     end
