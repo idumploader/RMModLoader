@@ -38,7 +38,7 @@ namespace rm_modloader {
     RubyValue(__cdecl* tilemap_bitmaps)(RubyValue self) = nullptr;
 
     // RGSS engine entry points (hooked) and class objects
-    int(__cdecl* load_data)(int self, int rb_filename) = nullptr;
+    RubyValue(__cdecl* load_data)(RubyValue self, RubyValue filename) = nullptr;
     int(__cdecl* startup_scripts)(const wchar_t* scripts_file, StartupScriptsString* rgss3a_filepath) = nullptr;
     RubyValue* rx_bitmap_class = nullptr;
 
@@ -51,11 +51,14 @@ namespace rm_modloader {
     RubyValue(__cdecl* rb_define_singleton_method)(RubyValue object, const char* name, void* func, int arg_count) = nullptr;
     RubyValue(__cdecl* rb_define_method)(RubyValue object, const char* name, void* func, int arg_count) = nullptr;
     RubyValue(__cdecl* rb_define_alloc_func)(RubyValue object, RubyValue(__cdecl* func)(RubyValue)) = nullptr;
+    // Note: rb_raise if not integer
     int(__cdecl* rb_parse_int)(RubyValue object) = nullptr;
+    // Note: converts to string if not string
     const char* (__cdecl* rb_get_string_data)(RubyValue* rb_string) = nullptr;
     RubyValue(__cdecl* eval_rb_cstr)(const char* script, const char* script_name, int* error_code) = nullptr;
     RubyValue(__cdecl* eval_rb_cstr_noerr)(const char* script) = nullptr;
     RubyValue(__cdecl* rb_funcall)(RubyValue recv, RubyID mid, int n, ...) = nullptr;
+    // Note: noreturn. Can easily lead to memory leak (RAII is ignored after)
     void(__cdecl* rb_raise)(RubyValue exc_class, const char* fmt, ...) = nullptr;
     int(__cdecl* get_rb_error_string)(WCHAR* error_buf, size_t buf_size, int*) = nullptr;
 
