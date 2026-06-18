@@ -152,6 +152,16 @@ module ModLoader
     BACKSLASH = 0xDC
     RBRACKET = 0xDD
     QUOTE = 0xDE
+
+    # --- reverse lookup: VK code -> a key name (first-defined name wins) ---
+    NAMES = constants(false).each_with_object({}) do |c, table|
+      table[const_get(c)] ||= c.to_s
+    end
+
+    # @return [String, nil] a key name for +code+, or nil if unknown
+    def self.name(code)
+      NAMES[code]
+    end
   end
 end
 

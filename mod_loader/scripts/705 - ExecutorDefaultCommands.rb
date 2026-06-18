@@ -68,12 +68,14 @@ module ExecutorEnvironment
   # stored in NVRAM (mod_loader/nvram.dat), so they survive restarts.
   #--------------------------------------------------------------------------
 
-  # Bind a key (Symbol/String, case-insensitive) to a console command.
-  #   bind :V, "win_battle"     bind :F5, "heal"
-  def self.bind(key, command)
+  # Bind a key (Symbol/String, case-insensitive) to a console command. With no
+  # command, returns the key's current binding instead.
+  #   bind :V, "win_battle"     bind :F5, "heal"     bind :F5   # shows current
+  def self.bind(key, command = nil)
     vk = resolve_bind_key(key)
     return "Key not found" unless vk
     binds = ModLoader.nvram[:exec_binds] || {}
+    return (binds[vk] || "#{key} is not bound") if command.nil?
     binds[vk] = command
     ModLoader.nvram[:exec_binds] = binds        # one write-through
     "Bound #{key} -> #{command}"
@@ -89,11 +91,11 @@ module ExecutorEnvironment
     removed ? "Unbound #{key}" : "#{key} was not bound"
   end
 
-  # List current bindings.
+  # List current bindings (key name => command).
   def self.binds
     stored = ModLoader.nvram[:exec_binds] || {}
     return "No binds" if stored.empty?
-    stored.map { |vk, cmd| "#{vk} => #{cmd}" }.join("\n")
+    stored.map { |vk, cmd| "#{ModLoader::Keyboard.name(vk) || vk} => #{cmd}" }.join("\n")
   end
 
   # Resolve a key name to its VK code via ModLoader::Keyboard. Case-insensitive,
