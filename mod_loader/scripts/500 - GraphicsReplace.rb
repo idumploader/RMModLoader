@@ -37,15 +37,14 @@ module Cache
     alias replacer_orig_load_bitmap load_bitmap
   end
 
-  def self.normal_bitmap(orig_path)
-    path = orig_path
-    path = GraphicsReplace::REPLACE_DIR + path if File.exist?(GraphicsReplace::REPLACE_DIR + path + ".png")
+  def self.normal_bitmap(path)
     return @cache[path] if include?(path)
 
-    #p path
-    @cache[path] = Bitmap.new(path)
+    file_path = path
+    file_path = GraphicsReplace::REPLACE_DIR + path if File.exist?(GraphicsReplace::REPLACE_DIR + path + ".png")
+    @cache[path] = Bitmap.new(file_path)
 
-    resize_size = GraphicsReplace::RESIZE_MAPPING[orig_path]
+    resize_size = GraphicsReplace::RESIZE_MAPPING[path]
     if resize_size != nil
       bitmap = Bitmap.new(*resize_size)
       bitmap.stretch_blt(bitmap.rect, @cache[path], @cache[path].rect)
