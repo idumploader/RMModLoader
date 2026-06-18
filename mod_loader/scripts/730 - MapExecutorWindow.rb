@@ -4,7 +4,7 @@
 #
 # Hotkey: T opens the give window (freezes player movement while open).
 #
-# Dependencies: ExecutorModule (700), VKKeys (570), ModLoader,
+# Dependencies: ExecutorModule (700), ModLoader::Keyboard (7), ModLoader,
 #               $data_items / $data_weapons / $data_armors.
 # Config gate:  ExecutorModule::ENABLED
 # Defines: ExecutorGive_Window, ExecutorGiveSwitch_Window, ExecutorGiveList_Window
@@ -17,7 +17,7 @@ $imported["IDL-MapExecutorWindow"] = "1.0"
 if ExecutorModule::ENABLED
 
 module ExecutorModule
-  GIVE_WINDOW_KEY = VKKeys::VK_T
+  GIVE_WINDOW_KEY = ModLoader::Keyboard::T
 end
 
 class Game_Player

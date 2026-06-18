@@ -8,7 +8,7 @@
 # default console commands (give/tp/bind/...) live in ExecutorDefaultCommands
 # (705); ModResetter provides reset.
 #
-# Dependencies: VKKeys (570), ModLoader input API.
+# Dependencies: ModLoader::Keyboard (7), ModLoader input API.
 # Version gate: ModLoader.version != "2.4"
 # Defines: ExecutorModule, ExecutorEnvironment, Executor_Window, ExecutedCommand
 #==============================================================================
@@ -30,7 +30,7 @@ class Scene_Base
 
   alias executor_orig_update update
   def update
-    toggle_executor_window if ExecutorModule::ENABLED and ModLoader.input_trigger?(VKKeys::VK_F9)
+    toggle_executor_window if ExecutorModule::ENABLED and ModLoader.input_trigger?(ModLoader::Keyboard::F9)
     executor_orig_update
   end
 
@@ -200,19 +200,19 @@ class Executor_Window < Window_Selectable
   def check_new_symbols
     for i in 0..0xFE do
       if ModLoader.input_trigger?(i)
-        if i == VKKeys::VK_BACK
+        if i == ModLoader::Keyboard::BACK
           # process separately
-        elsif i == VKKeys::VK_RETURN
+        elsif i == ModLoader::Keyboard::RETURN
           execute_symbols
-        elsif i == VKKeys::VK_UP and ExecutorModule::COMMANDS_HISTORY.count > 0 and @current_text_index < ExecutorModule::COMMANDS_HISTORY.count
+        elsif i == ModLoader::Keyboard::UP and ExecutorModule::COMMANDS_HISTORY.count > 0 and @current_text_index < ExecutorModule::COMMANDS_HISTORY.count
           # next command
           @current_text = ExecutorModule::COMMANDS_HISTORY[-(@current_text_index + 1)].command
           @current_text_index += 1
-        elsif i == VKKeys::VK_DOWN and @current_text_index > 1
+        elsif i == ModLoader::Keyboard::DOWN and @current_text_index > 1
           # previous command
           @current_text = ExecutorModule::COMMANDS_HISTORY[-(@current_text_index - 1)].command
           @current_text_index -= 1
-        elsif i == VKKeys::VK_DOWN and @current_text_index == 1
+        elsif i == ModLoader::Keyboard::DOWN and @current_text_index == 1
           # empty command
           @current_text = ""
           @current_text_index -= 1
@@ -225,7 +225,7 @@ class Executor_Window < Window_Selectable
       end
     end
 
-    if ModLoader.input_repeat?(VKKeys::VK_BACK)
+    if ModLoader.input_repeat?(ModLoader::Keyboard::BACK)
       @current_text = @current_text[0...-1]
       update_exec_symbols
     end
