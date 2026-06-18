@@ -1,0 +1,171 @@
+#==============================================================================
+# BSMP Test Ghost — single-account local test harness for BSMP.
+#
+# Spawns a fake remote player ("ghost") by feeding real BasicNetworkPacket
+# objects straight into BSMP::Events, bypassing Steam networking entirely. Lets
+# you validate the receive/render side (player spawn, sprites, nicknames,
+# movement/map/speed/graphic sync) on ONE machine with ONE Steam account — no
+# second account, no second instance. It does NOT exercise the Steam wire
+# (to_raw_data/from_raw_data, lobby handshake); test those live with 2 peers.
+#
+# Console commands (run in-game on a map):
+#   ghost_spawn          spawn the ghost at your position + 1 tile, mirroring on
+#   ghost_follow(true)   toggle live mirroring of your movement/state
+#   ghost_despawn        remove the ghost
+#
+# Gate: only loads when BSMP is defined.
+#==============================================================================
+
+$imported ||= {}
+if not $imported["IDL-BSMP-TestGhost"]
+$imported["IDL-BSMP-TestGhost"] = "1.0"
+
+if not defined?(BSMP)
+p "BSMP isn't loaded, test ghost unavailable"
+else
+
+module BSMPTestGhost
+
+  # Fake remote sender id. from_id accepts fixnum/bignum; a small value is fine.
+  GHOST_ID = 1
+
+  # Where the ghost sits relative to you, in tiles.
+  OFFSET_X = 1
+  OFFSET_Y = 0
+
+  @active = false
+  @cache_map = nil
+  @cache_speed = nil
+  @cache_graphic = nil
+  @was_moving = false
+
+  def self.active?
+    @active
+  end
+
+  def self.active=(value)
+    @active = value
+    reset_cache
+  end
+
+  def self.reset_cache
+    @cache_map = nil
+    @cache_speed = nil
+    @cache_graphic = nil
+  end
+
+  # Build a real native packet and dispatch it through the same entry point the
+  # network path uses, so the BSMP::Events handlers run unchanged.
+  def self.feed(type, data)
+    BSMP::Events.on_packet(BasicNetworkPacket.new(type, GHOST_ID, data))
+  end
+
+  def self.push_pos
+    feed(BSMP::Events::PLAYER_CHANGED_POS, "#{$game_player.x + OFFSET_X};#{$game_player.y + OFFSET_Y}")
+  end
+
+  def self.push_character
+    feed(BSMP::Events::PLAYER_CHANGED_CHARACTER, "#{$game_player.character_name};#{$game_player.character_index};Ghost")
+  end
+
+  def self.spawn
+    return p "Not on a map" if SceneManager.scene.class != Scene_Map
+    return p "No actor on player" if not $game_player.actor
+
+    feed(BSMP::Events::PLAYER_JOINED, $game_player.actor.name)
+    feed(BSMP::Events::PLAYER_CHANGED_MAP, $game_map.map_id.to_s)
+    feed(BSMP::Events::PLAYER_CHANGED_SPEED, $game_player.real_move_speed.to_s)
+    push_character
+    push_pos
+
+    self.active = true
+    @cache_map = $game_map.map_id
+    @cache_speed = $game_player.real_move_speed
+    @cache_graphic = [$game_player.character_name, $game_player.character_index]
+    @was_moving = $game_player.moving?
+    p "Ghost #{GHOST_ID} spawned, mirroring on"
+  end
+
+  def self.despawn
+    feed(BSMP::Events::PLAYER_LEAVED, "")
+    @active = false
+    p "Ghost despawned"
+  end
+
+  # Mirror a finished local step as a movement packet so the ghost walk-animates
+  # one tile in the same direction (parallel to you).
+  def self.on_move_straight(d)
+    feed(BSMP::Events::PLAYER_MOVED, d.to_s)
+  end
+
+  def self.on_move_diagonal(horz, vert)
+    feed(BSMP::Events::PLAYER_MOVED_DIAG, "#{horz};#{vert}")
+  end
+
+  # Per-frame: mirror state changes that aren't tied to a single step.
+  def self.poll
+    if @cache_map != $game_map.map_id
+      @cache_map = $game_map.map_id
+      feed(BSMP::Events::PLAYER_CHANGED_MAP, @cache_map.to_s)
+      push_pos
+    end
+    # real_move_speed (not move_speed) so dashing is mirrored; otherwise the ghost
+    # always walks and falls behind your steps, accumulating drift.
+    speed = $game_player.real_move_speed
+    if @cache_speed != speed
+      @cache_speed = speed
+      feed(BSMP::Events::PLAYER_CHANGED_SPEED, speed.to_s)
+    end
+    graphic = [$game_player.character_name, $game_player.character_index]
+    if @cache_graphic != graphic
+      @cache_graphic = graphic
+      push_character
+    end
+    # Anchor the ghost to your position + offset each time you finish moving, so
+    # relative move-mirroring can't accumulate desync over a run.
+    moving = $game_player.moving?
+    push_pos if @was_moving and not moving
+    @was_moving = moving
+  end
+
+end
+
+class Game_Player
+
+  alias bsmp_ghost_update update
+  alias bsmp_ghost_move_straight move_straight
+  alias bsmp_ghost_move_diagonal move_diagonal
+
+  def update
+    bsmp_ghost_update
+    BSMPTestGhost.poll if BSMPTestGhost.active?
+  end
+
+  def move_straight(d, turn_ok = true)
+    bsmp_ghost_move_straight(d, turn_ok)
+    BSMPTestGhost.on_move_straight(d) if BSMPTestGhost.active?
+  end
+
+  def move_diagonal(horz, vert)
+    bsmp_ghost_move_diagonal(horz, vert)
+    BSMPTestGhost.on_move_diagonal(horz, vert) if BSMPTestGhost.active?
+  end
+
+end
+
+def ghost_spawn
+  BSMPTestGhost.spawn
+end
+
+def ghost_despawn
+  BSMPTestGhost.despawn
+end
+
+def ghost_follow(on = true)
+  BSMPTestGhost.active = on
+  p "Ghost mirroring #{on ? 'on' : 'off'}"
+end
+
+end # if defined?(BSMP)
+
+end # not $imported["IDL-BSMP-TestGhost"]
