@@ -395,13 +395,18 @@ namespace rm_modloader {
     }
 
     void apply_hrfix() {
-        if (!mod_loader->get_config().is_hrfix_enabled()) {
+        if (const auto* c = mod_loader->get_config().get("hrfix_enable"); c && !c->get<bool>()) {
             mod_loader->log_info("HRFix disabled in config\n");
             return;
         }
 
-        hrfix_render_width = mod_loader->get_config().get_required_width();
-        hrfix_render_height = mod_loader->get_config().get_required_height();
+        const auto* width_cfg = mod_loader->get_config().get("width");
+        const auto* height_cfg = mod_loader->get_config().get("height");
+        if (!width_cfg || !height_cfg) {
+            mod_loader->log_warning("HRFix: width/height missing in config - using default 640x480\n");
+        }
+        hrfix_render_width = width_cfg ? width_cfg->get<int>() : 640;
+        hrfix_render_height = height_cfg ? height_cfg->get<int>() : 480;
 
         // Patch for screen size
         mod_loader->patch_memory_as<int>(0x20F6, hrfix_render_width); // set width limit for resize_screen

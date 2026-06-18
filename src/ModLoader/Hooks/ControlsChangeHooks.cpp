@@ -30,7 +30,7 @@ namespace rm_modloader {
 	}
 
 	void apply_controls_change() {
-		if (!mod_loader->get_config().is_controls_change_enabled()) {
+		if (const auto* c = mod_loader->get_config().get("controls_change"); c && !c->get<bool>()) {
 			mod_loader->log_info("ControlsChange disabled in config\n");
 			return;
 		}
