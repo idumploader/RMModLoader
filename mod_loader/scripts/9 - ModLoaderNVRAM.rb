@@ -36,7 +36,7 @@ module ModLoader
   class NVRAMStore
     def initialize(path)
       @path = path
-      @data = load_data
+      @data = read_data_file
       @sections = {}
     end
 
@@ -143,6 +143,18 @@ module ModLoader
         @data = (@store[@key] || {}).dup
         self
       end
+    end
+
+    private
+
+    # Read and deserialize the store from disk; empty hash if absent/corrupt.
+    # Named to avoid clashing with RGSS's global load_data(filename).
+    def read_data_file
+      return {} unless File.exist?(@path)
+      File.open(@path, "rb") { |f| Marshal.load(f) }
+    rescue StandardError => error
+      p "[NVRAM] failed to load #{@path} (#{error}) - starting empty"
+      {}
     end
   end
 
