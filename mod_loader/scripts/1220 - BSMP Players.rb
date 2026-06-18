@@ -77,6 +77,22 @@ module BSMP
       end
     end
 
+    # How much faster than the base glide we may go to catch up when the target
+    # has pulled ahead (capped so a big gap eases in rather than teleporting).
+    CATCHUP_MAX = 4.0
+
+    # Glide speed. Within ~1 tile of the target this is the normal move-speed
+    # glide (linear, lands exactly). Further behind — e.g. the sender's dash
+    # outran our last speed packet, or packets bunched after a network stall — we
+    # speed up proportionally to the gap so continuous movement keeps the sender's
+    # pace instead of trailing at a fixed (often half) speed. update_move clamps
+    # to the target, so it never overshoots.
+    def distance_per_frame
+      base = super
+      gap = (@x - @real_x).abs + (@y - @real_y).abs
+      base * [[gap, 1.0].max, CATCHUP_MAX].min
+    end
+
   end
 
   class Players
