@@ -8,6 +8,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   build:
@@ -86,12 +88,30 @@ jobs:
           & "C:\Program Files\7-Zip\7z.exe" a -t7z -mx=9 "ModLoader-v${{ steps.get_version.outputs.version }}.7z" ".\out\release\RMModLoader\*"
         shell: pwsh
 
+      - name: SHA256 checksum
+        shell: pwsh
+        run: |
+          $file = "ModLoader-v${{ steps.get_version.outputs.version }}.7z"
+          $hash = (Get-FileHash -Algorithm SHA256 -Path $file).Hash.ToLower()
+          # sha256sum-style sidecar: "<hash>  <filename>"
+          Set-Content -Path "$file.sha256" -Value "$hash  $file" -Encoding ascii -NoNewline
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "SHA256 ($file): $hash"
+
+      - name: Attest build provenance
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            out/release/RMModLoader/ModLoader.dll
+            out/release/RMModLoader/Loader.exe
+
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: |
             ModLoader-v${{ steps.get_version.outputs.version }}.7z
+            ModLoader-v${{ steps.get_version.outputs.version }}.7z.sha256
           name: v${{ steps.get_version.outputs.version }}
           tag_name: v${{ steps.get_version.outputs.version }}
           draft: true
