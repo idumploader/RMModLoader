@@ -99,6 +99,7 @@ module ModLoader
         @key = key
         # defaults first, persisted values on top; new default keys still appear
         @data = defaults.merge(store[key] || {})
+        @baseline = @data.dup   # snapshot at load to detect real changes (stay lazy)
       end
 
       def [](field)
@@ -126,14 +127,18 @@ module ModLoader
         @data.dup
       end
 
-      # @return [Boolean] whether the working copy differs from what is on disk
+      # @return [Boolean] whether the working copy changed since load/last commit
       def dirty?
-        @data != (@store[@key] || {})
+        @data != @baseline
       end
 
-      # Persist the whole section in one write-through. No-op if unchanged.
+      # Persist the whole section in one write-through. No-op when nothing
+      # changed, so an untouched section never touches the file.
       def commit
-        @store[@key] = @data.dup if dirty?
+        if dirty?
+          @store[@key] = @data.dup
+          @baseline = @data.dup
+        end
         self
       end
       alias save commit
@@ -141,6 +146,7 @@ module ModLoader
       # Discard in-memory edits and reload from disk.
       def reload
         @data = (@store[@key] || {}).dup
+        @baseline = @data.dup
         self
       end
     end
