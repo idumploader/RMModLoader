@@ -732,8 +732,10 @@ class Spriteset_Map
 
   def update
     bsmp_orig_update
-    @bsmp_players.each_value do |player|
-      player.character.update
+    # Advance the remote players' Game_Character logic (movement interpolation):
+    # @bsmp_players here holds sprites, which bsmp_orig_update already updates.
+    $bsmp_players.bsmp_players.each_value do |character|
+      character.update if character.map_id == $game_map.map_id
     end
   end
 
@@ -752,11 +754,13 @@ class Spriteset_Map
   end
 
   def update_player(player)
-    if player.map_id == $game_map.map_id and not @bsmp_players.key?(player.id)
-      # joined map
+    on_map = player.map_id == $game_map.map_id
+    shown = @bsmp_players.key?(player.player_id)
+    if on_map and not shown
+      # joined our map
       add_player(player)
-    elsif @bsmp_players.key?(player.player_id)
-      # leaved from map
+    elsif shown and not on_map
+      # left our map
       delete_player(player)
     end
   end
@@ -952,7 +956,7 @@ def bsmp_read_packets
 end
 
 def set_nick(nick)
-  SceneManager.scene.spriteset.character_sprites[-1].set_nickname(nick)
+  $game_player.nickname = nick
 end
 
 def mech

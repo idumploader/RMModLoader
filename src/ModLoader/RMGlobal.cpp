@@ -58,6 +58,10 @@ namespace rm_modloader {
     RubyValue(__cdecl* eval_rb_cstr)(const char* script, const char* script_name, int* error_code) = nullptr;
     RubyValue(__cdecl* eval_rb_cstr_noerr)(const char* script) = nullptr;
     RubyValue(__cdecl* rb_funcall)(RubyValue recv, RubyID mid, int n, ...) = nullptr;
+    // Contains a longjmp inside it: guards proc(data) and reports the tag via *state.
+    RubyValue(__cdecl* rb_protect)(RubyValue(__cdecl* proc)(RubyValue), RubyValue data, int* state) = nullptr;
+    // Note: noreturn. Re-raises the tag captured by rb_protect.
+    void(__cdecl* rb_jump_tag)(int state) = nullptr;
     // Note: noreturn. Can easily lead to memory leak (RAII is ignored after)
     void(__cdecl* rb_raise)(RubyValue exc_class, const char* fmt, ...) = nullptr;
     int(__cdecl* get_rb_error_string)(WCHAR* error_buf, size_t buf_size, int*) = nullptr;
@@ -173,6 +177,8 @@ namespace rm_modloader {
         eval_rb_cstr = at_offset<decltype(eval_rb_cstr)>(rgss_module, 0x0C5B0);
         eval_rb_cstr_noerr = at_offset<decltype(eval_rb_cstr_noerr)>(rgss_module, 0xC600);
         rb_funcall = at_offset<decltype(rb_funcall)>(rgss_module, 0x293A0);
+        rb_protect = at_offset<decltype(rb_protect)>(rgss_module, 0x6A240);
+        rb_jump_tag = at_offset<decltype(rb_jump_tag)>(rgss_module, 0x6A010);
         rb_raise = at_offset<decltype(rb_raise)>(rgss_module, 0x26440);
         get_rb_error_string = at_offset<decltype(get_rb_error_string)>(rgss_module, 0xD3E0);
         rb_big_new = at_offset<decltype(rb_big_new)>(rgss_module, 0x60130);

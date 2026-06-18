@@ -5,6 +5,8 @@
 #include "../Steam/isteamnetworkingmessages.h"
 
 #include <sstream>
+#include <vector>
+#include <utility>
 
 #undef min
 #undef max
@@ -311,8 +313,8 @@ namespace rm_modloader {
 
 		static void __cdecl dealloc(void* block) {
 			debug_mod_loader_log("Steam callback free: {:X}\n", reinterpret_cast<uintptr_t>(block));
-			SteamCCallResult* callback = static_cast<SteamCCallResult*>(block);
-			callback->~SteamCCallResult();
+			SteamCCallback* callback = static_cast<SteamCCallback*>(block);
+			callback->~SteamCCallback();
 
 			rgss_free(block);
 		}
@@ -459,7 +461,7 @@ namespace rm_modloader {
 		static RubyValue __cdecl get_data_ruby(RubyValue object) {
 			BasicNetworkPacket* packet = get_rb_data_data<BasicNetworkPacket>(object);
 
-			return rb_str_new_cstr(packet->data.c_str());
+			return rb_str_new(packet->data.data(), static_cast<long>(packet->data.size()));
 		}
 
 		static RubyValue __cdecl set_data_ruby(RubyValue object, RubyValue data_value) {
@@ -473,20 +475,13 @@ namespace rm_modloader {
 
 		std::string to_raw_data() {
 			std::ostringstream raw_data;
-			union {
-				struct {
-					uint32_t high;
-					uint32_t low;
-				} bigint;
-				uint64_t number;
-			} from_id_u;
-			from_id_u.number = from_id;
 
+			// from_id is written as 8 contiguous little-endian bytes; both peers are
+			// x86 LE Windows, so a raw write is byte-identical to the old high/low split.
 			raw_data.write(reinterpret_cast<const char*>(&BasicNetworkPacket::magic), sizeof(BasicNetworkPacket::magic));
 			raw_data.write(reinterpret_cast<const char*>(&type), sizeof(type));
-			raw_data.write(reinterpret_cast<const char*>(&from_id_u.bigint.high), sizeof(from_id_u.bigint.high));
-			raw_data.write(reinterpret_cast<const char*>(&from_id_u.bigint.low), sizeof(from_id_u.bigint.low));
-			raw_data.write(data.c_str(), data.length());
+			raw_data.write(reinterpret_cast<const char*>(&from_id), sizeof(from_id));
+			raw_data.write(data.data(), data.length());
 
 			return std::move(raw_data).str();
 		}
@@ -499,30 +494,20 @@ namespace rm_modloader {
 				return false;
 			}
 
-			union {
-				struct {
-					uint32_t high;
-					uint32_t low;
-				} bigint;
-				uint64_t number;
-			} from_id_u;
-			std::streamoff offset = 0;
-			
+			size_t offset = 0;
+
 			std::remove_const_t<decltype(BasicNetworkPacket::magic)> data_magic;
-			memcpy(reinterpret_cast<char*>(&data_magic), raw_data.data() + offset, sizeof(data_magic));
+			memcpy(&data_magic, raw_data.data() + offset, sizeof(data_magic));
 			offset += sizeof(data_magic);
 			debug_mod_loader_log("Packet magic: 0x{:X}\n", data_magic);
 			if (data_magic != BasicNetworkPacket::magic) {
 				return false;
 			}
 
-			memcpy(reinterpret_cast<char*>(&type), raw_data.data() + offset, sizeof(type));
+			memcpy(&type, raw_data.data() + offset, sizeof(type));
 			offset += sizeof(type);
-			memcpy(reinterpret_cast<char*>(&from_id_u.bigint.high), raw_data.data() + offset, sizeof(from_id_u.bigint.high));
-			offset += sizeof(from_id_u.bigint.high);
-			memcpy(reinterpret_cast<char*>(&from_id_u.bigint.low), raw_data.data() + offset, sizeof(from_id_u.bigint.low));
-			offset += sizeof(from_id_u.bigint.low);
-			from_id = from_id_u.number;
+			memcpy(&from_id, raw_data.data() + offset, sizeof(from_id));
+			offset += sizeof(from_id);
 			data.resize(raw_data.size() - header_size);
 			memcpy(data.data(), raw_data.data() + offset, data.length());
 
@@ -553,7 +538,7 @@ namespace rm_modloader {
 			int max_players = rb_parse_int(max_players_value);
 
 			ISteamMatchmaking* matchmaking = SteamMatchmaking();
-			SteamAPICall_t api_call = SteamMatchmaking()->CreateLobby(lobby_type, max_players);
+			SteamAPICall_t api_call = matchmaking->CreateLobby(lobby_type, max_players);
 			debug_mod_loader_log("SteamAPI create_lobby. Matchmaking: {:X}, api_call: {}\n",
 				reinterpret_cast<uintptr_t>(matchmaking),
 				api_call
@@ -640,7 +625,7 @@ namespace rm_modloader {
 				static_cast<int>(conn_state)
 			);
 
-			return ruby_true;
+			return result == k_EResultOK ? ruby_true : ruby_false;
 		}
 
 		static RubyValue __cdecl read_messages_on_channel_ruby(RubyValue object, RubyValue channel_value, RubyValue max_messages_value, RubyValue recv, RubyValue method_value) {
@@ -662,15 +647,28 @@ namespace rm_modloader {
 			int message_count = SteamNetworkingMessages()->ReceiveMessagesOnChannel(channel_id, messages, std::min(internal_max_messages, max_messages));
 
 			debug_mod_loader_log("SteamAPI read messages: got {} messages\n", message_count);
+
+			// Drain Steam-owned messages and release them up front so a Ruby handler that
+			// raises (longjmp, which skips C++ destructors) can't leak SteamNetworkingMessage_t.
+			// The staging buffer is static/reused, not a stack local: a longjmp would abandon
+			// a stack object's heap, but this one simply persists and is cleared next call.
+			// Game-thread only (Steam callbacks run on the same thread as the Ruby VM).
+			static std::vector<std::pair<uint64_t, std::string>> incoming;
+			incoming.clear();
+			incoming.reserve(message_count);
 			for (int i = 0; i < message_count; ++i) {
-				uint64_t user_id = messages[i]->m_identityPeer.GetSteamID64();
-				std::string message_data(static_cast<const char*>(messages[i]->GetData()), messages[i]->GetSize());
+				incoming.emplace_back(
+					messages[i]->m_identityPeer.GetSteamID64(),
+					std::string(static_cast<const char*>(messages[i]->GetData()), messages[i]->GetSize())
+				);
+				messages[i]->Release();
+			}
+
+			for (auto& [user_id, message_data] : incoming) {
 				rb_funcall(recv, method, 2,
 					rb_i642num(user_id),
-					rb_str_new_cstr(message_data.data())
+					rb_str_new(message_data.data(), static_cast<long>(message_data.size()))
 				);
-
-				messages[i]->Release();
 			}
 
 			return ruby_true;
@@ -710,10 +708,6 @@ namespace rm_modloader {
 			return result == k_EResultOK ? ruby_true : ruby_false;
 		}
 
-		static void process_packet(BasicNetworkPacket& packet, RubyValue recv, RubyID method) {
-
-		}
-
 		static RubyValue __cdecl read_basic_packets_ruby(RubyValue object, RubyValue channel_value, RubyValue max_messages_value, RubyValue recv, RubyValue method_value) {
 			if (!check_ruby_type(channel_value, RUBY_T_FIXNUM)) {
 				rb_raise(*ruby_error_arg_error, "Expected channel as fixnum");
@@ -732,29 +726,35 @@ namespace rm_modloader {
 			constexpr int internal_max_messages = 10;
 			SteamNetworkingMessage_t* messages[internal_max_messages];
 			int message_count = SteamNetworkingMessages()->ReceiveMessagesOnChannel(channel_id, messages, std::min(internal_max_messages, max_messages));
-			
+
+			// Drain and release Steam-owned messages before dispatching to Ruby (see
+			// read_messages_on_channel_ruby): static/reused buffer so a raising handler's
+			// longjmp can't leak it. Game-thread only.
+			static std::vector<std::pair<uint64_t, std::string>> incoming;
+			incoming.clear();
+			incoming.reserve(message_count);
+			for (int i = 0; i < message_count; ++i) {
+				incoming.emplace_back(
+					messages[i]->m_identityPeer.GetSteamID64(),
+					std::string(static_cast<const char*>(messages[i]->GetData()), messages[i]->GetSize())
+				);
+				messages[i]->Release();
+			}
+
+			// reusable_packet_value is a GC-managed Ruby object: a longjmp out of rb_funcall
+			// leaves it for the GC, so reusing one instance across messages is leak-safe.
 			RubyValue reusable_packet_value = BasicNetworkPacket::alloc(BasicNetworkPacket::klass);
 			BasicNetworkPacket* reusable_packet = get_rb_data_data<BasicNetworkPacket>(reusable_packet_value);
-			for (int i = 0; i < message_count; ++i) {
-				SteamNetworkingMessage_t* message = messages[i];
-
-				const char* raw_data = reinterpret_cast<const char*>(message->GetData());
-				std::stringstream buffer;
-				buffer << "Packet data: [";
-				for (uint32_t i = 0; i < message->GetSize(); ++i) {
-					char byte = raw_data[i];
-					buffer << std::hex << static_cast<uint16_t>(byte) << ", ";
+			for (auto& [user_id, message_data] : incoming) {
+				// Skip foreign/corrupt packets (bad magic or short header) instead of
+				// dispatching stale reusable_packet contents to the handler.
+				if (!reusable_packet->from_raw_data(std::span(message_data.data(), message_data.size()))) {
+					continue;
 				}
-				buffer << "]\n";
-				debug_mod_loader_log("{}", buffer.str());
-
-				reusable_packet->from_raw_data(std::span(raw_data, raw_data + message->GetSize()));
 				rb_funcall(recv, method, 2,
-					rb_i642num(message->m_identityPeer.GetSteamID64()),
+					rb_i642num(user_id),
 					reusable_packet_value
 				);
-				
-				message->Release();
 			}
 
 			return ruby_true;
@@ -833,7 +833,7 @@ namespace rm_modloader {
 
 		if (!(SteamAPI_RegisterCallResult = get_proc_as<decltype(SteamAPI_RegisterCallResult)>(steam_api_module, "SteamAPI_RegisterCallResult")))
 			return false;
-		if (!(SteamAPI_UnregisterCallResult = get_proc_as<decltype(SteamAPI_RegisterCallResult)>(steam_api_module, "SteamAPI_UnregisterCallResult")))
+		if (!(SteamAPI_UnregisterCallResult = get_proc_as<decltype(SteamAPI_UnregisterCallResult)>(steam_api_module, "SteamAPI_UnregisterCallResult")))
 			return false;
 
 		return true;
