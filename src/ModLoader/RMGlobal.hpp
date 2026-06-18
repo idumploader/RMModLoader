@@ -11,6 +11,7 @@ namespace rm_modloader {
         WCHAR buffer[ANYSIZE_ARRAY];
     };
 
+    // --- RGSS module & global state ---
     extern HMODULE rgss_module;
     extern GameFrame** rgss_game;
     extern FileRepository* file_repository;
@@ -19,6 +20,7 @@ namespace rm_modloader {
         return *rgss_game;
     }
 
+    // --- RPG Maker / RGSS engine: class methods, engine entry points, offset pointers ---
     extern int(__thiscall Sprite::* set_sprite_offset)(int x, int y);
     extern int(__thiscall Sprite::* set_rect)(RECT* new_rect);
 
@@ -35,11 +37,19 @@ namespace rm_modloader {
     extern RxMemoryFile* (RxMemoryFile::* rx_memory_file_dtx)(bool is_delete);
 
     extern RxInput* (__thiscall RxInput::* input_update_keys)();
+    // Despite the rb_ name, this is an RGSS RxInput helper (key index <-> Ruby symbol), not an MRI function.
+    extern int(__cdecl* get_rb_key_symbol_index)(RubyValue symbol_value);
 
     extern RubyValue(__cdecl* tilemap_initialize)(RubyValue self, int a2, void* a3);
     extern RubyValue(__cdecl* init_rb_tilemap)(RubyValue self, int a2, void* a3);
     extern RubyValue(__cdecl* tilemap_bitmaps)(RubyValue self);
 
+    // RGSS engine entry points (hooked) and class objects
+    extern int(__cdecl* load_data)(int self, int rb_filename);
+    extern int(__cdecl* startup_scripts)(const wchar_t* scripts_file, StartupScriptsString* rgss3a_filepath);
+    extern RubyValue* rx_bitmap_class;
+
+    // --- Ruby (MRI) runtime: functions, allocators, class & exception objects ---
     extern RubyValue(__cdecl* rb_str_new_cstr)(const char* ptr);
     extern RubyValue(__cdecl* rb_str_new)(const char* ptr, long len);
     extern RubyValue(__cdecl* rb_define_module)(const char* name);
@@ -66,18 +76,11 @@ namespace rm_modloader {
     extern RubyValue(__cdecl* rb_ary_new4)(long n, const RubyValue* elts);
     extern int(__cdecl* rb_ary_push)(RubyValue arr, RubyValue value);
 
-    extern int(__cdecl* load_data)(int self, int rb_filename);
-    extern int(__cdecl* startup_scripts)(const wchar_t* scripts_file, StartupScriptsString* rgss3a_filepath);
-
-    extern int(__cdecl* get_rb_key_symbol_index)(RubyValue symbol_value);
-
     extern void(__cdecl* rgss_free)(void* block);
 
     extern RubyValue* ruby_error_arg_error;
     extern RubyValue* ruby_c_object;
     extern RubyValue* ruby_c_bignum;
-
-    extern RubyValue* rx_bitmap_class;
 
     /**
      * Loads the RGSS runtime DLL at the given path and resolves all global
