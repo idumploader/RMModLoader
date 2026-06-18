@@ -45,7 +45,7 @@ namespace rm_modloader {
     extern RubyValue(__cdecl* tilemap_bitmaps)(RubyValue self);
 
     // RGSS engine entry points (hooked) and class objects
-    extern int(__cdecl* load_data)(int self, int rb_filename);
+    extern RubyValue(__cdecl* load_data)(RubyValue self, RubyValue filename);
     extern int(__cdecl* startup_scripts)(const wchar_t* scripts_file, StartupScriptsString* rgss3a_filepath);
     extern RubyValue* rx_bitmap_class;
 
