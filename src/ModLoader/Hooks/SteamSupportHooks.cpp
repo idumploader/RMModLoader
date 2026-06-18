@@ -20,6 +20,9 @@ namespace rm_modloader {
 	void(__cdecl* SteamAPI_UnregisterCallback)(class CCallbackBase* pCallback);
 	void(__cdecl* SteamAPI_RegisterCallResult)(class CCallbackBase* pCallback, SteamAPICall_t hAPICall) = nullptr;
 	void(__cdecl* SteamAPI_UnregisterCallResult)(class CCallbackBase* pCallback, SteamAPICall_t hAPICall) = nullptr;
+	void(__cdecl* SteamAPI_RunCallbacks_fn)() = nullptr;
+	int(__cdecl* SteamAPI_InitFlat_fn)(char* err_out_1024) = nullptr; // modern SDK (>= 1.58), 0 == OK
+	bool(__cdecl* SteamAPI_Init_fn)() = nullptr;                      // legacy SDK, bool
 
 	inline ISteamMatchmaking* SteamMatchmaking() {
 		return static_cast<ISteamMatchmaking*>(SteamAPI_FindOrCreateUserInterface(SteamAPI_GetHSteamUser(), STEAMMATCHMAKING_INTERFACE_VERSION));
@@ -538,6 +541,10 @@ namespace rm_modloader {
 			int max_players = rb_parse_int(max_players_value);
 
 			ISteamMatchmaking* matchmaking = SteamMatchmaking();
+			if (!matchmaking) {
+				mod_loader->log_error("SteamAPI.create_lobby: matchmaking interface unavailable (is Steam initialised?)\n");
+				return ruby_nil;
+			}
 			SteamAPICall_t api_call = matchmaking->CreateLobby(lobby_type, max_players);
 			debug_mod_loader_log("SteamAPI create_lobby. Matchmaking: {:X}, api_call: {}\n",
 				reinterpret_cast<uintptr_t>(matchmaking),
@@ -557,8 +564,13 @@ namespace rm_modloader {
 				return ruby_nil;
 			}
 
+			ISteamMatchmaking* matchmaking = SteamMatchmaking();
+			if (!matchmaking) {
+				mod_loader->log_error("SteamAPI.leave_lobby: matchmaking interface unavailable\n");
+				return ruby_nil;
+			}
 			CSteamID steam_id = rb_num2ull(lobby_id_value);
-			SteamMatchmaking()->LeaveLobby(steam_id);
+			matchmaking->LeaveLobby(steam_id);
 			return ruby_true;
 		}
 
@@ -573,10 +585,15 @@ namespace rm_modloader {
 				return ruby_nil;
 			}
 
+			ISteamMatchmaking* matchmaking = SteamMatchmaking();
+			if (!matchmaking) {
+				mod_loader->log_error("SteamAPI.join_lobby: matchmaking interface unavailable\n");
+				return ruby_nil;
+			}
 			SteamCCallResult* callback = get_rb_data_data<SteamCCallResult>(callback_value);
 			CSteamID lobby_id = rb_num2ull(lobby_id_value);
 
-			SteamAPICall_t api_call = SteamMatchmaking()->JoinLobby(lobby_id);
+			SteamAPICall_t api_call = matchmaking->JoinLobby(lobby_id);
 			callback->set_api_call(api_call);
 
 			return callback_value;
@@ -586,9 +603,14 @@ namespace rm_modloader {
 			if (!check_ruby_type(lobby_id_value, RUBY_T_FIXNUM, RUBY_T_BIGNUM)) {
 				rb_raise(*ruby_error_arg_error, "Expected lobby_id as fixnum or bignum");
 			}
+			ISteamMatchmaking* matchmaking = SteamMatchmaking();
+			if (!matchmaking) {
+				mod_loader->log_error("SteamAPI.get_lobby_owner: matchmaking interface unavailable\n");
+				return ruby_nil;
+			}
 			CSteamID lobby_id = rb_num2ull(lobby_id_value);
 
-			CSteamID owner_id = SteamMatchmaking()->GetLobbyOwner(lobby_id);
+			CSteamID owner_id = matchmaking->GetLobbyOwner(lobby_id);
 
 			if (!owner_id.IsValid()) {
 				return ruby_nil;
@@ -608,17 +630,23 @@ namespace rm_modloader {
 			}
 			std::string_view data = rb_get_string_data(&data_value);
 
+			ISteamNetworkingMessages* net = SteamNetworkingMessages();
+			if (!net) {
+				mod_loader->log_error("SteamAPI.send_message_to_user: networking interface unavailable\n");
+				return ruby_false;
+			}
+
 			SteamNetworkingIdentity identity;
 			identity.SetSteamID64(rb_num2ull(user_id_value));
 			int channel_id = rb_parse_int(channel_value);
 			int flags = rb_parse_int(flags_value);
 
 			debug_mod_loader_log("SteamAPI send message to {}, data: {}\n", identity.GetSteamID64(), data);
-			EResult result = SteamNetworkingMessages()->SendMessageToUser(identity, data.data(), data.size(), flags | k_nSteamNetworkingSend_AutoRestartBrokenSession, channel_id);
+			EResult result = net->SendMessageToUser(identity, data.data(), data.size(), flags | k_nSteamNetworkingSend_AutoRestartBrokenSession, channel_id);
 
 			SteamNetConnectionInfo_t conn_info;
 			SteamNetConnectionRealTimeStatus_t real_conn_info;
-			ESteamNetworkingConnectionState conn_state = SteamNetworkingMessages()->GetSessionConnectionInfo(identity, &conn_info, &real_conn_info);
+			ESteamNetworkingConnectionState conn_state = net->GetSessionConnectionInfo(identity, &conn_info, &real_conn_info);
 
 			debug_mod_loader_log("SteamAPI send result: {}. Connection state: {}\n",
 				static_cast<int>(result),
@@ -642,9 +670,15 @@ namespace rm_modloader {
 			int max_messages = rb_parse_int(max_messages_value);
 			RubyID method = rb_sym2id(method_value);
 
+			ISteamNetworkingMessages* net = SteamNetworkingMessages();
+			if (!net) {
+				mod_loader->log_error("SteamAPI.read_messages_on_channel: networking interface unavailable\n");
+				return ruby_nil;
+			}
+
 			constexpr int internal_max_messages = 10;
 			SteamNetworkingMessage_t* messages[internal_max_messages];
-			int message_count = SteamNetworkingMessages()->ReceiveMessagesOnChannel(channel_id, messages, std::min(internal_max_messages, max_messages));
+			int message_count = net->ReceiveMessagesOnChannel(channel_id, messages, std::min(internal_max_messages, max_messages));
 
 			debug_mod_loader_log("SteamAPI read messages: got {} messages\n", message_count);
 
@@ -689,6 +723,12 @@ namespace rm_modloader {
 				rb_raise(*ruby_error_arg_error, "Expected flags as fixnum");
 			}
 
+			ISteamNetworkingMessages* net = SteamNetworkingMessages();
+			if (!net) {
+				mod_loader->log_error("SteamAPI.send_basic_packet: networking interface unavailable\n");
+				return ruby_false;
+			}
+
 			SteamNetworkingIdentity identity;
 			identity.SetSteamID64(rb_num2ull(user_id_value));
 			int channel_id = rb_parse_int(channel_value);
@@ -697,7 +737,7 @@ namespace rm_modloader {
 
 			std::string raw_data_string = packet->to_raw_data();
 
-			EResult result = SteamNetworkingMessages()->SendMessageToUser(
+			EResult result = net->SendMessageToUser(
 				identity,
 				raw_data_string.c_str(),
 				raw_data_string.size(),
@@ -719,13 +759,19 @@ namespace rm_modloader {
 				rb_raise(*ruby_error_arg_error, "Expected method as symbol");
 			}
 
+			ISteamNetworkingMessages* net = SteamNetworkingMessages();
+			if (!net) {
+				mod_loader->log_error("SteamAPI.read_basic_packets: networking interface unavailable\n");
+				return ruby_nil;
+			}
+
 			int channel_id = rb_parse_int(channel_value);
 			int max_messages = rb_parse_int(max_messages_value);
 			RubyID method = rb_sym2id(method_value);
 
 			constexpr int internal_max_messages = 10;
 			SteamNetworkingMessage_t* messages[internal_max_messages];
-			int message_count = SteamNetworkingMessages()->ReceiveMessagesOnChannel(channel_id, messages, std::min(internal_max_messages, max_messages));
+			int message_count = net->ReceiveMessagesOnChannel(channel_id, messages, std::min(internal_max_messages, max_messages));
 
 			// Drain and release Steam-owned messages before dispatching to Ruby (see
 			// read_messages_on_channel_ruby): static/reused buffer so a raising handler's
@@ -757,6 +803,17 @@ namespace rm_modloader {
 				);
 			}
 
+			return ruby_true;
+		}
+
+		// Pump Steam's callback queue so registered SteamCCallback/SteamCCallResult
+		// handlers (lobby created/entered/chat-update) actually fire. Must be called
+		// every frame from the game thread; BSMP no longer depends on an external
+		// script to do this.
+		static RubyValue __cdecl run_callbacks_ruby(RubyValue object) {
+			if (SteamAPI_RunCallbacks_fn) {
+				SteamAPI_RunCallbacks_fn();
+			}
 			return ruby_true;
 		}
 	};
@@ -810,11 +867,40 @@ namespace rm_modloader {
 		rb_define_singleton_method(SteamAPI::klass, "leave_lobby", &SteamAPI::leave_lobby, 1);
 		rb_define_singleton_method(SteamAPI::klass, "join_lobby", &SteamAPI::join_lobby_ruby, 2);
 		rb_define_singleton_method(SteamAPI::klass, "get_lobby_owner", &SteamAPI::get_lobby_owner_ruby, 1);
+		rb_define_singleton_method(SteamAPI::klass, "run_callbacks", &SteamAPI::run_callbacks_ruby, 0);
 
 		rb_define_singleton_method(SteamAPI::klass, "send_message_to_user", &SteamAPI::send_message_to_user_ruby, 4);
 		rb_define_singleton_method(SteamAPI::klass, "read_messages_on_channel", &SteamAPI::read_messages_on_channel_ruby, 4);
 		rb_define_singleton_method(SteamAPI::klass, "send_basic_packet", &SteamAPI::send_basic_packet_ruby, 4);
 		rb_define_singleton_method(SteamAPI::klass, "read_basic_packets", &SteamAPI::read_basic_packets_ruby, 4);
+	}
+
+	// Steam must be initialised before any interface can be obtained. We only do it
+	// if nobody else already has (the game, the Steam overlay subsystem, or another
+	// mod) -- probed via an interface lookup -- so enabling overlay + steam_support
+	// together never double-inits. We never call SteamAPI_Shutdown (the genuinely
+	// unsafe half of a double-init); a redundant SteamAPI_Init just returns OK.
+	bool ensure_steam_initialized() {
+		if (SteamMatchmaking()) {
+			return true;
+		}
+		if (SteamAPI_InitFlat_fn) {
+			char err[1024] = {};
+			if (SteamAPI_InitFlat_fn(err) == 0) {
+				return true;
+			}
+			mod_loader->log_error("SteamAPI_InitFlat failed: {}\n", err);
+			return false;
+		}
+		if (SteamAPI_Init_fn) {
+			if (SteamAPI_Init_fn()) {
+				return true;
+			}
+			mod_loader->log_error("SteamAPI_Init failed\n");
+			return false;
+		}
+		mod_loader->log_error("steam_api.dll exposes no SteamAPI_Init/InitFlat export\n");
+		return false;
 	}
 
 	bool init_steam_env() {
@@ -834,6 +920,17 @@ namespace rm_modloader {
 		if (!(SteamAPI_RegisterCallResult = get_proc_as<decltype(SteamAPI_RegisterCallResult)>(steam_api_module, "SteamAPI_RegisterCallResult")))
 			return false;
 		if (!(SteamAPI_UnregisterCallResult = get_proc_as<decltype(SteamAPI_UnregisterCallResult)>(steam_api_module, "SteamAPI_UnregisterCallResult")))
+			return false;
+
+		if (!(SteamAPI_RunCallbacks_fn = get_proc_as<decltype(SteamAPI_RunCallbacks_fn)>(steam_api_module, "SteamAPI_RunCallbacks")))
+			return false;
+
+		// Optional: modern InitFlat vs legacy Init. Resolve both; ensure_steam_initialized
+		// picks whichever exists (and skips entirely if Steam is already up).
+		SteamAPI_InitFlat_fn = get_proc_as<decltype(SteamAPI_InitFlat_fn)>(steam_api_module, "SteamAPI_InitFlat");
+		SteamAPI_Init_fn = get_proc_as<decltype(SteamAPI_Init_fn)>(steam_api_module, "SteamAPI_Init");
+
+		if (!ensure_steam_initialized())
 			return false;
 
 		return true;

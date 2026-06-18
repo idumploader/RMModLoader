@@ -9,9 +9,9 @@
 #   read_s2c_packets                 set_skin(actor_id)  set_nick(nick)
 #   show_test_window                 mech
 #
-# Dependencies: Steam runtime (SteamUserStatsLite, SteamAPI, SteamCCallResult,
-#               SteamCCallback, BasicNetworkPacket), MLLocalizedStrings (100).
-# Gate: only loads when SteamUserStatsLite and SteamAPI are defined.
+# Dependencies: Steam runtime (SteamAPI, SteamCCallResult, SteamCCallback,
+#               BasicNetworkPacket), MLLocalizedStrings (100).
+# Gate: only loads when SteamAPI is defined.
 # Defines: BSMPConfig/Events/Client/Server/ServerClient, BSMPPlayer_Character,
 #          BSMPPlayers, BSMP_Window, BSMPProgress_Window; $bsmp_* globals.
 #==============================================================================
@@ -21,7 +21,7 @@ if not $imported["IDL-BSMP"]
 $imported["IDL-BSMP"] = "1.0"
 
 
-if not (Object.const_defined?(:SteamUserStatsLite) and Object.const_defined?(:SteamAPI))
+if not Object.const_defined?(:SteamAPI)
 p "Multiplayer isn't available"
 else
 # --- BSMP DEFINITIONS ---
@@ -244,7 +244,7 @@ class BSMPClient
   end
 
   def initted?
-    return SteamUserStatsLite.instance.initted?
+    return Object.const_defined?(:SteamAPI)
   end
 
   def connected?
@@ -387,7 +387,7 @@ class BSMPServer
   end
 
   def initted?
-    return SteamUserStatsLite.instance.initted?
+    return Object.const_defined?(:SteamAPI)
   end
 
   def running?
@@ -918,7 +918,7 @@ class Scene_Base
   alias bsmp_orig_update update
   def update
     bsmp_orig_update
-    SteamUserStatsLite.instance.update
+    SteamAPI.run_callbacks
     bsmp_read_packets
   end
 
@@ -1027,6 +1027,6 @@ end
 MLLocalizedStrings.add_required("bsmp")
 
 # --- BSMP END ---
-end # if Object.const_defined?(:SteamUserStatsLite) and Object.const_defined?(:SteamAPI)
+end # if Object.const_defined?(:SteamAPI)
 
 end # not $imported["IDL-BSMP"]
