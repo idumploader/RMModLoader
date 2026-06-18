@@ -9,10 +9,12 @@
 
 namespace rm_modloader {
 
+    // --- RGSS module & global state ---
     HMODULE rgss_module = nullptr;
     GameFrame** rgss_game = nullptr;
     FileRepository* file_repository = nullptr;
 
+    // --- RPG Maker / RGSS engine: class methods, engine entry points, offset pointers ---
     int(__thiscall Sprite::* set_sprite_offset)(int x, int y) = nullptr;
     int(__thiscall Sprite::* set_rect)(RECT* new_rect) = nullptr;
 
@@ -29,11 +31,18 @@ namespace rm_modloader {
     RxMemoryFile*(RxMemoryFile::* rx_memory_file_dtx)(bool is_delete) = nullptr;
 
     RxInput*(__thiscall RxInput::* input_update_keys)() = nullptr;
+    int(__cdecl* get_rb_key_symbol_index)(RubyValue symbol_value) = nullptr;
 
     RubyValue(__cdecl* tilemap_initialize)(RubyValue self, int a2, void* a3) = nullptr;
     RubyValue(__cdecl* init_rb_tilemap)(RubyValue self, int a2, void* a3) = nullptr;
     RubyValue(__cdecl* tilemap_bitmaps)(RubyValue self) = nullptr;
 
+    // RGSS engine entry points (hooked) and class objects
+    int(__cdecl* load_data)(int self, int rb_filename) = nullptr;
+    int(__cdecl* startup_scripts)(const wchar_t* scripts_file, StartupScriptsString* rgss3a_filepath) = nullptr;
+    RubyValue* rx_bitmap_class = nullptr;
+
+    // --- Ruby (MRI) runtime: functions, allocators, class & exception objects ---
     RubyValue(__cdecl* rb_str_new_cstr)(const char* ptr) = nullptr;
     RubyValue(__cdecl* rb_str_new)(const char* ptr, long len) = nullptr;
     RubyValue(__cdecl* rb_define_module)(const char* name) = nullptr;
@@ -59,18 +68,11 @@ namespace rm_modloader {
     RubyValue(__cdecl* rb_ary_new4)(long n, const RubyValue* elts) = nullptr;
     int(__cdecl* rb_ary_push)(RubyValue arr, RubyValue value) = nullptr;
 
-    int(__cdecl* load_data)(int self, int rb_filename) = nullptr;
-    int(__cdecl* startup_scripts)(const wchar_t* scripts_file, StartupScriptsString* rgss3a_filepath) = nullptr;
-
-    int(__cdecl* get_rb_key_symbol_index)(RubyValue symbol_value) = nullptr;
-
     void(__cdecl* rgss_free)(void* block) = nullptr;
 
     RubyValue* ruby_error_arg_error = nullptr;
     RubyValue* ruby_c_object = nullptr;
     RubyValue* ruby_c_bignum = nullptr;
-
-    RubyValue* rx_bitmap_class = nullptr;
 
     namespace {
         // All offsets below are resolved against RGSS301 v3.0.1.1. Other RGSS
@@ -130,29 +132,14 @@ namespace rm_modloader {
                 "). ModLoader targets RGSS301 3.0.1.1; aborting to avoid crashes.");
         }
 
+        // --- RGSS module & global state ---
         rgss_game = at_offset<GameFrame**>(rgss_module, 0x25EB00);
         file_repository = at_offset<FileRepository*>(rgss_module, 0x26304C);
 
-        rb_define_method = at_offset<decltype(rb_define_method)>(rgss_module, 0x5EF70);
-        rb_parse_int = at_offset<decltype(rb_parse_int)>(rgss_module, 0x15B40);
-        rb_get_string_data = at_offset<decltype(rb_get_string_data)>(rgss_module, 0x37CA0);
-        eval_rb_cstr = at_offset<decltype(eval_rb_cstr)>(rgss_module, 0x0C5B0);
-        eval_rb_cstr_noerr = at_offset<decltype(eval_rb_cstr_noerr)>(rgss_module, 0xC600);
-        rb_funcall = at_offset<decltype(rb_funcall)>(rgss_module, 0x293A0);
-        rb_raise = at_offset<decltype(rb_raise)>(rgss_module, 0x26440);
-        get_rb_error_string = at_offset<decltype(get_rb_error_string)>(rgss_module, 0xD3E0);
-        tilemap_initialize = at_offset<decltype(tilemap_initialize)>(rgss_module, 0x15180);
-        init_rb_tilemap = at_offset<decltype(init_rb_tilemap)>(rgss_module, 0x14E00);
-
-        rb_str_new_cstr = at_offset<decltype(rb_str_new_cstr)>(rgss_module, 0x36570);
-        rb_str_new = at_offset<decltype(rb_str_new)>(rgss_module, 0x364C0);
-        rb_define_module = at_offset<decltype(rb_define_module)>(rgss_module, 0x5E990);
-        rb_define_function = at_offset<decltype(rb_define_function)>(rgss_module, 0x5F270);
-        rb_define_class = at_offset<decltype(rb_define_class)>(rgss_module, 0x5E740);
-        rb_define_singleton_method = at_offset<decltype(rb_define_singleton_method)>(rgss_module, 0x5F1E0);
-        rb_define_alloc_func = at_offset<decltype(rb_define_alloc_func)>(rgss_module, 0x32E20);
-
-        tilemap_bitmaps = at_offset<decltype(tilemap_bitmaps)>(rgss_module, 0x15520);
+        // --- RPG Maker / RGSS engine: class methods, engine entry points, offset pointers ---
+        set_sprite_offset = at_offset<decltype(set_sprite_offset)>(rgss_module, 0x110F40);
+        set_rect = at_offset<decltype(set_rect)>(rgss_module, 0x110FF0);
+        surface_init_bitmap = at_offset<decltype(surface_init_bitmap)>(rgss_module, 0x10B3B0);
         tilemap_render_tiles = at_offset<decltype(tilemap_render_tiles)>(rgss_module, 0x21D40);
         game_frame_resize_screen = at_offset<decltype(game_frame_resize_screen)>(rgss_module, 0x20D0);
         screen_resize_screen = at_offset<decltype(screen_resize_screen)>(rgss_module, 0x10DC30);
@@ -160,32 +147,42 @@ namespace rm_modloader {
         file_repository_file_at_index = at_offset<decltype(file_repository_file_at_index)>(rgss_module, 0xF2E0);
         read_into_rx_memory_file = at_offset<decltype(read_into_rx_memory_file)>(rgss_module, 0xCAE0);
         rx_memory_file_dtx = at_offset<decltype(rx_memory_file_dtx)>(rgss_module, 0x1C3D0);
-        surface_init_bitmap = at_offset<decltype(surface_init_bitmap)>(rgss_module, 0x10B3B0);
         input_update_keys = at_offset<decltype(input_update_keys)>(rgss_module, 0x1B4D0);
-        set_sprite_offset = at_offset<decltype(set_sprite_offset)>(rgss_module, 0x110F40);
-        set_rect = at_offset<decltype(set_rect)>(rgss_module, 0x110FF0);
+        get_rb_key_symbol_index = at_offset<decltype(get_rb_key_symbol_index)>(rgss_module, 0x0C340);
+        tilemap_initialize = at_offset<decltype(tilemap_initialize)>(rgss_module, 0x15180);
+        init_rb_tilemap = at_offset<decltype(init_rb_tilemap)>(rgss_module, 0x14E00);
+        tilemap_bitmaps = at_offset<decltype(tilemap_bitmaps)>(rgss_module, 0x15520);
+        load_data = at_offset<decltype(load_data)>(rgss_module, 0xCDE0);
+        startup_scripts = at_offset<decltype(startup_scripts)>(rgss_module, 0xEA50);
+        rx_bitmap_class = at_offset<RubyValue*>(rgss_module, 0x261B14);
 
+        // --- Ruby (MRI) runtime: functions, allocators, class & exception objects ---
+        rb_str_new_cstr = at_offset<decltype(rb_str_new_cstr)>(rgss_module, 0x36570);
+        rb_str_new = at_offset<decltype(rb_str_new)>(rgss_module, 0x364C0);
+        rb_define_module = at_offset<decltype(rb_define_module)>(rgss_module, 0x5E990);
+        rb_define_function = at_offset<decltype(rb_define_function)>(rgss_module, 0x5F270);
+        rb_define_class = at_offset<decltype(rb_define_class)>(rgss_module, 0x5E740);
+        rb_define_singleton_method = at_offset<decltype(rb_define_singleton_method)>(rgss_module, 0x5F1E0);
+        rb_define_method = at_offset<decltype(rb_define_method)>(rgss_module, 0x5EF70);
+        rb_define_alloc_func = at_offset<decltype(rb_define_alloc_func)>(rgss_module, 0x32E20);
+        rb_parse_int = at_offset<decltype(rb_parse_int)>(rgss_module, 0x15B40);
+        rb_get_string_data = at_offset<decltype(rb_get_string_data)>(rgss_module, 0x37CA0);
+        eval_rb_cstr = at_offset<decltype(eval_rb_cstr)>(rgss_module, 0x0C5B0);
+        eval_rb_cstr_noerr = at_offset<decltype(eval_rb_cstr_noerr)>(rgss_module, 0xC600);
+        rb_funcall = at_offset<decltype(rb_funcall)>(rgss_module, 0x293A0);
+        rb_raise = at_offset<decltype(rb_raise)>(rgss_module, 0x26440);
+        get_rb_error_string = at_offset<decltype(get_rb_error_string)>(rgss_module, 0xD3E0);
         rb_big_new = at_offset<decltype(rb_big_new)>(rgss_module, 0x60130);
         alloc_rb_rdata = at_offset<decltype(alloc_rb_rdata)>(rgss_module, 0x590C0);
         make_rb_rdata = at_offset<decltype(make_rb_rdata)>(rgss_module, 0x59360);
-
         rb_ary_new = at_offset<decltype(rb_ary_new)>(rgss_module, 0x88F70);
         rb_ary_new2 = at_offset<decltype(rb_ary_new2)>(rgss_module, 0x88F50);
         rb_ary_new4 = at_offset<decltype(rb_ary_new4)>(rgss_module, 0x89000);
         rb_ary_push = at_offset<decltype(rb_ary_push)>(rgss_module, 0x8D450);
-
-        load_data = at_offset<decltype(load_data)>(rgss_module, 0xCDE0);
-        startup_scripts = at_offset<decltype(startup_scripts)>(rgss_module, 0xEA50);
-
-        get_rb_key_symbol_index = at_offset<decltype(get_rb_key_symbol_index)>(rgss_module, 0x0C340);
-
         rgss_free = at_offset<decltype(rgss_free)>(rgss_module, 0x1827C8);
-
         ruby_error_arg_error = at_offset<RubyValue*>(rgss_module, 0x2AC108);
         ruby_c_object = at_offset<RubyValue*>(rgss_module, 0x2AC098);
         ruby_c_bignum = at_offset<RubyValue*>(rgss_module, 0x2AC048);
-
-        rx_bitmap_class = at_offset<RubyValue*>(rgss_module, 0x261B14);
     }
 
 }
