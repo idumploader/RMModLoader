@@ -86,6 +86,18 @@ target_compile_definitions(ModLoader PRIVATE _DISABLE_CONSTEXPR_MUTEX_CONSTRUCTO
 target_link_options(ModLoader PRIVATE "/MAP")
 #target_precompile_headers(ModLoader PRIVATE "src/pch.h")
 
+# The vendored Steamworks SDK headers (src/ModLoader/Steam) use deprecated CRT
+# calls (strncpy in matchmakingtypes.h) -> C4996. Don't patch the SDK; suppress
+# the deprecation only on the TUs that pull it in.
+set_source_files_properties(
+  "src/ModLoader/Hooks/SteamSupportHooks.cpp"
+  "src/ModLoader/SteamOverlay/SteamOverlay.cpp"
+  "src/ModLoader/SteamOverlay/SteamLoader.cpp"
+  "src/ModLoader/SteamOverlay/FakeRenderer.cpp"
+  PROPERTIES COMPILE_DEFINITIONS _CRT_SECURE_NO_WARNINGS
+)
+
+
 target_link_libraries(ModLoader PRIVATE
   $<BUILD_INTERFACE:
     ${STAPLEGL_LIBRARIES}
@@ -98,11 +110,16 @@ target_link_libraries(ModLoader PRIVATE
   >
 )
 
-target_include_directories(ModLoader PRIVATE
+target_include_directories(ModLoader SYSTEM PRIVATE
   ${STAPLEGL_INCLUDE_DIRS}
 #  ${MKXPZ_ROOT}/src
 #  ${MKXPZ_ROOT}/src/util
 )
+
+# Treat the vendored StapleGL headers as system headers so their internal
+# warnings (e.g. C4244 in utility.hpp) don't pollute our build. /external:W0
+# applies a zero warning level to headers reached via /external:I (SYSTEM above).
+target_compile_options(ModLoader PRIVATE /external:W0)
 
 set_property(TARGET ModLoader PROPERTY CXX_STANDARD 20)
 
