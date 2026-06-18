@@ -120,7 +120,7 @@ The `ModLoader` module is available from any user script and provides an API for
 
 ## Antivirus False Positives
 
-Some antivirus engines flag `ModLoader.dll` / `Loader.exe`. This is a **heuristic false positive**, not actual malware:
+Some antivirus engines flag `Loader.exe` — the injector that launches the game and loads the DLL, which to a heuristic looks exactly like a malware loader (`ModLoader.dll` itself is usually clean). This is a **heuristic false positive**, not actual malware:
 
 - The loader injects a DLL into the game process and installs inline hooks (via [MinHook](https://github.com/TsudaKageyu/minhook)) on RGSS functions — the same technique cheats and malware use, so generic heuristics flag it.
 - The release binaries are **unsigned** (no code-signing certificate), which pushes the heuristic score higher.
@@ -129,7 +129,7 @@ What you can do:
 
 - **Build it yourself** from source (see [Build](#build)) so you run a binary you compiled.
 - Add the loader files to your antivirus **exclusions**.
-- Check the binary on [VirusTotal](https://www.virustotal.com/) — the hits are generic/heuristic names (e.g. `Trojan.Generic`, `Wacatac`), not a specific known threat.
+- Check the binary on [VirusTotal](https://www.virustotal.com/) — the few hits are generic/heuristic labels (e.g. `Mal/EncPk-ACO`, `encpk`, ML-score names) that **come and go between rescans**, not a specific known threat. A real threat would be flagged consistently by many engines, not by the 3–5 that keep changing.
 
 If you would rather not trust a prebuilt binary, building from source is always the safe option.
 
