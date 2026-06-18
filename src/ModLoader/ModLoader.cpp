@@ -557,11 +557,20 @@ namespace rm_modloader {
 			}
 			return index;
 		};
-		std::sort(scripts_entries.begin(), scripts_entries.end(), [&entry_to_enum_index](const auto& left, const auto& right) {
-			return entry_to_enum_index(left) < entry_to_enum_index(right);
+		// Compute each file's enumeration index once up front; doing it inside the
+		// sort comparator would re-run it (and re-log the invalid-name warning) on
+		// every comparison.
+		std::vector<std::pair<int64_t, std::filesystem::directory_entry>> indexed_entries;
+		indexed_entries.reserve(scripts_entries.size());
+		for (auto& entry : scripts_entries) {
+			indexed_entries.emplace_back(entry_to_enum_index(entry), entry);
+		}
+		std::sort(indexed_entries.begin(), indexed_entries.end(), [](const auto& left, const auto& right) {
+			return left.first < right.first;
 		});
 
-		for (auto& entry : scripts_entries) {
+		for (auto& indexed_entry : indexed_entries) {
+			const std::filesystem::directory_entry& entry = indexed_entry.second;
 			std::ifstream script_is(entry.path());
 			std::string script_content((std::istreambuf_iterator<char>(script_is)), std::istreambuf_iterator<char>());
 
