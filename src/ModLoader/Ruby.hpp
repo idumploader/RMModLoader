@@ -1,6 +1,8 @@
 #pragma once
 
 #include <concepts>
+#include <cstdint>
+#include <type_traits>
 
 namespace rm_modloader {
 	using RubyValue = unsigned int;
@@ -42,10 +44,10 @@ namespace rm_modloader {
 
 	using RubyID = unsigned int;
 
-	constexpr RubyValue ruby_false{ 0 };
-	constexpr RubyValue ruby_true { 2 };
-	constexpr RubyValue ruby_nil  { 4 };
-	constexpr RubyValue ruby_undef{ 6 };
+	inline constexpr RubyValue ruby_false{ 0 };
+	inline constexpr RubyValue ruby_true { 2 };
+	inline constexpr RubyValue ruby_nil  { 4 };
+	inline constexpr RubyValue ruby_undef{ 6 };
 
 	enum RubyValueType {
 		RUBY_T_NONE = 0x00,
@@ -95,8 +97,8 @@ namespace rm_modloader {
 	// check
 	using RubyBDigit = unsigned long;
 
-	constexpr long ruby_bignum_embed_len_max = sizeof(RubyValue) * 3 / sizeof(RubyBDigit);
-	constexpr long ruby_string_embed_len_max = sizeof(RubyValue) * 3 / sizeof(char) - 1;
+	inline constexpr long ruby_bignum_embed_len_max = sizeof(RubyValue) * 3 / sizeof(RubyBDigit);
+	inline constexpr long ruby_string_embed_len_max = sizeof(RubyValue) * 3 / sizeof(char) - 1;
 
 	struct RubyRBignum {
 		RubyRBasic basic;
@@ -124,12 +126,12 @@ namespace rm_modloader {
 		} as;
 	};
 
-	constexpr int ruby_special_shift                 { 8 };
-	constexpr int ruby_flags_ushift                  { 12 };
-	constexpr RubyValueFlag ruby_fixnum_flag         { 0x1 };
-	constexpr RubyValueFlag ruby_symbol_flag         { 0xe };
-	constexpr RubyValueFlag ruby_immediate_mask      { 0x3 };
-	constexpr RubyValueFlag ruby_flag_string_no_embed{ 1 << (ruby_flags_ushift + 1) };
+	inline constexpr int ruby_special_shift                 { 8 };
+	inline constexpr int ruby_flags_ushift                  { 12 };
+	inline constexpr RubyValueFlag ruby_fixnum_flag         { 0x1 };
+	inline constexpr RubyValueFlag ruby_symbol_flag         { 0xe };
+	inline constexpr RubyValueFlag ruby_immediate_mask      { 0x3 };
+	inline constexpr RubyValueFlag ruby_flag_string_no_embed{ 1 << (ruby_flags_ushift + 1) };
 
 	inline constexpr bool is_rb_symbol(RubyValue value) {
 		constexpr RubyValueFlag symbol_mask{ (1u << ruby_special_shift) - 1u };
@@ -154,7 +156,7 @@ namespace rm_modloader {
 		return static_cast<T*>(data->data);
 	}
 
-	constexpr RubyValueType rb_type(RubyValue value) {
+	inline RubyValueType rb_type(RubyValue value) {
 		if (is_rb_immediate(value)) {
 			if (value == ruby_true) return RUBY_T_TRUE;
 			if (value == ruby_undef) return RUBY_T_UNDEF;
@@ -190,20 +192,31 @@ namespace rm_modloader {
 		return std::string_view(string->as.ary);
 	}
 
+	// Forward-declared here so Ruby.hpp need not include RMGlobal.hpp (which itself
+	// includes Ruby.hpp -> circular). Canonical extern + runtime init are in RMGlobal.
 	extern RubyValue(__cdecl* rb_big_new)(int len, bool is_positive);
 
 	template<std::integral T>
-	inline RubyValue rb_i642num(T num) {
+	inline RubyValue rb_i642num(T value) {
+		// Work on a fixed 64-bit copy so the `>> 32` below can never shift past the
+		// operand width (UB) when T is 32-bit or narrower. Every current caller
+		// passes a 64-bit Steam ID, so for them this is a no-op.
+		using Wide = std::conditional_t<std::signed_integral<T>, int64_t, uint64_t>;
+		Wide num = value;
 		if constexpr (std::signed_integral<T>) {
 			if ((abs(num) >> 31) == 0)
-				return rb_make_number(num);
+				return rb_make_number(static_cast<long>(num));
 		}
 		else {
 			if ((num >> 31) == 0)
-				return rb_make_number(num);
+				return rb_make_number(static_cast<long>(num));
 		}
 
-		RubyValue big_value = rb_big_new((num >> 32) == 0 ? 1 : 2, num >= 0);
+		// A Bignum stores the magnitude as 32-bit digits: one covers the low 32 bits,
+		// a second is only needed when the high 32 bits are non-zero. The sign is a
+		// separate argument (num >= 0), not part of the digit count.
+		const int digit_count = (num >> 32) == 0 ? 1 : 2;
+		RubyValue big_value = rb_big_new(digit_count, num >= 0);
 		RubyRBignum* big_num = reinterpret_cast<RubyRBignum*>(big_value);
 		if constexpr (std::signed_integral<T>) {
 			num = abs(num);
@@ -218,7 +231,11 @@ namespace rm_modloader {
 			return value >> 1;
 		}
 
-		// TODO: check for bignum
+		// Callers guarantee a Fixnum or Bignum (they check_ruby_type up front); guard
+		// anyway so a stray non-Bignum value can't reinterpret unrelated memory.
+		if (rb_type(value) != RUBY_T_BIGNUM) {
+			return 0;
+		}
 
 		RubyRBignum* big_num = reinterpret_cast<RubyRBignum*>(value);
 		uint64_t out = big_num->as.ary[0];
