@@ -26,7 +26,7 @@ class CustomOutputRedirector
 end
 
 def mod_loader_output_log(message)
-	ModLoader.log(message)
+  ModLoader.log(message)
 end
 
 redirector = CustomOutputRedirector.new(method(:mod_loader_output_log))
