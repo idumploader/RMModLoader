@@ -8,12 +8,6 @@ namespace rm_modloader {
 		ModLoaderConfig();
 		ModLoaderConfig(const std::filesystem::path& filepath);
 
-		int get_required_width() const;
-		int get_required_height() const;
-		bool is_hrfix_enabled() const;
-		bool is_fast_render_enabled() const;
-		bool is_controls_change_enabled() const;
-
 		/**
 		 * Check if key contains in config
 		 * @param key Key name to check
@@ -37,11 +31,6 @@ namespace rm_modloader {
 		const nlohmann::json* get(std::string_view key) const noexcept;
 
 	private:
-		int required_width_;
-		int required_height_;
-		bool hrfix_enabled_;
-		bool fast_render_enabled_;
-		bool controls_change_enabled_;
 	
 		nlohmann::json config_;
 	};

@@ -2,50 +2,29 @@
 #include "ModLoader.hpp"
 
 #include <fstream>
+#include <iterator>
+#include <string>
 #include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
 
 namespace rm_modloader {
-	ModLoaderConfig::ModLoaderConfig() :
-		required_width_(1920),
-		required_height_(1000),
-		hrfix_enabled_(true),
-		fast_render_enabled_(false),
-		controls_change_enabled_(true)
+	ModLoaderConfig::ModLoaderConfig()
 	{
 
 	}
 
 	ModLoaderConfig::ModLoaderConfig(const std::filesystem::path& filepath) : ModLoaderConfig() {
 		std::ifstream config_is(filepath);
-		config_ = json::parse(config_is);
+		std::string content((std::istreambuf_iterator<char>(config_is)), std::istreambuf_iterator<char>());
 
-		required_width_ = config_.at("width");
-		required_height_ = config_.at("height");
-		hrfix_enabled_ = config_.at("hrfix_enable");
-		fast_render_enabled_ = config_.at("fast_render");
-		controls_change_enabled_ = config_.at("controls_change");
-	}
+		// An absent or empty mod_loader.json is a valid "use all defaults" state, not
+		// an error: leave config_ empty so every get() falls back to its default.
+		if (content.find_first_not_of(" \t\r\n") == std::string::npos) {
+			return;
+		}
 
-	int ModLoaderConfig::get_required_width() const {
-		return required_width_;
-	}
-
-	int ModLoaderConfig::get_required_height() const {
-		return required_height_;
-	}
-
-	bool ModLoaderConfig::is_hrfix_enabled() const {
-		return hrfix_enabled_;
-	}
-
-	bool ModLoaderConfig::is_fast_render_enabled() const {
-		return fast_render_enabled_;
-	}
-
-	bool ModLoaderConfig::is_controls_change_enabled() const {
-		return controls_change_enabled_;
+		config_ = json::parse(content);
 	}
 
 	bool ModLoaderConfig::contains(std::string_view key) const {

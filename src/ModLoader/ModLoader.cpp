@@ -214,15 +214,18 @@ namespace rm_modloader {
 
 	struct ModLoaderRubyModule {
 		static RubyValue __cdecl hrfix_enabled(RubyValue module) {
-			return mod_loader->get_config().is_hrfix_enabled() ? ruby_true : ruby_false;
+			const nlohmann::json* c = mod_loader->get_config().get("hrfix_enable");
+			return (!c || c->get<bool>()) ? ruby_true : ruby_false;
 		}
 
 		static RubyValue __cdecl fast_render_enabled(RubyValue module) {
-			return mod_loader->get_config().is_fast_render_enabled() ? ruby_true : ruby_false;
+			const nlohmann::json* c = mod_loader->get_config().get("fast_render");
+			return (c && c->get<bool>()) ? ruby_true : ruby_false;
 		}
 
 		static RubyValue __cdecl controls_change_enabled(RubyValue module) {
-			return mod_loader->get_config().is_controls_change_enabled() ? ruby_true : ruby_false;
+			const nlohmann::json* c = mod_loader->get_config().get("controls_change");
+			return (!c || c->get<bool>()) ? ruby_true : ruby_false;
 		}
 
 		static RubyValue __cdecl data_directory(RubyValue module) {
@@ -280,10 +283,10 @@ namespace rm_modloader {
 	};
 
 	struct ModLoaderCoreHooks {
-		static int(__cdecl* orig_load_data)(RubyValue self, RubyValue a2);
-		static int(__cdecl* orig_startup_scripts)(const wchar_t* scripts_file, StartupScriptsString* compressed);
+		static decltype(load_data) orig_load_data;
+		static decltype(startup_scripts) orig_startup_scripts;
 
-		static int __cdecl load_data_hook(RubyValue self, RubyValue a2) {
+		static RubyValue __cdecl load_data_hook(RubyValue self, RubyValue a2) {
 			const char* name = rb_get_string_data(&a2);
 			mod_loader->log_info("load_data: {}\n", name);
 
@@ -320,20 +323,24 @@ namespace rm_modloader {
 		}
 	};
 
-	int(__cdecl* ModLoaderCoreHooks::orig_load_data)(RubyValue self, RubyValue a2) = nullptr;
-	int(__cdecl* ModLoaderCoreHooks::orig_startup_scripts)(const wchar_t* scripts_file, StartupScriptsString* compressed) = nullptr;
+	decltype(load_data) ModLoaderCoreHooks::orig_load_data = nullptr;
+	decltype(startup_scripts) ModLoaderCoreHooks::orig_startup_scripts = nullptr;
 
 	ModLoaderCore::ModLoaderCore(std::filesystem::path loader_root_path) :
 		modloader_root_(std::move(loader_root_path)),
 		last_patch_id_(0),
 		last_handler_id_(0)
 	{
+		const auto config_path = modloader_root_ / modloader_data_dir / "mod_loader.json";
+		std::error_code config_ec;
+		if (!std::filesystem::exists(config_path, config_ec) || std::filesystem::file_size(config_path, config_ec) == 0) {
+			log_warning("mod_loader.json is missing or empty - using built-in defaults\n");
+		}
 		try {
-			config_ = ModLoaderConfig(modloader_root_ / modloader_data_dir / "mod_loader.json");
+			config_ = ModLoaderConfig(config_path);
 		}
 		catch (const std::exception& e) {
-			log_info("Failed to load config: {}\n", e.what());
-			log_info("Using default values: \"width\"=1920, \"height\"=1000, \"hrfix_enable\"=true, \"fast_render_enabled\"=false,\"controls_change\"=true\n");
+			log_error("Failed to load config: {}\n", e.what());
 		}
 		setup_directories();
 	}

@@ -1297,7 +1297,7 @@ namespace rm_modloader {
 	int(__cdecl* RxViewportHook::orig_set_flash_data)(int a1, int a2) = nullptr;
 
 	void apply_fast_render() {
-		if (!mod_loader->get_config().is_fast_render_enabled()) {
+		if (const auto* c = mod_loader->get_config().get("fast_render"); !c || !c->get<bool>()) {
 			mod_loader->log_info("FastRender disabled in config\n");
 			return;
 		}
@@ -1305,8 +1305,10 @@ namespace rm_modloader {
 		// Execute in postinit, because can't use LoadLibrary (used by glad and glfw) inside DllMain,
 		// so call it after game initialization
 		mod_loader->add_preinit_handler([] {
-			int window_width = mod_loader->get_config().get_required_width();
-			int window_height = mod_loader->get_config().get_required_height();
+			const auto* w_cfg = mod_loader->get_config().get("width");
+			const auto* h_cfg = mod_loader->get_config().get("height");
+			int window_width = w_cfg ? w_cfg->get<int>() : 640;
+			int window_height = h_cfg ? h_cfg->get<int>() : 480;
 
 			GLFWwindow* window = GLRenderer::make_window(window_width, window_height);
 			if (!window) {
