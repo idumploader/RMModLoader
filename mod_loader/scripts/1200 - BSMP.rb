@@ -536,7 +536,7 @@ class BSMPPlayers
 
   def add(player_id, nickname)
     return if @bsmp_players.key?(player_id)
-    new_character = BSMPPlayer_Character.new(player_id, "$アリス", nickname)
+    new_character = BSMPPlayer_Character.new(player_id, "", nickname)
     @bsmp_players[player_id] = new_character
 
     SceneManager.scene.spriteset.add_player(new_character) if SceneManager.scene.class == Scene_Map
