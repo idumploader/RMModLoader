@@ -27,6 +27,10 @@
 # Version gate: ModLoader.version != "2.4"
 #==============================================================================
 
+$imported ||= {}
+if not $imported["IDL-PrependPatch"]
+$imported["IDL-PrependPatch"] = "1.0"
+
 if ModLoader.version != "2.4"
 
 module ModLoader
@@ -63,3 +67,5 @@ module ModLoader
 end
 
 end # ModLoader.version != "2.4"
+
+end # not $imported["IDL-PrependPatch"]
