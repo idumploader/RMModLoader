@@ -21,6 +21,19 @@ BOOL WINAPI is_debugger_present_hook() {
 	return false;
 }
 
+namespace {
+	// Explicit lossy wide->narrow conversion for ASCII-only log lines. Avoids
+	// C4244 from the std::string(wide_begin, wide_end) range constructor.
+	std::string to_narrow(std::wstring_view wide) {
+		std::string narrow;
+		narrow.reserve(wide.size());
+		for (wchar_t c : wide) {
+			narrow.push_back(static_cast<char>(c));
+		}
+		return narrow;
+	}
+}
+
 namespace rm_modloader::detail {
 
 	namespace {
@@ -298,7 +311,7 @@ namespace rm_modloader {
 		static int __cdecl startup_scripts_hook(const wchar_t* scripts_file, StartupScriptsString* compressed) {
 			auto name = std::wstring_view(scripts_file);
 			auto compressed_view = std::wstring_view(compressed->buffer);
-			mod_loader->log_info("startup_scripts: loading from {}. RGSS string: {}\n", std::string(name.begin(), name.end()), std::string(compressed_view.begin(), compressed_view.end()));
+			mod_loader->log_info("startup_scripts: loading from {}. RGSS string: {}\n", to_narrow(name), to_narrow(compressed_view));
 
 			mod_loader->setup_mod_loader_ruby_module();
 			mod_loader->on_preinit();
@@ -558,7 +571,7 @@ namespace rm_modloader {
 
 				std::wstring_view error_wstr = error_buffer.data();
 				auto parsed_error = error_wstr | std::views::transform([](wchar_t c) {
-					return std::iswprint(c) || c == L'\n' ? c : L'?';
+					return static_cast<char>(std::iswprint(c) || c == L'\n' ? c : L'?');
 				});
 				log_error(
 					"Failed executing script: {}\n"

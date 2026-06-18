@@ -102,7 +102,7 @@ void Tex_SaveToBMP(const char* filename,
 	bih.biCompression = BI_RGB;
 	bih.biSizeImage   = (DWORD)width * abs_h * 4;
 
-	FILE* f = fopen(filename, "wb");
+	FILE* f = nullptr; fopen_s(&f, filename, "wb");
 	if (!f) return;
 	fwrite(&bfh, sizeof(bfh), 1, f);
 	fwrite(&bih, sizeof(bih), 1, f);

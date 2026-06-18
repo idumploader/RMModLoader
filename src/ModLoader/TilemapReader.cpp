@@ -147,7 +147,7 @@ namespace rm_modloader::tilemap {
 	 */
 	void read_autotile(TilemapReader& reader, const glm::vec3& origin, const glm::vec2& tex_offset,
 		int pattern_id, std::span<const glm::vec2[4]> sources, int texture_index, const glm::vec2& animation_stride) {
-		if (pattern_id >= sources.size()) {
+		if (static_cast<size_t>(pattern_id) >= sources.size()) {
 			return;
 		}
 
@@ -468,7 +468,7 @@ namespace rm_modloader::tilemap {
 				for (size_t x = 0; x < width; ++x) {
 					size_t index = z * height * width + y * width + x;
 					int16_t tile_id = tilemap->map_data[index];
-					int16_t tile_flag = tile_id < tilemap->flags_count ? tilemap->flags[tile_id] : 0;
+					int16_t tile_flag = static_cast<DWORD>(tile_id) < tilemap->flags_count ? tilemap->flags[tile_id] : 0;
 
 					read_tile_primitives(reader, tile_id, tile_flag, glm::vec3(x * 32, y * 32, z_offset + z));
 				}

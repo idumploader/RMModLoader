@@ -1,3 +1,14 @@
+// FastRenderHooks is a work-in-progress experiment; its warnings (including
+// those from template instantiations it triggers in STL / StapleGL headers)
+// are silenced wholesale until it stabilizes. Remove this push/pop when the
+// file is productionized.
+#pragma warning(push, 0)
+// Disable specific codes by number too: STL headers do their own
+// #pragma warning(push, 3) which overrides the level-based push,0 above, but
+// the per-number disabled-list survives it (suppresses header-origin template
+// instantiation warnings: C4244/C4834 from emplace_back / std::optional).
+#pragma warning(disable: 4244 4267 4018 4834)
+
 #include "FastRenderHooks.hpp"
 #include "../ModLoader.hpp"
 #include "../TilemapReader.hpp"
@@ -1324,3 +1335,6 @@ namespace rm_modloader {
 		});
 	}
 };
+
+// end of FastRenderHooks warning silencing
+#pragma warning(pop)
