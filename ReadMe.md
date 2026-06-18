@@ -24,7 +24,7 @@ A mod loader for **RPG Maker VX Ace** — allows you to execute custom Ruby scri
 - **HRFix** — fix resolution issues above 640×480
 - **Controls customization** — remap keys and enable gamepad support (`ControlsChange`)
 - **Script reset** — restore Ruby environment state and reload scripts (`ModResetter`)
-- **Developer console** — execute arbitrary Ruby code during gameplay (`ExecutorScene`)
+- **Developer console** — execute arbitrary Ruby code during gameplay, with built-in commands and persistent key bindings (`ExecutorScene`; see [docs/console-commands.md](docs/console-commands.md))
 - **Item give window** — quickly search and obtain items, weapons, and armor (`MapExecutorWindow`)
 - **Crash fix** — guards against the battle-start crash and a double-dispose use-after-free in RGSS sprite teardown (`SpriteDisposeFix`)
 - **Focus control** — optionally keep the game running while its window is in the background, without leaking background input (`disable_focus_pause`)
@@ -51,7 +51,7 @@ A mod loader for **RPG Maker VX Ace** — allows you to execute custom Ruby scri
 | **ControlsChange** | Allows key remapping and enables gamepad support. Only works when `"controls_change": true` in config |
 | **ModResetter** | Takes a snapshot of all Ruby classes and methods at startup. The `mod_reset` function restores the original state and reloads scripts. Useful for hot-reloading mods without restarting the game |
 | **LocalizeLayer** | Replaces any `.rvdata2` file (including `Scripts.rvdata2`) with custom ones from `mod_loader/`. Hooks into `load_data` to intercept and substitute files. Useful for localization and modifying system data |
-| **ExecutorScene** (console) | Developer console. Opens with **F9** during gameplay. Allows executing arbitrary Ruby code with command history. Available commands: `give(id, amount)` — give item, `tp(x, y)` — teleport, `maptp(id)` — teleport to map, `run_event(id)` — run common event, `setvar(id, value)` / `setswitch(id, value)` — set variables and switches |
+| **ExecutorScene** (console) | Developer console. Opens with **F9** during gameplay. Executes arbitrary Ruby code with command history, plus built-in helpers (give items, teleport, set stats, win battle, noclip, persistent key bindings, …). See the full [Console Commands](docs/console-commands.md) reference |
 | **MapExecutorWindow** (give) | Item/weapon/armor give window. Opens with **T** on the map. Categories switchable via tabs, shows item ID. Blocks player movement while the window is open |
 | **GameDumper** | Dumps all game files (including encrypted/packaged) to a specified folder. Call via console: `dump_rvdata("folder")`. Useful for extracting assets from protected projects |
 
