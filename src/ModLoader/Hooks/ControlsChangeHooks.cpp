@@ -24,7 +24,6 @@ namespace rm_modloader {
 		if (orig_virt_key > 0xFF) {
 			return ruby_false;
 		}
-		mod_loader->log_info("ControlChanger: hooked {:x} => {:x}\n", orig_virt_key, virt_key);
 		controls_changer_binds[orig_virt_key] = virt_key;
 		return ruby_true;
 	}

@@ -10,6 +10,15 @@
 #include <mutex>
 #include <condition_variable>
 
+// Per-frame tilemap/sprite trace logging. Off by default - it fires every frame
+// and floods the log; define HRFIX_TRACE to re-enable it while debugging the
+// HRFix offset/tilemap logic. Arguments are not evaluated when disabled.
+#ifdef HRFIX_TRACE
+#define HRFIX_TRACE_LOG(...) mod_loader->log_info(__VA_ARGS__)
+#else
+#define HRFIX_TRACE_LOG(...) ((void)0)
+#endif
+
 namespace rm_modloader {
 
     int hrfix_render_width = 640;
@@ -52,7 +61,7 @@ namespace rm_modloader {
 
         RxPatchTilemap* tilemap = get_patch_tilemap_from_rb(a3);
         tilemap->map_id = -1;
-        mod_loader->log_info("tilemap_initialize: setted map_id to -1 at (0x{:X})\n", reinterpret_cast<uintptr_t>(tilemap));
+        HRFIX_TRACE_LOG("tilemap_initialize: setted map_id to -1 at (0x{:X})\n", reinterpret_cast<uintptr_t>(tilemap));
 
         return ret;
     }
@@ -95,8 +104,8 @@ namespace rm_modloader {
             old_tile_width = *tilesize_width;
             old_tile_height = *tilesize_height;
 
-            mod_loader->log_info("render_tilemap_tiles: tilemap (0x{:X}), map_id={}\n", reinterpret_cast<uintptr_t>(tilemap), reinterpret_cast<RxPatchTilemap*>(tilemap)->map_id);
-            mod_loader->log_info("render_tilemap_tiles: changed render tile size to {}x{}\n", old_tile_width, old_tile_height);
+            HRFIX_TRACE_LOG("render_tilemap_tiles: tilemap (0x{:X}), map_id={}\n", reinterpret_cast<uintptr_t>(tilemap), reinterpret_cast<RxPatchTilemap*>(tilemap)->map_id);
+            HRFIX_TRACE_LOG("render_tilemap_tiles: changed render tile size to {}x{}\n", old_tile_width, old_tile_height);
         }
 
         return (this->*orig_render_tilemap_tiles)(surf, in_rect);
@@ -149,9 +158,9 @@ namespace rm_modloader {
                     map_offset_y = 0;
                 }
 
-                mod_loader->log_info("set_sprite_offset: tilemap map_id={}\n", reinterpret_cast<RxPatchTilemap*>(tilemap_sprite->tilemap)->map_id);
-                mod_loader->log_info("set_sprite_offset: new offset x={}, y={}\n", map_offset_x, map_offset_y);
-                mod_loader->log_info("set_sprite_offset: map changed width={}, height={}\n", current_map_width, current_map_height);
+                HRFIX_TRACE_LOG("set_sprite_offset: tilemap map_id={}\n", reinterpret_cast<RxPatchTilemap*>(tilemap_sprite->tilemap)->map_id);
+                HRFIX_TRACE_LOG("set_sprite_offset: new offset x={}, y={}\n", map_offset_x, map_offset_y);
+                HRFIX_TRACE_LOG("set_sprite_offset: map changed width={}, height={}\n", current_map_width, current_map_height);
             }
         }
 

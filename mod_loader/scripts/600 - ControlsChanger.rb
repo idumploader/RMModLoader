@@ -42,6 +42,8 @@ ModLoader.gamepad_bind(GamepadButtons::B, :X)
 ModLoader.gamepad_bind(GamepadButtons::RIGHT_BUMPER, :SHIFT)
 # --- GAMEPAD CONTROLS SETTINGS ---
 
+puts "[ControlsChanger] custom key & gamepad bindings applied"
+
 end # ModLoader.controls_change_enabled
 
 end # not $imported["IDL-ControlsChange"]
