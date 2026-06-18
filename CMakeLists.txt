@@ -11,7 +11,7 @@ if (CMAKE_TOOLCHAIN_FILE MATCHES "vcpkg.cmake")
   include(${CMAKE_TOOLCHAIN_FILE})
 endif()
 
-project(rmforge LANGUAGES CXX C VERSION 3.1)
+project(rmforge LANGUAGES CXX C VERSION 3.2)
 
 include(CMakePackageConfigHelpers)
 
