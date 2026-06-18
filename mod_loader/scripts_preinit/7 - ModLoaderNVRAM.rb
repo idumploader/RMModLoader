@@ -3,16 +3,24 @@
 #
 # A small "non-volatile memory" that survives game restarts (and crashes). Data
 # lives in mod_loader/nvram.dat next to the game and is serialized with Marshal,
-# so any Ruby object can be stored. Writes are write-through: every []= / delete
-# flushes to disk immediately, so a later crash will not lose what you stored.
+# so any Ruby object can be stored.
 #
-# Usage:
-#   ModLoader.nvram[:runs] = (ModLoader.nvram[:runs] || 0) + 1
-#   ModLoader.nvram[:last_map] = $game_map.map_id
-#   ModLoader.nvram.delete(:runs)
+# Two ways to use it:
+#
+#   * Write-through values - for flags, counters, single settings. Every []= /
+#     delete flushes to disk immediately, so a crash never loses them:
+#       ModLoader.nvram[:runs] = (ModLoader.nvram[:runs] || 0) + 1
+#       ModLoader.nvram[:last_map] = $game_map.map_id
+#
+#   * Sections - a defaults-aware working copy for a group of related options.
+#     Edits stay in memory until #commit writes the whole section back in one
+#     go. The section is memoized, so every caller shares the same working copy:
+#       opts = ModLoader.nvram.section(:sys_volume, :bgm => 100, :sfx => 100)
+#       opts[:bgm] = 80          # in memory only
+#       opts.commit              # one write-through, on "apply"/scene exit
 #
 # Keys are shared across every mod on this game - prefix your keys (e.g.
-# "mymod.flag") to avoid collisions, or keep a sub-hash under one key.
+# "mymod.flag") or group them in a section to avoid collisions.
 #
 # Version gate: ModLoader.version != "2.4"
 #==============================================================================
@@ -25,6 +33,7 @@ module ModLoader
     def initialize(path)
       @path = path
       @data = load_data
+      @sections = {}
     end
 
     def [](key)
@@ -59,6 +68,7 @@ module ModLoader
 
     def clear
       @data.clear
+      @sections.clear
       save
     end
 
@@ -69,14 +79,66 @@ module ModLoader
       self
     end
 
-    private
+    # A named, defaults-aware working copy (Variant A): mutations stay in memory
+    # until #commit. Memoized - every caller with the same +key+ gets the same
+    # Section, so they edit one shared working copy. +defaults+ is applied on
+    # first access only.
+    # @return [Section]
+    def section(key, defaults = {})
+      @sections[key] ||= Section.new(self, key, defaults)
+    end
 
-    def load_data
-      return {} unless File.exist?(@path)
-      File.open(@path, "rb") { |f| Marshal.load(f) }
-    rescue StandardError => error
-      p "[NVRAM] failed to load #{@path} (#{error}) - starting empty"
-      {}
+    # In-memory working copy of one NVRAM key (a Hash), persisted on demand.
+    class Section
+      def initialize(store, key, defaults)
+        @store = store
+        @key = key
+        # defaults first, persisted values on top; new default keys still appear
+        @data = defaults.merge(store[key] || {})
+      end
+
+      def [](field)
+        @data[field]
+      end
+
+      def []=(field, value)
+        @data[field] = value
+      end
+
+      def fetch(field, *default, &block)
+        @data.fetch(field, *default, &block)
+      end
+
+      def key?(field)
+        @data.key?(field)
+      end
+
+      def delete(field)
+        @data.delete(field)
+      end
+
+      # @return [Hash] a shallow copy of the working state
+      def to_h
+        @data.dup
+      end
+
+      # @return [Boolean] whether the working copy differs from what is on disk
+      def dirty?
+        @data != (@store[@key] || {})
+      end
+
+      # Persist the whole section in one write-through. No-op if unchanged.
+      def commit
+        @store[@key] = @data.dup if dirty?
+        self
+      end
+      alias save commit
+
+      # Discard in-memory edits and reload from disk.
+      def reload
+        @data = (@store[@key] || {}).dup
+        self
+      end
     end
   end
 
