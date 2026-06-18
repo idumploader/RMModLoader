@@ -4,10 +4,9 @@
 #
 # Hotkey: F9 toggles the console (only while ExecutorModule::ENABLED).
 #
-# Console commands (ExecutorEnvironment):
-#   give(id, amount)     maptp(id)            tp(x, y)
-#   run_event(id)        setvar(id, value)    setswitch(id, value)
-#   toggleswitch(id)     reset                — plus raw eval()
+# ExecutorEnvironment here is just the eval engine (execute = raw eval). The
+# default console commands (give/tp/bind/...) live in ExecutorDefaultCommands
+# (705); ModResetter provides reset.
 #
 # Dependencies: VKKeys (570), ModLoader input API.
 # Version gate: ModLoader.version != "2.4"
@@ -290,38 +289,6 @@ end
 module ExecutorEnvironment
   def self.execute(command)
     return eval(command)
-  end
-
-  def self.give(id, amount)
-    return "Item not found" if $data_items[id] == nil
-    $game_party.gain_item($data_items[id], amount)
-  end
-
-  def self.maptp(id)
-    $game_map.setup(id)
-    $game_map.autoplay
-  end
-
-  def self.tp(x, y)
-    $game_player.moveto(x, y)
-  end
-
-  def self.run_event(id)
-    child = Game_Interpreter.new(3)
-    child.setup($data_common_events[id].list, false)
-    child.run
-  end
-
-  def self.setvar(id, value)
-    $game_variables[id] = value
-  end
-
-  def self.setswitch(id, value)
-    $game_switches[id] = value
-  end
-
-  def self.toggleswitch(id)
-    $game_switches[id] ^= true
   end
 end
 
