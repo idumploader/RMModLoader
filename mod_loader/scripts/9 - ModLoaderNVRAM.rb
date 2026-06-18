@@ -29,8 +29,6 @@ $imported ||= {}
 if not $imported["IDL-ModLoaderNVRAM"]
 $imported["IDL-ModLoaderNVRAM"] = "1.0"
 
-if ModLoader.version != "2.4"
-
 module ModLoader
   # Marshal-backed, write-through key/value store. See file header for usage.
   class NVRAMStore
@@ -172,7 +170,5 @@ module ModLoader
     end
   end
 end
-
-end # ModLoader.version != "2.4"
 
 end # not $imported["IDL-ModLoaderNVRAM"]
