@@ -38,6 +38,45 @@ module BSMP
       @real_y = y
     end
 
+    # Tiles between the interpolated (@real) position and an authoritative one
+    # before we hard-snap instead of gliding: small corrections glide, big jumps
+    # (teleport / map change / initial spawn) cut.
+    SNAP_DISTANCE = 3
+
+    # Advance the authoritative target one tile in d and face that way, leaving
+    # @real_x/@real_y for update_move to glide toward. Unlike Game_Character's
+    # move_straight this does NOT reset @real to "one tile behind", so overlapping
+    # packets accumulate into continuous motion instead of stalling/jerking.
+    # Passability is re-checked locally (same map as sender) so blocked moves the
+    # sender still broadcasts don't march the ghost through walls.
+    def network_move(d)
+      return if d == 0
+      set_direction(d)
+      return unless passable?(@x, @y, d)
+      @x = $game_map.round_x_with_direction(@x, d)
+      @y = $game_map.round_y_with_direction(@y, d)
+    end
+
+    def network_move_diagonal(horz, vert)
+      if diagonal_passable?(@x, @y, horz, vert)
+        @x = $game_map.round_x_with_direction(@x, horz)
+        @y = $game_map.round_y_with_direction(@y, vert)
+      end
+      set_direction(horz) if @direction == reverse_dir(horz)
+      set_direction(vert) if @direction == reverse_dir(vert)
+    end
+
+    # Authoritative position: glide for small corrections (the common case, e.g.
+    # the on-stop anchor), hard-snap for big jumps.
+    def network_moveto(x, y)
+      if (x - @real_x).abs + (y - @real_y).abs > SNAP_DISTANCE
+        moveto(x, y)
+      else
+        @x = x
+        @y = y
+      end
+    end
+
   end
 
   class Players
@@ -74,19 +113,17 @@ module BSMP
 
     def move_player_straight(player_id, d, turn_ok = true)
       return if not @bsmp_players.key?(player_id)
-      player = @bsmp_players[player_id]
-      player.move_straight(d, turn_ok) if not player.moving?
+      @bsmp_players[player_id].network_move(d)
     end
 
     def move_player_diagonal(player_id, horz, vert)
       return if not @bsmp_players.key?(player_id)
-      player = @bsmp_players[player_id]
-      player.move_diagonal(horz, vert) if not player.moving?
+      @bsmp_players[player_id].network_move_diagonal(horz, vert)
     end
 
     def player_moveto(player_id, x, y)
       return if not @bsmp_players.key?(player_id)
-      @bsmp_players[player_id].moveto(x, y)
+      @bsmp_players[player_id].network_moveto(x, y)
     end
 
     def set_player_character(player_id, character_name, character_index, nickname)
