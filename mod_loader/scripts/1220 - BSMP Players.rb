@@ -80,17 +80,30 @@ module BSMP
     # How much faster than the base glide we may go to catch up when the target
     # has pulled ahead (capped so a big gap eases in rather than teleporting).
     CATCHUP_MAX = 4.0
+    # Per-frame easing of the glide multiplier toward its target (low-pass): the
+    # gap is a sawtooth (each packet bumps it a tile, the glide eats it back), so
+    # smoothing the multiplier instead of reacting to the raw gap removes the
+    # straight-line micro-jitter and the spike on sharp turns.
+    CATCHUP_SMOOTH = 0.2
+    # Below this gap we don't catch up at all, so in-sync straight walking holds a
+    # steady base speed instead of modulating around it.
+    CATCHUP_DEADZONE = 1.25
 
-    # Glide speed. Within ~1 tile of the target this is the normal move-speed
-    # glide (linear, lands exactly). Further behind — e.g. the sender's dash
-    # outran our last speed packet, or packets bunched after a network stall — we
-    # speed up proportionally to the gap so continuous movement keeps the sender's
-    # pace instead of trailing at a fixed (often half) speed. update_move clamps
-    # to the target, so it never overshoots.
+    # Glide speed. Within the dead zone this is the normal move-speed glide
+    # (linear, lands exactly). Further behind — e.g. the sender's dash outran our
+    # last speed packet, or packets bunched after a network stall — we speed up
+    # toward gap-proportional catch-up so continuous movement keeps the sender's
+    # pace instead of trailing at a fixed (often half) speed. The gap uses
+    # Chebyshev distance so a corner doesn't double-count vs a straight lag, and
+    # the multiplier is low-passed so the speed changes smoothly. update_move
+    # clamps to the target, so it never overshoots.
     def distance_per_frame
       base = super
-      gap = (@x - @real_x).abs + (@y - @real_y).abs
-      base * [[gap, 1.0].max, CATCHUP_MAX].min
+      gap = [(@x - @real_x).abs, (@y - @real_y).abs].max
+      target_mult = gap <= CATCHUP_DEADZONE ? 1.0 : [gap, CATCHUP_MAX].min
+      @glide_mult ||= 1.0
+      @glide_mult += (target_mult - @glide_mult) * CATCHUP_SMOOTH
+      base * @glide_mult
     end
 
   end
