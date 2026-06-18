@@ -139,6 +139,23 @@ namespace rm_modloader {
 
 	} // anonymous namespace
 
+	bool is_window_focused() {
+		// When the focus-pause subclass is installed, g_window_focused is the
+		// authoritative real-focus state (GetForegroundWindow is hooked to lie, so it
+		// cannot be queried directly). Otherwise the feature is off, nothing is hooked,
+		// and we can ask the OS straight whether our window is the foreground one.
+		if (g_game_hwnd) {
+			return g_window_focused.load(std::memory_order_relaxed);
+		}
+		HWND foreground = GetForegroundWindow();
+		if (!foreground) {
+			return false;
+		}
+		DWORD pid = 0;
+		GetWindowThreadProcessId(foreground, &pid);
+		return pid == GetCurrentProcessId();
+	}
+
 	void apply_focus_pause_hooks() {
 		auto config_value = mod_loader->get_config().get("disable_focus_pause");
 		if (!config_value || !config_value->get<bool>()) {
