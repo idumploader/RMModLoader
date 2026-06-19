@@ -50,10 +50,19 @@ undecided.
 
 Runs at lobby join, **before** admitting the guest / sending the world.
 
-- `Hello { bsmp_protocol_version, game_id/title, data_hash, mod_manifest }`.
+- `Hello { bsmp_protocol_version, accepted_versions, game_id/title, data_hash, mod_manifest }`.
   - `data_hash`: hash of `$data_*` / scripts so both have compatible content
     (mods change the database — must match).
-- Host validates → `Accept { world snapshot follows }` or `Reject { reason }`.
+- **Version negotiation, not exact-match.** Each side declares its own version
+  **and** the peer versions it accepts (a range/set, not a point). Verdict needs
+  **mutual** acceptance: host accepts the client's version AND the client accepts
+  the host's (the client sent its accepted set, so the host checks both in one
+  shot). Semver rule of thumb: same MAJOR required (breaking), MINOR/PATCH flexible
+  above a declared minimum. A range is less to maintain than an explicit set.
+  - Separate axes: **protocol** (wire format, strict) vs **content/mod** version
+    (`data_hash`, ~binary compatible-or-not) vs mod-loader version.
+- Host validates → `Accept { world snapshot follows }` or `Reject { reason }`
+  (reason surfaced to the client for a useful message).
 - Also the place to negotiate optional feature capabilities.
 
 ## 5. World state [planned]
@@ -132,6 +141,16 @@ Synchronized "all-in" before a boss:
 
 Biggest, riskiest epic. **Host-authoritative**, NOT lockstep.
 
+**Integrated-server model (Minecraft-style).** Split battle into a **BattleServer**
+(authority: ATB ticking, RNG, AI, action resolution, broadcasts results) and a
+**BattleClient** (the `Scene_Battle` view: render + own-turn input). The host runs
+BattleServer **plus a local BattleClient**; guests run only BattleClient. The
+host's client talks to its server **in-process (loopback)**, guests' clients talk
+over the wire — but it's the **same BattleClient code path** both ways, so the
+host is never a special case. Lets the client path be tested on the host alone
+(like the movement ghost). Define a clean BattleServer→BattleClient event
+interface that is either local calls (host) or packets (guests).
+
 - **Host runs the real `Scene_Battle`** and ticks ATB. When an actor's bar fills:
   - host's local actor → host picks command;
   - **guest's actor → host requests "your turn", waits for the command packet,
@@ -150,6 +169,19 @@ Biggest, riskiest epic. **Host-authoritative**, NOT lockstep.
   battle doesn't hang waiting on a revive of someone who left.
 - Phasing: (1) snapshot + join, (2) authoritative action execution + remote
   render, (3) remote-turn input request/response.
+
+### 9.1 Balance scaling by player count
+
+Co-op breaks action economy (more attackers per ATB cycle), so difficulty must
+scale up. Host-authoritative (host applies it on battle start from the
+participant count):
+
+- **Enemy HP ×N** — safest knob; keeps fights from ending instantly.
+- **Enemy ATB speed** — ATB-aware lever: more players = more total player turns,
+  so speeding the enemy's bar restores turn economy instead of just bloating HP.
+- Recommend **combining** modest HP scale (duration) + ATB scale (economy).
+- **Mid-battle join** changes the count: **lock the scale at start** (late joiners
+  just make it easier) rather than re-scaling live. **[open]** revisit if needed.
 
 ## 10. Disconnect / session end [planned]
 
