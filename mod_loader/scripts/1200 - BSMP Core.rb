@@ -120,6 +120,7 @@ module BSMP
       :lobby_type      => Config::LOBBY_ONLY_FRIENDS, # Steam ELobbyType used when hosting
       :max_players     => 10,                         # lobby capacity when hosting
       :roster_key      => ModLoader::Keyboard::TAB,   # held key (ModLoader VK) for the roster overlay
+      :debug           => false,                      # runtime diagnostic logging (BSMP.log)
     }
 
     # Typed accessors over the backing store; setters edit the working copy only
@@ -187,6 +188,12 @@ module BSMP
 
   def self.settings
     @settings ||= Settings.new
+  end
+
+  # Runtime diagnostic log, off by default. Flip BSMP.settings.debug = true (e.g. on
+  # both machines) to trace behaviour over the wire, then read the console.
+  def self.log(msg)
+    p "[BSMP] #{msg}" if settings.debug
   end
 
   # Wire framing for BasicNetworkPacket.data: a 1-byte flags header followed by the
@@ -433,7 +440,9 @@ module BSMP
         event = $game_map.events[f[0].to_i]
         next if not event
         opacity = f[4] ? f[4].to_i : nil
-        event.bsmp_apply_sync(f[1].to_i, f[2].to_i, f[3].to_i, opacity)
+        speed   = f[5] ? f[5].to_i : nil
+        transp  = f[6] ? f[6].to_i : nil
+        event.bsmp_apply_sync(f[1].to_i, f[2].to_i, f[3].to_i, opacity, speed, transp)
       end
     end
 
@@ -456,6 +465,7 @@ module BSMP
       return if not BSMP.guest?
       return if not $game_map
       map_id, event_id = packet.data.split(';')
+      BSMP.log("recv MOB_ERASE map=#{map_id} ev=#{event_id} (mymap=#{$game_map.map_id})")
       return if map_id.to_i != $game_map.map_id
       event = $game_map.events[event_id.to_i]
       event.erase if event
@@ -475,6 +485,7 @@ module BSMP
 
     def self.on_self_switch_changed(packet)
       map_id, event_id, ch, val = packet.data.split(';')
+      BSMP.log("recv self_switch [#{map_id},#{event_id},#{ch}]=#{val}")
       apply_fact { $game_self_switches[[map_id.to_i, event_id.to_i, ch]] = (val.to_i != 0) }
     end
 

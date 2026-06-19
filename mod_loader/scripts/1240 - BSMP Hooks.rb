@@ -61,7 +61,10 @@ class Spriteset_Map
     movers = events.select { |e| e.bsmp_mover? }
     return if movers.empty?
     data = $game_map.map_id.to_s
-    movers.each { |e| data << ";#{e.id},#{e.x},#{e.y},#{e.direction},#{e.opacity}" }
+    movers.each do |e|
+      data << ";#{e.id},#{e.x},#{e.y},#{e.direction},#{e.opacity},#{e.move_speed},#{e.transparent ? 1 : 0}"
+      BSMP.log("bcast mob #{e.id} op=#{e.opacity} tr=#{e.transparent}") if e.opacity != 255 or e.transparent
+    end
     bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::MOB_SYNC, 0, data))
   end
 
@@ -403,6 +406,7 @@ class Game_SelfSwitches
   alias bsmp_orig_set []=
   def []=(key, value)
     bsmp_orig_set(key, value)
+    BSMP.log("set self_switch #{key.inspect}=#{value} applying=#{$bsmp_applying_fact} net=#{bsmp_network_running?}") if defined?(BSMP)
     return if $bsmp_applying_fact
     return if not bsmp_network_running?
     bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::SELF_SWITCH_CHANGED, 0, "#{key[0]};#{key[1]};#{key[2]};#{value ? 1 : 0}"))

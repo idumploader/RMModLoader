@@ -33,7 +33,16 @@ class Game_Event < Game_Character
   # (own movement, own reaction, own opacity), desynced from the host.
   def bsmp_mover?
     return false if @erased # erased (e.g. defeated) events aren't positioned anymore
-    (!@move_type.nil? && @move_type != 0) || @symbol_encount
+    # Sticky latch: once an event is ever a symbol mob, keep treating it as one. Its
+    # @symbol_encount drops to false on the dead/respawn page (event 202 Page 2: a
+    # move-route fades opacity to 0, waits, back to 255, then clears the self-switch),
+    # but we must KEEP syncing it through there so guests mirror the hide + respawn —
+    # otherwise the host stops being a mover the instant it dies and the opacity-0
+    # never reaches the guest, leaving a live-looking ghost. Latched every frame (not
+    # at setup_page): BS2 turns the symbol on via a page Script command that runs
+    # AFTER setup_page, so a setup-time check missed it.
+    @bsmp_is_mob = true if @symbol_encount
+    (!@move_type.nil? && @move_type != 0) || @symbol_encount || @bsmp_is_mob
   end
 
   # True when this mob's movement is currently the host's to drive: we're a guest
@@ -52,15 +61,43 @@ class Game_Event < Game_Character
     bsmp_orig_update_self_movement
   end
 
+  # Pin a puppet's host-synced visibility AFTER the stock update, which otherwise
+  # keeps resetting @opacity to full each frame (the death animation's opacity-0 then
+  # only flickered through). Cheap for everything else: events never synced skip via
+  # the nil guard, host/single-player skip via bsmp_puppet?.
+  alias bsmp_orig_update_visibility update
+  def update
+    bsmp_orig_update_visibility
+    return if @bsmp_net_opacity.nil? and @bsmp_net_transparent.nil?
+    return if not bsmp_puppet?
+    @opacity = @bsmp_net_opacity unless @bsmp_net_opacity.nil?
+    @transparent = @bsmp_net_transparent unless @bsmp_net_transparent.nil?
+  end
+
   # Apply an authoritative position (and opacity) from the host: glide for small
   # corrections (the common per-tick case), hard-snap for big jumps (teleport / map
   # seam / first sync). Mirrors Player_Character#network_moveto — leaving @x/@y ahead
   # of @real lets Game_CharacterBase#update glide there and play the walk animation.
   # Opacity comes from the host because update_symbol_opacity is suppressed on the
   # puppet (the host fades the enemy by ITS distance; we mirror that, not recompute).
-  def bsmp_apply_sync(x, y, dir, opacity = nil)
+  def bsmp_apply_sync(x, y, dir, opacity = nil, speed = nil, transparent = nil)
     set_direction(dir) if dir && dir != 0
-    @opacity = opacity unless opacity.nil?
+    # Remember the host's visibility and re-assert it every frame in update: the
+    # game's own per-frame symbol logic keeps resetting a puppet's @opacity back to
+    # full, which fought this 4-frame sync and left a defeated enemy flickering. The
+    # host is the authority for a puppet's look, so we pin it.
+    unless opacity.nil?
+      @opacity = opacity
+      @bsmp_net_opacity = opacity
+    end
+    # Match the host's current move_speed so the glide keeps pace: when an enemy
+    # starts chasing the host bumps it to @reaction_after_speed; without this the
+    # puppet glided at its idle speed, fell behind and then hard-snapped (teleport).
+    @move_speed = speed unless speed.nil?
+    unless transparent.nil?
+      @transparent = (transparent == 1)
+      @bsmp_net_transparent = (transparent == 1)
+    end
     if (x - @real_x).abs + (y - @real_y).abs > BSMP::Config::MOB_SNAP_DISTANCE
       moveto(x, y)
     else
@@ -98,6 +135,7 @@ class Game_Event < Game_Character
   alias_method :bsmp_orig_erase, :erase
   def erase
     bsmp_orig_erase
+    BSMP.log("erase ev=#{@id} map=#{$game_map ? $game_map.map_id : '?'} host=#{BSMP.host?} guest=#{BSMP.guest?}")
     return if not BSMP.host?
     return if not bsmp_network_running?
     return if not $game_map
@@ -148,6 +186,26 @@ class Game_Event < Game_Character
       else
         move_toward_character(target)
       end
+    end
+  end
+
+  # Autonomous movement (incl. the symbol-AI chase) is gated by near_the_screen?,
+  # which measures distance from the HOST's camera ($game_player). So an enemy off
+  # the host's screen never moved even when right next to a guest (it would notice —
+  # balloon — but not chase). On the host, also count "near a remote guest on this
+  # map" as on-screen, so the host keeps simulating it for the guest. dx/dy are the
+  # stock screen half-extents in tiles.
+  if method_defined?(:near_the_screen?)
+    alias_method :bsmp_orig_near_the_screen?, :near_the_screen?
+    def near_the_screen?(dx = 12, dy = 8)
+      return true if bsmp_orig_near_the_screen?(dx, dy)
+      return false if not BSMP.host?
+      return false if not $bsmp_players
+      $bsmp_players.bsmp_players.each_value do |pl|
+        next if pl.map_id != $game_map.map_id
+        return true if distance_x_from(pl.x).abs <= dx && distance_y_from(pl.y).abs <= dy
+      end
+      false
     end
   end
 
