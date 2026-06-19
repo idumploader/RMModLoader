@@ -201,6 +201,30 @@ participant count):
 - [ ] compressed-flag + zlib threshold in the transport
 - [ ] protocol/content version handshake before world transfer
 
+## 11b. Player presence & navigation [planned]
+
+Free roam across any non-progress-gated location (shared world, guests roam
+freely). Showing **where** other players are, layered by cost:
+
+- **RPG Maker has no global map coordinates.** Maps are ID'd islands linked by
+  transfer events; `MapInfos.parent_id` is editor folders (hierarchy), not space.
+  So cross-map "B is north-east of me" can't be computed directly.
+- **1. Location name in the player list [cheap].** `map_id` is already synced;
+  resolve a name via `$data_mapinfos[map_id].name` (editor name, globally
+  available, no need to load the peer's map). `Game_Map#display_name` is the lore
+  banner but is often empty and needs loading the peer's `Map###.rvdata2`.
+  - **[open]** default to editor names (always set, may spoil e.g. "Boss room 3")
+    vs lore `display_name` (prettier, often empty)?
+- **2. Same-map arrow marker [cheap].** When two players share a `map_id` we have
+  their `x,y` → a real directional arrow. Intra-map only; positions already sync.
+- **3. Cross-map "go here" routing [heavy].** No absolute coords — build a
+  **connectivity graph**, quest-marker style. Offline/boot: scan every
+  `Map###.rvdata2` for Transfer Player (event command code 201, direct target) to
+  build `mapA(exit@x,y) -> mapB` edges; BFS from your map to the target's map; the
+  first edge says which exit on your current map to head to → drop a marker there,
+  recompute on each transfer. Caveats: parse-all-maps cost (cacheable);
+  variable-target transfers can't be graphed.
+
 ## 12. Already shipped (foundation)
 
 - P2P lobby relay, reliable ordered transport, `from_id` ownership.
