@@ -73,6 +73,13 @@ module BSMP
     # Authoritative position: glide for small corrections (the common case, e.g.
     # the on-stop anchor), hard-snap for big jumps.
     def network_moveto(x, y)
+      # No loaded map yet (a peer's position arrived while we're on the title /
+      # loading): store it directly. moveto does `x % $game_map.width`, and at the
+      # title $game_map.@map is nil -> width crashes. We re-snap once on the map.
+      if not $game_map or $game_map.map_id == 0
+        @x = x; @y = y; @real_x = x; @real_y = y
+        return
+      end
       if (x - @real_x).abs + (y - @real_y).abs > SNAP_DISTANCE
         moveto(x, y)
       else
@@ -133,6 +140,15 @@ module BSMP
       character = @bsmp_players.delete(player_id)
 
       SceneManager.scene.spriteset.delete_player(character) if SceneManager.scene.class == Scene_Map
+    end
+
+    # Remove every remote player (and their sprites) — used when we leave a session.
+    def clear
+      scene = SceneManager.scene
+      if scene.is_a?(Scene_Map) and scene.spriteset
+        @bsmp_players.each_value { |character| scene.spriteset.delete_player(character) }
+      end
+      @bsmp_players.clear
     end
 
     def [](player_id)

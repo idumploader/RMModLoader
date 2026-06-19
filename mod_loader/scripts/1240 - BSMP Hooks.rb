@@ -38,12 +38,29 @@ class Spriteset_Map
 
   def update
     bsmp_orig_update
-    # Advance the remote players' Game_Character logic (movement interpolation):
-    # @bsmp_players here holds sprites, which bsmp_orig_update already updates.
-    $bsmp_players.bsmp_players.each_value do |character|
-      character.update if character.map_id == $game_map.map_id
-    end
+    bsmp_reconcile_players
     update_bsmp_status
+  end
+
+  # Self-healing: keep the on-screen sprites matching the players currently on this
+  # map, and advance their interpolation. Doing add/remove only on join/leave/map
+  # packets was racy -- a player joining mid-map had map_id 0 at add() time and only
+  # appeared after a map change (create_characters). Reconciling every frame fixes
+  # that; add_player and the dispose below are idempotent/cheap.
+  def bsmp_reconcile_players
+    $bsmp_players.bsmp_players.each_value do |character|
+      next if character.map_id != $game_map.map_id
+      add_player(character)
+      character.update
+    end
+    @bsmp_players.keys.each do |player_id|
+      player = $bsmp_players[player_id]
+      next if player and player.map_id == $game_map.map_id
+      sprite = @bsmp_players.delete(player_id)
+      next if sprite.nil?
+      @character_sprites.delete(sprite)
+      sprite.dispose
+    end
   end
 
   def dispose
@@ -324,6 +341,7 @@ end
 # --- BSMP globals + debug console commands ---
 
 $bsmp_applying_fact = false
+$bsmp_applying_loot = false
 
 $bsmp_client = BSMP::Client.new()
 $bsmp_server = BSMP::Server.new()
@@ -339,7 +357,10 @@ end
 
 def bsmp_read_packets
   $bsmp_server.read_packets if $bsmp_server.running?
-  $bsmp_client.read_packets if $bsmp_client.connected?
+  if $bsmp_client.connected?
+    $bsmp_client.read_packets
+    $bsmp_client.ensure_announced # re-announce once in-game (joined from the title)
+  end
 end
 
 # Our own last measured ping to the host (ms); -1 = host / not measured yet.

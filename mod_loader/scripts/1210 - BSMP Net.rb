@@ -119,6 +119,8 @@ module BSMP
       return if not SteamAPI.leave_lobby(@lobby_id)
       @lobby_id = nil
       @server_user_id = nil
+      @handshake_state = :idle
+      $bsmp_players.clear # drop everyone's sprites when we leave the session
     end
 
     def send_packet(packet)
@@ -139,8 +141,11 @@ module BSMP
       return @server_user_id != nil
     end
 
+    # Announce our full state to the host. Returns false (didn't send) until we're
+    # actually in-game — a guest that joined from the title has no actor / no loaded
+    # map yet. ensure_announced retries until this goes through.
     def update_player_data
-      return if not $game_player.actor
+      return false if not $game_player.actor
       char_packet = BasicNetworkPacket.new(Events::PLAYER_CHANGED_CHARACTER, 0, "#{$game_player.character_name};#{$game_player.character_index};#{$game_player.actor.name}")
       send_packet(char_packet)
 
@@ -155,6 +160,14 @@ module BSMP
       char_packet.type = Events::PLAYER_CHANGED_SPEED
       char_packet.data = "#{$game_player.move_speed}"
       send_packet(char_packet)
+      true
+    end
+
+    # Retry update_player_data each frame until it succeeds, so a guest that
+    # accepted the handshake from the title announces itself once it loads in.
+    def ensure_announced
+      return if not connected? or @handshake_state == :ready
+      @handshake_state = :ready if update_player_data
     end
 
     private
@@ -183,9 +196,9 @@ module BSMP
     def handle_welcome(packet)
       @handshake_state = :accepted
       p "Handshake accepted by host"
-      # Adopt-then-announce ordering isn't required (our position is independent of
-      # the host world), so announce on accept — robust even if no snapshot follows.
-      update_player_data
+      # Announce now if we're already in-game; otherwise ensure_announced retries
+      # each frame until we load in (joined from the title).
+      @handshake_state = :ready if update_player_data
     end
 
     def handle_world_snapshot(packet)
@@ -272,6 +285,8 @@ module BSMP
       @lobby_id = nil
       @server_user_id = nil
       @running = false
+      @clients.clear
+      $bsmp_players.clear
     end
 
     def get_lobby_owner

@@ -293,17 +293,20 @@ module BSMP
       self.y = (Graphics.height - height) / 2
     end
 
-    GAP = 16 # space between the name and location columns
+    GAP    = 16 # space between columns
+    PING_W = 96 # reserved far-right column so a long location can't eat the ping
 
     def refresh
       self.contents.fill_rect(0, 0, contents.width, contents.height, BACK_COLOR)
       list = entries
       w = contents.width - MARGIN_X * 2
 
-      # Two fixed, non-overlapping columns: name on the left, location on the right.
-      loc_w  = w * 2 / 5
-      name_w = w - loc_w - GAP
+      # Three non-overlapping columns: name (left), location (middle, clipped to its
+      # own width), ping (fixed, far right). Keeps a long location off the ping.
+      name_w = w * 2 / 5
       loc_x  = MARGIN_X + name_w + GAP
+      loc_w  = w - name_w - GAP * 2 - PING_W
+      ping_x = MARGIN_X + w - PING_W
 
       self.contents.font.color = HEAD_COLOR
       draw_text(MARGIN_X, 0, w, row_height, "Players (#{list.size})")
@@ -315,9 +318,9 @@ module BSMP
         label << "  (you)" if is_self
         self.contents.font.color = is_host ? HOST_COLOR : TEXT_COLOR
         draw_text(MARGIN_X, y, name_w, row_height, label)
-        # Location + ping confined to the right column (muted, right-aligned).
         self.contents.font.color = LOC_COLOR
-        draw_text(loc_x, y, loc_w, row_height, "#{loc}   #{ping_text(ping)}", 2)
+        draw_text(loc_x, y, loc_w, row_height, loc, 0)
+        draw_text(ping_x, y, PING_W, row_height, ping_text(ping), 2)
         y += row_height
       end
     end

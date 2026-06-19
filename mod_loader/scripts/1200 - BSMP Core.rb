@@ -228,11 +228,14 @@ module BSMP
     end
 
     def self.on_player_moved(packet)
+      return if not SceneManager.scene_is?(Scene_Map) # needs a loaded map (round_x_with_direction)
       dir = packet.data.to_i
       $bsmp_players.move_player_straight(packet.from_id, dir)
     end
 
     def self.on_player_changed_pos(packet)
+      # No scene guard: positioning is plain data (moveto, no $game_map). Dropping it
+      # off-map would lose a joiner's initial position until they next move.
       pos = packet.data.split(';')
       $bsmp_players.player_moveto(packet.from_id, pos[0].to_i, pos[1].to_i)
     end
@@ -245,7 +248,8 @@ module BSMP
     end
 
     def self.on_player_changed_character(packet)
-      return if SceneManager.scene.class != Scene_Map
+      # No scene guard: this is plain data (graphic/nick); the sprite picks it up
+      # when it exists. Dropping it off-map loses a joiner's graphic until it changes.
       character_name, character_index, nickname = packet.data.force_encoding("UTF-8").split(';')
 
       p "Player #{packet.from_id} changed sprite to #{character_name}/#{character_index}, nick to #{nickname}"
@@ -253,7 +257,11 @@ module BSMP
     end
 
     def self.on_player_changed_map(packet)
-      return if SceneManager.scene.class != Scene_Map
+      # No scene guard: set map_id ALWAYS (it's the visibility key). A joiner from the
+      # title received its peers' CHANGED_MAP before being on a map, the guard dropped
+      # it, and the peer stayed invisible (map_id 0) until they next changed maps. The
+      # sprite add is handled by the spriteset reconcile once we're on the map; the
+      # sprite update inside set_player_map is itself scene-guarded.
       map_s, loc = packet.data.force_encoding("UTF-8").split(';', 2)
       map = map_s.to_i
 
@@ -263,7 +271,7 @@ module BSMP
     end
 
     def self.on_player_moved_diag(packet)
-      return if SceneManager.scene.class != Scene_Map
+      return if not SceneManager.scene_is?(Scene_Map)
       horz, vert = packet.data.split(';')
 
       $bsmp_players.move_player_diagonal(packet.from_id, horz.to_i, vert.to_i)
@@ -275,6 +283,29 @@ module BSMP
 
     def self.on_player_ping(packet)
       $bsmp_players.set_player_ping(packet.from_id, packet.data.to_i)
+    end
+
+    # Grant our own copy of loot another player picked up (instanced loot). Runs the
+    # real interpreter command on a throwaway interpreter so the game's own
+    # command_* hooks fire (item-get popup, any other mod) exactly as if the event
+    # granted it here. @params mimics a constant increase: see operate_value.
+    # Guarded so the command's own broadcast hook doesn't re-broadcast.
+    def self.on_loot_gain(packet)
+      type, id, amount = packet.data.split(';')
+      type = type.to_i; id = id.to_i; amount = amount.to_i
+      return if amount <= 0
+      $bsmp_applying_loot = true
+      begin
+        interp = Game_Interpreter.new
+        case type
+        when 0 then interp.bsmp_run_gain(:command_126, [id, 0, 0, amount])
+        when 1 then interp.bsmp_run_gain(:command_127, [id, 0, 0, amount, false])
+        when 2 then interp.bsmp_run_gain(:command_128, [id, 0, 0, amount, false])
+        when 3 then interp.bsmp_run_gain(:command_125, [0, 0, amount])
+        end
+      ensure
+        $bsmp_applying_loot = false
+      end
     end
 
     # --- live world-state facts (applied with the anti-echo guard) ---
@@ -330,6 +361,10 @@ module BSMP
     # A player's round-trip ping to the host (ms), self-reported by each guest.
     PLAYER_PING         = 18
 
+    # Instanced loot: an event gave someone an item/gold; each peer grants its own
+    # copy. data = "type;id;amount" (type 0=item 1=weapon 2=armor 3=gold).
+    LOOT_GAIN           = 19
+
     HANDLERS = {
       PLAYER_JOINED            => method(:on_player_joined),
       PLAYER_MOVED             => method(:on_player_moved),
@@ -344,6 +379,7 @@ module BSMP
       VARIABLE_CHANGED         => method(:on_variable_changed),
       SELF_SWITCH_CHANGED      => method(:on_self_switch_changed),
       PLAYER_PING              => method(:on_player_ping),
+      LOOT_GAIN                => method(:on_loot_gain),
     }
 
     NAMES = {
