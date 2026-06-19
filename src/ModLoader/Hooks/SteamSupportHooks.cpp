@@ -891,6 +891,43 @@ namespace rm_modloader {
 	// mod) -- probed via an interface lookup -- so enabling overlay + steam_support
 	// together never double-inits. We never call SteamAPI_Shutdown (the genuinely
 	// unsafe half of a double-init); a redundant SteamAPI_Init just returns OK.
+	// Auto-accepts every incoming ISteamNetworkingMessages P2P session. The API
+	// drops inbound data from a peer until we accept their session request (or
+	// message them first). With the handshake's deferred admission the host no
+	// longer messages a joining guest first, so without this the guest's HELLO --
+	// and every guest->host packet -- would be dropped on the floor. Self-contained:
+	// it accepts in C++, no Ruby round-trip. Both peers run the same DLL, so this
+	// covers guest->host and host->guest alike.
+	struct SessionAutoAccepter : CCallbackBase {
+		SessionAutoAccepter() {
+			m_iCallback = SteamNetworkingMessagesSessionRequest_t::k_iCallback;
+		}
+		virtual void Run(void* pv_param) override {
+			auto* req = static_cast<SteamNetworkingMessagesSessionRequest_t*>(pv_param);
+			if (ISteamNetworkingMessages* net = SteamNetworkingMessages()) {
+				net->AcceptSessionWithUser(req->m_identityRemote);
+			}
+		}
+		virtual void Run(void* pv_param, bool, uint64_t) override {
+			Run(pv_param);
+		}
+		virtual int GetCallbackSizeBytes() override {
+			return sizeof(SteamNetworkingMessagesSessionRequest_t);
+		}
+	};
+
+	SessionAutoAccepter g_session_auto_accepter;
+	bool g_session_accepter_registered = false;
+
+	void register_session_auto_accepter() {
+		if (g_session_accepter_registered || !SteamAPI_RegisterCallback) {
+			return;
+		}
+		SteamAPI_RegisterCallback(&g_session_auto_accepter, SteamNetworkingMessagesSessionRequest_t::k_iCallback);
+		g_session_accepter_registered = true;
+		mod_loader->log_info("Registered P2P session auto-accepter\n");
+	}
+
 	bool ensure_steam_initialized() {
 		if (SteamMatchmaking()) {
 			return true;
@@ -943,6 +980,10 @@ namespace rm_modloader {
 
 		if (!ensure_steam_initialized())
 			return false;
+
+		// Accept incoming P2P sessions, else peers' messages are dropped until we
+		// message them first (which the deferred-admission handshake doesn't).
+		register_session_auto_accepter();
 
 		return true;
 	}
