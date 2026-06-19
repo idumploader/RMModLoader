@@ -105,42 +105,83 @@ module BSMP
   # protocol / wire / Steam-enum values. A future in-game settings menu flips these
   # live (host lobby visibility, the strict content-hash gate, the roster key, ...);
   # they default to the previous constants so behaviour is unchanged. Access the
-  # singleton via BSMP.settings. to_h / update give a future menu a load/save hook.
+  # singleton via BSMP.settings.
+  #
+  # Backed by ModLoaderNVRAM when that build is present: edits live in an in-memory
+  # working copy and #commit flushes the whole section to mod_loader/nvram.dat, so
+  # preferences survive restarts. On a build without the store we keep the same
+  # working-copy interface in memory only (settings just reset each launch). Either
+  # way the live values (handshake gate, lobby type, ...) read the working copy, so
+  # a console tweak takes effect immediately; #commit only governs persistence.
   class Settings
-    attr_accessor :check_game       # reject a peer whose game (title) differs
-    attr_accessor :check_data_hash  # strict gameplay-database fingerprint gate
-    attr_accessor :lobby_type       # Steam ELobbyType handed to create_lobby when hosting
-    attr_accessor :max_players      # lobby capacity when hosting
-    attr_accessor :roster_key       # held key (ModLoader VK) for the roster overlay
+    DEFAULTS = {
+      :check_game      => true,                       # reject a peer whose game (title) differs
+      :check_data_hash => false,                      # strict gameplay-database fingerprint gate
+      :lobby_type      => Config::LOBBY_ONLY_FRIENDS, # Steam ELobbyType used when hosting
+      :max_players     => 10,                         # lobby capacity when hosting
+      :roster_key      => ModLoader::Keyboard::TAB,   # held key (ModLoader VK) for the roster overlay
+    }
 
-    def initialize
-      reset
+    # Typed accessors over the backing store; setters edit the working copy only
+    # (call #commit to persist — a settings menu does this on "Apply").
+    DEFAULTS.each_key do |field|
+      define_method(field)        { @data[field] }
+      define_method("#{field}=")  { |value| @data[field] = value }
     end
 
+    def initialize
+      @data = open_backing
+    end
+
+    # NVRAM section (persisted, defaults fill missing keys) when the store exists,
+    # else a same-interface in-memory stand-in so a build without it still runs.
+    def open_backing
+      if defined?(ModLoader) and ModLoader.respond_to?(:nvram)
+        ModLoader.nvram.section(:bsmp, DEFAULTS)
+      else
+        VolatileSection.new(DEFAULTS)
+      end
+    end
+
+    # Persist current values (settings-menu "Apply" / after a console tweak). No-op
+    # when nothing changed.
+    def commit
+      @data.commit
+      self
+    end
+
+    # Drop unsaved edits, restoring the last persisted values (menu "Cancel").
+    def reload
+      @data.reload
+      self
+    end
+
+    # Restore defaults in the working copy (commit to persist).
     def reset
-      @check_game      = true
-      @check_data_hash = false
-      @lobby_type      = Config::LOBBY_ONLY_FRIENDS
-      @max_players     = 10
-      @roster_key      = ModLoader::Keyboard::TAB
+      DEFAULTS.each { |k, v| @data[k] = v }
       self
     end
 
     def to_h
-      {
-        :check_game      => @check_game,
-        :check_data_hash => @check_data_hash,
-        :lobby_type      => @lobby_type,
-        :max_players     => @max_players,
-        :roster_key      => @roster_key,
-      }
+      @data.to_h
     end
 
-    # Apply a subset of keys (e.g. loaded from disk by a future settings menu);
-    # unknown keys are ignored so an older save can't crash a newer build.
+    # Apply a subset of keys (e.g. from a menu); unknown keys ignored so an older
+    # stored section can't crash a newer build.
     def update(hash)
-      hash.each { |k, v| send("#{k}=", v) if respond_to?("#{k}=") }
+      hash.each { |k, v| @data[k] = v if DEFAULTS.key?(k) }
       self
+    end
+
+    # Minimal in-memory stand-in for ModLoaderNVRAM's Section, used on builds that
+    # don't ship the store — same surface we rely on, persistence is a no-op.
+    class VolatileSection
+      def initialize(defaults); @h = defaults.dup; end
+      def [](key);        @h[key];        end
+      def []=(key, value); @h[key] = value; end
+      def to_h;  @h.dup; end
+      def commit; self;  end
+      def reload; self;  end
     end
   end
 
