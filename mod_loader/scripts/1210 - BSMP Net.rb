@@ -107,6 +107,7 @@ module BSMP
       @server_user_id = nil
       @max_read_packets = 10
       @handshake_state = :idle # :idle -> :hello_sent -> :accepted / :rejected
+      @pending_world = nil     # host snapshot awaiting a moment when we're in-game
     end
 
     def join_lobby(lobby_id)
@@ -163,11 +164,27 @@ module BSMP
       true
     end
 
-    # Retry update_player_data each frame until it succeeds, so a guest that
-    # accepted the handshake from the title announces itself once it loads in.
+    # Per-frame upkeep after joining: announce ourselves once we load in, and
+    # apply the host's world snapshot once we're actually in-game. Both are
+    # retried each frame because a guest that accepted the handshake from the
+    # title has no actor / no world objects yet.
     def ensure_announced
-      return if not connected? or @handshake_state == :ready
-      @handshake_state = :ready if update_player_data
+      return if not connected?
+      @handshake_state = :ready if @handshake_state != :ready and update_player_data
+      apply_pending_world
+    end
+
+    # Adopt the host's world. Deferred until World.ready? so it lands AFTER any
+    # DataManager.load_game (a guest joining from the menu then loading a save
+    # would otherwise have the save's load() overwrite an early-applied world).
+    # Re-attempted every frame from ensure_announced until we're in-game, then
+    # consumed once (success, or a format-mismatch skip).
+    def apply_pending_world
+      return if not @pending_world
+      return if not World.ready? # not in-game yet — keep pending, retry next frame
+      applied = World.load(@pending_world)
+      p "World snapshot #{applied ? 'applied' : 'skipped'} (#{@pending_world.bytesize} B)"
+      @pending_world = nil
     end
 
     private
@@ -202,8 +219,10 @@ module BSMP
     end
 
     def handle_world_snapshot(packet)
-      applied = World.load(packet.data)
-      p "World snapshot #{applied ? 'applied' : 'skipped'} (#{packet.data.bytesize} B)"
+      # Cache the blob; apply now if we're already in-game, otherwise ensure_announced
+      # applies it once we load in (and so AFTER any save-load that would clobber it).
+      @pending_world = packet.data
+      apply_pending_world
     end
 
     def handle_reject(packet)

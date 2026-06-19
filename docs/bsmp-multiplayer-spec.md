@@ -91,6 +91,13 @@ logic is covered by `bsmp_test_handshake`.
 - Host validates → `Accept { world snapshot follows }` or `Reject { reason }`
   (reason surfaced to the client for a useful message).
 - Also the place to negotiate optional feature capabilities.
+- **Deferred snapshot apply (joining from the menu).** A guest can accept the
+  handshake while still at the title/load menu, so `WORLD_SNAPSHOT` may arrive
+  before any game is loaded — and a later `DataManager.load_game` would overwrite
+  an early apply with the *save's* world. So the client **caches the blob**
+  (`@pending_world`) and applies it from `ensure_announced` only once
+  `World.ready?` (in-game), which is guaranteed to be **after** the save-load.
+  Re-attempted every frame, consumed once. (Already-in-game joins apply immediately.)
 
 ## 5. World state [planned]
 
