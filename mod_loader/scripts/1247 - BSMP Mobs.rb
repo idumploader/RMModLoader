@@ -32,6 +32,7 @@ class Game_Event < Game_Character
   # so the plain move_type test misses them and they'd run fully locally on guests
   # (own movement, own reaction, own opacity), desynced from the host.
   def bsmp_mover?
+    return false if @erased # erased (e.g. defeated) events aren't positioned anymore
     (!@move_type.nil? && @move_type != 0) || @symbol_encount
   end
 
@@ -86,6 +87,67 @@ class Game_Event < Game_Character
     def update_symbol_opacity
       return if bsmp_puppet?
       bsmp_orig_update_symbol_opacity
+    end
+  end
+
+  # Host-authoritative removal: erasing an event (a defeated symbol enemy removes
+  # itself via the event's post-battle "Erase Event") is local — not a self-switch —
+  # so it never reached guests and the enemy lingered. Broadcast it; the guest erases
+  # its copy (Events.on_mob_erase). Only the host emits, so a guest applying the erase
+  # doesn't echo.
+  alias_method :bsmp_orig_erase, :erase
+  def erase
+    bsmp_orig_erase
+    return if not BSMP.host?
+    return if not bsmp_network_running?
+    return if not $game_map
+    bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::MOB_ERASE, 0, "#{$game_map.map_id};#{@id}"))
+  end
+
+  # --- Co-op-aware AI targeting (host computes; guests are puppets) --------------
+  # The monster AI (怪物行为设定) only knows $game_player, so enemies ignored guests.
+  # Teach it about everyone: target the NEAREST player among the host and the remote
+  # guests on this map. We only override the two choke points — distance_from_player
+  # (drives "notice?" + the distance opacity fade) and reaction_movement (the chase) —
+  # both guarded by method_defined? so a game without the AI still loads.
+
+  # Nearest player character (local player + remote guests on this map). Uses the
+  # stock distance helpers, so it's safe even without the monster-AI script.
+  def bsmp_target_player
+    nearest = $game_player
+    best = distance_x_from($game_player.x).abs + distance_y_from($game_player.y).abs
+    if $bsmp_players and $game_map
+      $bsmp_players.bsmp_players.each_value do |pl|
+        next if pl.map_id != $game_map.map_id
+        d = distance_x_from(pl.x).abs + distance_y_from(pl.y).abs
+        next if d >= best
+        best = d
+        nearest = pl
+      end
+    end
+    nearest
+  end
+
+  if method_defined?(:distance_from_player)
+    alias_method :bsmp_orig_distance_from_player, :distance_from_player
+    def distance_from_player
+      t = bsmp_target_player
+      distance_x_from(t.x).abs + distance_y_from(t.y).abs
+    end
+  end
+
+  if method_defined?(:reaction_movement)
+    alias_method :bsmp_orig_reaction_movement, :reaction_movement
+    def reaction_movement
+      target = bsmp_target_player
+      return bsmp_orig_reaction_movement if target.equal?($game_player) # host nearest: stock behaviour
+      @move_speed = @reaction_after_speed
+      @move_frequency = @reaction_after_frequency
+      if @symbol_away_level && @symbol_away_level != 0 && away?
+        move_away_from_character(target)
+      else
+        move_toward_character(target)
+      end
     end
   end
 

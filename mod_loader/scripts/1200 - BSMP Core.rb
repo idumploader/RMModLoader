@@ -449,6 +449,18 @@ module BSMP
       event.balloon_id = balloon.to_i if event
     end
 
+    # Host erased an event (e.g. a defeated enemy removed itself after battle); erase
+    # our copy too so it disappears in lockstep. erase() on a guest doesn't re-emit
+    # (the hook only broadcasts on the host).
+    def self.on_mob_erase(packet)
+      return if not BSMP.guest?
+      return if not $game_map
+      map_id, event_id = packet.data.split(';')
+      return if map_id.to_i != $game_map.map_id
+      event = $game_map.events[event_id.to_i]
+      event.erase if event
+    end
+
     # --- live world-state facts (applied with the anti-echo guard) ---
 
     def self.on_switch_changed(packet)
@@ -519,6 +531,10 @@ module BSMP
     # on an event; guests on that map show the same. data = "map_id;event_id;balloon".
     MOB_BALLOON         = 22
 
+    # Host erased an event (e.g. a defeated symbol enemy after battle). erase() is
+    # local (not a self-switch), so mirror it. data = "map_id;event_id".
+    MOB_ERASE           = 23
+
     HANDLERS = {
       PLAYER_JOINED            => method(:on_player_joined),
       PLAYER_MOVED             => method(:on_player_moved),
@@ -536,6 +552,7 @@ module BSMP
       LOOT_GAIN                => method(:on_loot_gain),
       MOB_SYNC                 => method(:on_mob_sync),
       MOB_BALLOON              => method(:on_mob_balloon),
+      MOB_ERASE                => method(:on_mob_erase),
     }
 
     NAMES = {
