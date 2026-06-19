@@ -108,6 +108,9 @@ module BSMP
       @max_read_packets = 10
       @handshake_state = :idle # :idle -> :hello_sent -> :accepted / :rejected
       @pending_world = nil     # host snapshot awaiting a moment when we're in-game
+      @awaiting_world = false  # WORLD_REQUEST sent, snapshot not yet back (drives the sync overlay)
+      @await_frames = 0        # timeout so a lost request doesn't pin the overlay forever
+      @sync_delay = 0          # frames to hold before the blocking apply (lets the overlay paint)
     end
 
     def join_lobby(lobby_id)
@@ -121,6 +124,8 @@ module BSMP
       @lobby_id = nil
       @server_user_id = nil
       @handshake_state = :idle
+      @pending_world = nil
+      @awaiting_world = false # drop any in-flight sync state so the overlay hides
       $bsmp_players.clear # drop everyone's sprites when we leave the session
     end
 
@@ -174,13 +179,36 @@ module BSMP
         @handshake_state = :ready
         request_world # now in-game — pull the host's current world (covers menu/save joins)
       end
+      tick_await_timeout
       apply_pending_world
     end
 
-    # Ask the host for a fresh world snapshot. Sent once, the frame we transition
-    # to in-game, so the apply lands after any DataManager.load_game.
+    # Ask the host for a fresh world snapshot, and arm the sync overlay until it
+    # comes back. Sent the frame we transition to in-game and on every save-load,
+    # so the apply lands after any DataManager.load_game.
     def request_world
+      @awaiting_world = true
+      @await_frames = AWAIT_TIMEOUT
       send_packet(BasicNetworkPacket.new(Events::WORLD_REQUEST, 0, ""))
+    end
+
+    # Frames to hold a ready snapshot before the blocking World.load, so the sync
+    # overlay paints at least one frame first instead of the load freezing on a
+    # blank screen.
+    SYNC_PRE_FRAMES = 1
+    # Give up waiting on a requested snapshot after ~10s (host gone / dropped) so a
+    # lost WORLD_REQUEST doesn't pin the overlay on screen forever.
+    AWAIT_TIMEOUT = 600
+
+    # True while we're pulling or applying the host's world — drives Sync_Window.
+    def syncing?
+      @awaiting_world or not @pending_world.nil?
+    end
+
+    def tick_await_timeout
+      return if not @awaiting_world
+      @await_frames -= 1
+      @awaiting_world = false if @await_frames <= 0
     end
 
     # Adopt the host's world. Deferred until World.ready? so it lands AFTER any
@@ -191,9 +219,15 @@ module BSMP
     def apply_pending_world
       return if not @pending_world
       return if not World.ready? # not in-game yet — keep pending, retry next frame
+      # Hold a frame so the sync overlay is on screen before the blocking load.
+      if @sync_delay > 0
+        @sync_delay -= 1
+        return
+      end
       applied = World.load(@pending_world)
       p "World snapshot #{applied ? 'applied' : 'skipped'} (#{@pending_world.bytesize} B)"
       @pending_world = nil
+      @awaiting_world = false
     end
 
     private
@@ -231,6 +265,7 @@ module BSMP
       # Cache the blob; apply now if we're already in-game, otherwise ensure_announced
       # applies it once we load in (and so AFTER any save-load that would clobber it).
       @pending_world = packet.data
+      @sync_delay = SYNC_PRE_FRAMES # paint the overlay before the blocking apply
       apply_pending_world
     end
 

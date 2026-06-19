@@ -284,6 +284,7 @@ class Scene_Base
     SteamAPI.run_callbacks
     bsmp_read_packets
     bsmp_update_ping
+    BSMP::UI.update_sync_overlay
   end
 
 end

@@ -327,6 +327,62 @@ module BSMP
 
   end
 
+  # Centered "syncing world" overlay, shown while the client is pulling/applying
+  # the host's world: the WORLD_REQUEST round-trip on a save-load, and the (brief
+  # but blocking) World.load apply on a lobby join. Static — no per-frame redraw.
+  class Sync_Window < Window
+    TEXT_COLOR = Color.new(255, 255, 255, 255)
+    CAPTION    = "Syncing game, please wait..."
+
+    def initialize
+      super
+      recenter
+      refresh
+    end
+
+    def window_width
+      [[Graphics.width / 2, 360].max, Graphics.width - 32].min
+    end
+
+    def row_height
+      size = Font.respond_to?(:default_size) ? Font.default_size : 24
+      [line_height, size + 8].max
+    end
+
+    def window_height
+      row_height + standard_padding * 2
+    end
+
+    def recenter
+      self.x = (Graphics.width - width) / 2
+      self.y = (Graphics.height - height) / 2
+    end
+
+    def refresh
+      self.contents.fill_rect(0, 0, contents.width, contents.height, BACK_COLOR)
+      self.contents.font.color = TEXT_COLOR
+      draw_text(0, 0, contents.width, contents.height, CAPTION, 1)
+    end
+
+    def update
+    end
+  end
+
+  # Lifecycle for the sync overlay. Kept as module state (not a scene ivar) so it
+  # survives the Scene_Load -> Scene_Map handoff during a save-load. Driven from
+  # Scene_Base#update so it shows on any scene.
+  module UI
+    def self.update_sync_overlay
+      if $bsmp_client and $bsmp_client.connected? and $bsmp_client.syncing?
+        @sync_window ||= Sync_Window.new
+        @sync_window.update
+      elsif @sync_window
+        @sync_window.dispose
+        @sync_window = nil
+      end
+    end
+  end
+
 end # module BSMP
 
 end # if defined?(BSMP)
