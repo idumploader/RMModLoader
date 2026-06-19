@@ -431,7 +431,9 @@ module BSMP
         f = entry.split(',')
         next if f.size < 4
         event = $game_map.events[f[0].to_i]
-        event.bsmp_apply_sync(f[1].to_i, f[2].to_i, f[3].to_i) if event
+        next if not event
+        opacity = f[4] ? f[4].to_i : nil
+        event.bsmp_apply_sync(f[1].to_i, f[2].to_i, f[3].to_i, opacity)
       end
     end
 

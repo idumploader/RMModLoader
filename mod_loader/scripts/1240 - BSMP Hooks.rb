@@ -61,7 +61,7 @@ class Spriteset_Map
     movers = events.select { |e| e.bsmp_mover? }
     return if movers.empty?
     data = $game_map.map_id.to_s
-    movers.each { |e| data << ";#{e.id},#{e.x},#{e.y},#{e.direction}" }
+    movers.each { |e| data << ";#{e.id},#{e.x},#{e.y},#{e.direction},#{e.opacity}" }
     bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::MOB_SYNC, 0, data))
   end
 

@@ -26,11 +26,13 @@ if defined?(BSMP)
 
 class Game_Event < Game_Character
 
-  # An autonomous mover: the active page has random (1), approach (2) or custom (3)
-  # movement. Static events (move_type 0) are pure map data, identical for everyone,
-  # and need no position sync.
+  # An event the host positions for everyone: an autonomous mover (active page has
+  # random/approach/custom movement) OR a BS2 symbol-encounter enemy. The latter is
+  # crucial — symbol enemies move via a custom AI (怪物行为设定) with @move_type 0,
+  # so the plain move_type test misses them and they'd run fully locally on guests
+  # (own movement, own reaction, own opacity), desynced from the host.
   def bsmp_mover?
-    !@move_type.nil? && @move_type != 0
+    (!@move_type.nil? && @move_type != 0) || @symbol_encount
   end
 
   # True when this mob's movement is currently the host's to drive: we're a guest
@@ -49,17 +51,41 @@ class Game_Event < Game_Character
     bsmp_orig_update_self_movement
   end
 
-  # Apply an authoritative position from the host: glide for small corrections (the
-  # common per-tick case), hard-snap for big jumps (teleport / map seam / first
-  # sync). Mirrors Player_Character#network_moveto — leaving @x/@y ahead of @real
-  # lets Game_CharacterBase#update glide there and play the walk animation.
-  def bsmp_apply_sync(x, y, dir)
+  # Apply an authoritative position (and opacity) from the host: glide for small
+  # corrections (the common per-tick case), hard-snap for big jumps (teleport / map
+  # seam / first sync). Mirrors Player_Character#network_moveto — leaving @x/@y ahead
+  # of @real lets Game_CharacterBase#update glide there and play the walk animation.
+  # Opacity comes from the host because update_symbol_opacity is suppressed on the
+  # puppet (the host fades the enemy by ITS distance; we mirror that, not recompute).
+  def bsmp_apply_sync(x, y, dir, opacity = nil)
     set_direction(dir) if dir && dir != 0
+    @opacity = opacity unless opacity.nil?
     if (x - @real_x).abs + (y - @real_y).abs > BSMP::Config::MOB_SNAP_DISTANCE
       moveto(x, y)
     else
       @x = x
       @y = y
+    end
+  end
+
+  # Suppress the BS2 symbol-encounter AI on a puppet so it doesn't fight the host's
+  # sync: reaction (the local "!" / forming against OUR player — the balloon is
+  # synced from the host instead) and the distance-based opacity recompute (opacity
+  # is synced too). Movement is already suppressed via update_self_movement. Guarded
+  # by method_defined? so a non-BS2 game without 怪物行为设定 still loads.
+  if method_defined?(:update_symbol_reaction)
+    alias_method :bsmp_orig_update_symbol_reaction, :update_symbol_reaction
+    def update_symbol_reaction
+      return if bsmp_puppet?
+      bsmp_orig_update_symbol_reaction
+    end
+  end
+
+  if method_defined?(:update_symbol_opacity)
+    alias_method :bsmp_orig_update_symbol_opacity, :update_symbol_opacity
+    def update_symbol_opacity
+      return if bsmp_puppet?
+      bsmp_orig_update_symbol_opacity
     end
   end
 
