@@ -195,6 +195,7 @@ module BSMP
     HEAD_COLOR = Color.new(255, 230, 150, 255)
     HOST_COLOR = Color.new(120, 220, 140, 255)
     TEXT_COLOR = Color.new(255, 255, 255, 255)
+    LOC_COLOR  = Color.new(180, 180, 180, 255)
 
     def initialize
       @signature = nil
@@ -204,7 +205,9 @@ module BSMP
     end
 
     def window_width
-      return 340
+      # Scale with the screen so the name and the (often long) location each get
+      # their own column without overlapping.
+      [[Graphics.width * 7 / 10, 520].max, Graphics.width - 32].min
     end
 
     def row_height
@@ -216,10 +219,10 @@ module BSMP
       row_height * (1 + entries.size) + standard_padding * 2
     end
 
-    # [name, is_host, is_self] for everyone, with the local player first.
+    # [name, location, is_host, is_self] for everyone, with the local player first.
     def entries
-      list = [[self_name, host?, true]]
-      remotes.each { |pl| list << [remote_name(pl), host_remote?(pl), false] }
+      list = [[self_name, self_location, host?, true]]
+      remotes.each { |pl| list << [remote_name(pl), remote_location(pl), host_remote?(pl), false] }
       list
     end
 
@@ -239,6 +242,17 @@ module BSMP
     def remote_name(pl)
       n = pl.nickname.to_s
       n.empty? ? "Player" : n
+    end
+
+    def self_location
+      name = BSMP.current_location_name
+      name.empty? ? "?" : name
+    end
+
+    # The name the peer broadcast; fall back to a local lookup by map id.
+    def remote_location(pl)
+      loc = pl.location_name.to_s
+      loc.empty? ? BSMP.location_name(pl.map_id) : loc
     end
 
     # On a client, the remote whose id is the lobby owner is the host.
@@ -270,20 +284,31 @@ module BSMP
       self.y = (Graphics.height - height) / 2
     end
 
+    GAP = 16 # space between the name and location columns
+
     def refresh
       self.contents.fill_rect(0, 0, contents.width, contents.height, BACK_COLOR)
       list = entries
+      w = contents.width - MARGIN_X * 2
+
+      # Two fixed, non-overlapping columns: name on the left, location on the right.
+      loc_w  = w * 2 / 5
+      name_w = w - loc_w - GAP
+      loc_x  = MARGIN_X + name_w + GAP
 
       self.contents.font.color = HEAD_COLOR
-      draw_text(MARGIN_X, 0, contents.width - MARGIN_X * 2, row_height, "Players (#{list.size})")
+      draw_text(MARGIN_X, 0, w, row_height, "Players (#{list.size})")
 
       y = row_height
-      list.each do |name, is_host, is_self|
-        self.contents.font.color = is_host ? HOST_COLOR : TEXT_COLOR
+      list.each do |name, loc, is_host, is_self|
         label = name.dup
         label << "  [HOST]" if is_host
         label << "  (you)" if is_self
-        draw_text(MARGIN_X, y, contents.width - MARGIN_X * 2, row_height, label)
+        self.contents.font.color = is_host ? HOST_COLOR : TEXT_COLOR
+        draw_text(MARGIN_X, y, name_w, row_height, label)
+        # Location confined to its own right column (muted, right-aligned).
+        self.contents.font.color = LOC_COLOR
+        draw_text(loc_x, y, loc_w, row_height, loc, 2)
         y += row_height
       end
     end

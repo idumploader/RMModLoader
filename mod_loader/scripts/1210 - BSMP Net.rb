@@ -147,7 +147,7 @@ module BSMP
       send_packet(char_packet)
 
       char_packet.type = Events::PLAYER_CHANGED_MAP
-      char_packet.data = "#{$game_map.map_id}"
+      char_packet.data = BSMP.current_map_payload
       send_packet(char_packet)
 
       char_packet.type = Events::PLAYER_CHANGED_SPEED
@@ -369,7 +369,7 @@ module BSMP
       send_packet_to(client, char_packet)
 
       char_packet.type = Events::PLAYER_CHANGED_MAP
-      char_packet.data = "#{$game_map.map_id}"
+      char_packet.data = BSMP.current_map_payload
       send_packet_to(client, char_packet)
 
       char_packet.type = Events::PLAYER_CHANGED_SPEED

@@ -73,7 +73,7 @@ module BSMPTestGhost
     return p "No actor on player" if not $game_player.actor
 
     feed(BSMP::Events::PLAYER_JOINED, $game_player.actor.name)
-    feed(BSMP::Events::PLAYER_CHANGED_MAP, $game_map.map_id.to_s)
+    feed(BSMP::Events::PLAYER_CHANGED_MAP, BSMP.current_map_payload)
     feed(BSMP::Events::PLAYER_CHANGED_SPEED, $game_player.real_move_speed.to_s)
     push_character
     push_pos
@@ -106,7 +106,7 @@ module BSMPTestGhost
   def self.poll
     if @cache_map != $game_map.map_id
       @cache_map = $game_map.map_id
-      feed(BSMP::Events::PLAYER_CHANGED_MAP, @cache_map.to_s)
+      feed(BSMP::Events::PLAYER_CHANGED_MAP, BSMP.current_map_payload)
       push_pos
     end
     # real_move_speed (not move_speed) so dashing is mirrored; otherwise the ghost

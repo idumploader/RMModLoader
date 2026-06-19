@@ -277,7 +277,7 @@ class Game_Map
   def setup(map_id)
     bsmp_orig_setup(map_id)
     return if not bsmp_network_running?
-    bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::PLAYER_CHANGED_MAP, 0, map_id.to_s))
+    bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::PLAYER_CHANGED_MAP, 0, BSMP.current_map_payload))
   end
 
 end
