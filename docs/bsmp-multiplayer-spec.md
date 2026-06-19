@@ -137,7 +137,7 @@ design is two layers tied to one marking.
   (`SHARED_SWITCH_RANGES/IDS`, `SHARED_VARIABLE_RANGES/IDS`). Starts empty, grown
   as real flags are identified. Predicates `shared_switch?/shared_variable?`.
 
-**Flag layer — host-authoritative (intent → fact):**
+**Flag layer — host-authoritative (intent → fact) [done, 3a]:**
 - **Host:** a synced-flag write (its own world logic) → apply locally + broadcast
   the fact to all.
 - **Guest:** a synced-flag write (from a guest-side world event) → send an
@@ -151,7 +151,7 @@ design is two layers tied to one marking.
   owner-local (two-tier authority). A guest opening a chest = host-auth self-switch
   (intent) **+** local personal loot into its own `$game_party`.
 
-**Event layer — host runs world cutscenes:**
+**Event layer — host runs world cutscenes [done, 3b]:**
 - A guest **suppresses an autorun/parallel page iff its activating condition
   references a synced flag** (shared switch/var, or any self-switch). World
   cutscenes run only on the host; their outcome flags arrive as facts.
@@ -339,8 +339,12 @@ freely). Showing **where** other players are, layered by cost:
 1. ~~**Transport:** compressed flag + zlib threshold (everyone needs it).~~ **[done]**
 2. ~~**Handshake** + world **dump** (bit-packed) on join.~~ **[done]** (untested
    over the wire — needs a 2-machine run; logic covered by `bsmp_test_*`).
-3. **Self-switch / tagged-progress sync** with anti-echo → unlocks loot, boss gate,
-   mob state.
+3. ~~**Self-switch / tagged-progress sync** with anti-echo → unlocks loot, boss gate,
+   mob state.~~ **[done]** — 3a flag layer (host-auth facts + anti-echo,
+   `BSMP.shared_*` config) and 3b guest-side cutscene suppression (host-owned
+   autorun/parallel). Untested over the wire (2-machine run pending); classification
+   covered by `bsmp_test [sync]`. Shared switch/var config starts empty (self-switches
+   already shared) — populate as story flags are identified.
 4. **Host-driven mobs** (reuse interpolation).
 5. **Session-end persistence** (write-back to co-op slot).
 6. **Battle epic** (phased).
