@@ -47,20 +47,41 @@ class Spriteset_Map
   end
 
   def dispose
-    @bsmp_status_window.dispose if @bsmp_status_window
-    @bsmp_status_window = nil
+    dispose_bsmp_windows
     bsmp_orig_dispose
   end
 
   # Show the status panel while networking runs; create it lazily (so toggling the
-  # server on/off mid-map works) and drop it the moment networking stops.
+  # server on/off mid-map works) and drop everything the moment networking stops.
   def update_bsmp_status
     if bsmp_network_running?
       @bsmp_status_window ||= BSMP::Status_Window.new
       @bsmp_status_window.update
-    elsif @bsmp_status_window
+      update_bsmp_roster
+    else
+      dispose_bsmp_windows
+    end
+  end
+
+  # Full roster overlay while the roster key is held (scoreboard-style).
+  def update_bsmp_roster
+    if ModLoader.respond_to?(:input_press?) and ModLoader.input_press?(BSMP::Config::ROSTER_KEY)
+      @bsmp_roster_window ||= BSMP::Roster_Window.new
+      @bsmp_roster_window.update
+    elsif @bsmp_roster_window
+      @bsmp_roster_window.dispose
+      @bsmp_roster_window = nil
+    end
+  end
+
+  def dispose_bsmp_windows
+    if @bsmp_status_window
       @bsmp_status_window.dispose
       @bsmp_status_window = nil
+    end
+    if @bsmp_roster_window
+      @bsmp_roster_window.dispose
+      @bsmp_roster_window = nil
     end
   end
 

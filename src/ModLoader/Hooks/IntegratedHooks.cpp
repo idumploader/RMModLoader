@@ -122,6 +122,17 @@ namespace rm_modloader {
 		return is_key_repeated(key) ? ruby_true : ruby_false;
 	}
 
+	RubyValue __cdecl ExtendedControlSet::mod_loader_input_press(RubyValue module, RubyValue key_value) {
+		int key = rb_parse_int(key_value);
+		if (key < 0 || key >= 0xFF) {
+			return ruby_false;
+		}
+
+		// Held state: true every frame the key is down (high bit of the key state),
+		// unlike the one-shot trigger or the delayed repeat. RGSS Input#press?.
+		return (current_keyboard_state[key] & 0x80) ? ruby_true : ruby_false;
+	}
+
 	RubyValue __cdecl ExtendedControlSet::mod_loader_map_to_char(RubyValue module, RubyValue key_value) {
 		int key = rb_parse_int(key_value);
 		if (key >= 0xFF) {
@@ -185,6 +196,7 @@ namespace rm_modloader {
 
 			mod_loader->register_ruby_method("input_trigger?",    &ExtendedControlSet::mod_loader_input_trigger);
 			mod_loader->register_ruby_method("input_repeat?",     &ExtendedControlSet::mod_loader_input_repeat);
+			mod_loader->register_ruby_method("input_press?",      &ExtendedControlSet::mod_loader_input_press);
 			mod_loader->register_ruby_method("map_char",          &ExtendedControlSet::mod_loader_map_to_char);
 		});
 	}

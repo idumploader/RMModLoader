@@ -77,6 +77,11 @@ module BSMP
 
     SEND_FLAG_RELIABLE = 8
 
+    # Hold this key to show the full player roster overlay (scoreboard-style).
+    # A ModLoader::Keyboard VK code passed to ModLoader.input_press? (raw key state,
+    # independent of the game's own bindings). Change if it clashes.
+    ROSTER_KEY = ModLoader::Keyboard::TAB
+
   end
 
   # Wire framing for BasicNetworkPacket.data: a 1-byte flags header followed by the

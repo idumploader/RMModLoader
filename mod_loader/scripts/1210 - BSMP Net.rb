@@ -90,6 +90,7 @@ module BSMP
   class Client
 
     attr_reader :lobby_id
+    attr_reader :server_user_id
     attr_accessor :channel_id
     attr_accessor :read_channel_id
 
