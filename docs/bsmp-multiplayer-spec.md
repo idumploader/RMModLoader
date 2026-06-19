@@ -124,17 +124,43 @@ write-back**.
 - Verified by `bsmp_test_world` (dump → mutate → apply → re-dump must be
   byte-identical).
 
-### 5.3 Live sync — the softlock trap
+### 5.3 Live sync — host-authoritative facts [decided]
 
 Do **not** mirror raw switch/variable writes globally — that desyncs guests'
-event interpreters mid-page and double-fires autorun/parallel cutscenes.
+event interpreters mid-page and double-fires autorun/parallel cutscenes. The
+design is two layers tied to one marking.
 
-- **Classify:** a tagged subset = "shared progression" (quests, bosses) syncs as
-  facts from the owner; everything else stays local.
-- **Cutscenes/autorun run on ONE** (host or trigger owner); only the **outcome**
-  (flag flipped) is broadcast, never "run this on yourselves".
-- Hook `Game_Switches#[]=` / `Game_Variables#[]=` / `Game_SelfSwitches#[]=` with
-  an anti-echo guard, **only** for the shared-tagged range.
+**Marking — what counts as "shared":**
+- **self-switches: ALL shared**, no tagging. They're the chest/door/NPC progress
+  backbone and almost always safe as facts.
+- **switches / variables:** Config reserved **range(s) + explicit allowlist**
+  (`SHARED_SWITCH_RANGES/IDS`, `SHARED_VARIABLE_RANGES/IDS`). Starts empty, grown
+  as real flags are identified. Predicates `shared_switch?/shared_variable?`.
+
+**Flag layer — host-authoritative (intent → fact):**
+- **Host:** a synced-flag write (its own world logic) → apply locally + broadcast
+  the fact to all.
+- **Guest:** a synced-flag write (from a guest-side world event) → send an
+  **intent** to the host, not canon locally; host validates, applies, broadcasts;
+  guest applies on receipt. May apply **optimistically** for snappiness — the
+  host's fact is canonical and reconciles on conflict.
+- Anti-echo guard (`$bsmp_applying_fact`) so applying a received fact never
+  re-broadcasts / re-intents. Hook `Game_Switches#[]=` / `Game_Variables#[]=` /
+  `Game_SelfSwitches#[]=`, acting **only** on the shared set.
+- **Personal effects (party/inventory/gold) are NOT routed through the host** —
+  owner-local (two-tier authority). A guest opening a chest = host-auth self-switch
+  (intent) **+** local personal loot into its own `$game_party`.
+
+**Event layer — host runs world cutscenes:**
+- A guest **suppresses an autorun/parallel page iff its activating condition
+  references a synced flag** (shared switch/var, or any self-switch). World
+  cutscenes run only on the host; their outcome flags arrive as facts.
+  Unconditional / local-switch autorun still runs on guests.
+- **Cross-map is the easy case:** shared switches/variables are global and
+  self-switches are keyed by `map_id`, so a guest on another map just applies the
+  deltas; suppression only ever concerns the guest's **own current map**.
+- Mandatory "everyone must attend" moments are **not** raw autorun — they're
+  explicit sync points (boss-gate, section 8).
 
 ### 5.4 Persistence (equal progress for all)
 
@@ -144,6 +170,26 @@ event interpreters mid-page and double-fires autorun/parallel cutscenes.
 - Result: everyone keeps equal world progress + their own leveled character.
 - Caveat: join adopts the host world (your own world for that slot is replaced
   for the session; branching flags don't max-merge) → use a separate slot.
+
+**Loading a save mid-session (guest) — Terraria model [decided].** A save is
+conceptually two things, mirroring the two-tier split: a **character** (party,
+actors, levels, inventory) and a **world**. A guest loading a save while connected
+takes only the **character** and **joins the host's world** — exactly Terraria's
+"pick a character, enter someone's world." RPG Maker saves are monolithic, so we
+impose the split on load: after the normal load, **keep the loaded
+`$game_party`/`$game_actors`, discard its world, re-adopt the host's world
+snapshot**; position resolves by same map-id (or respawn near the host if that map
+isn't valid). The guest never unilaterally replaces the shared world.
+- Implementation: hook the load path → if connected as guest, after load request a
+  fresh `WORLD_SNAPSHOT` (or re-apply the last one) over the loaded save's world.
+- Edge: the half-state window (loaded world before re-sync) — apply the snapshot
+  before the first frame renders / before re-announcing.
+- Fallback only if a clean character-extract proves unreliable: **block** load while
+  connected (prompt "leave the session first").
+- Going to **Title** = leaving the world = leaving the session (clean lobby leave).
+- **Host** loading a save mid-session changes the canonical world → host re-broadcasts
+  the new world snapshot to all guests (or is blocked); host case is rarer, defer.
+- Built together with the co-op save subsystem (build-order step 5) — same machinery.
 
 ## 6. Events [planned]
 
@@ -252,12 +298,12 @@ freely). Showing **where** other players are, layered by cost:
   So cross-map "B is north-east of me" can't be computed directly.
 **Default plan: 1 + 2.** 3 is optional/future (not essential if names are good).
 
-- **1. Location name in the player list [cheap].** The player **broadcasts its own
-  best name** with `PLAYER_CHANGED_MAP`: it has its map loaded, so it picks
-  `display_name` (lore banner) when non-empty, else `$data_mapinfos[map_id].name`
-  (editor name, always set). The viewer just shows the received string — no
-  loading peer maps, lore names for free, always a fallback. (Resolves the
-  editor-vs-lore dilemma.)
+- **1. Location name in the player list [done].** The player **broadcasts its own
+  best name** with `PLAYER_CHANGED_MAP` (`"map_id;name"`): it has its map loaded, so
+  it picks `display_name` (lore banner) when non-empty, else
+  `$data_mapinfos[map_id].name` (editor name, always set). The viewer just shows the
+  received string — no loading peer maps, lore names for free, with a local
+  `$data_mapinfos` fallback by id. Shown in the roster's right-hand column.
 - **2. Same-map arrow marker [cheap].** When two players share a `map_id` we have
   their `x,y` → a real directional arrow. Intra-map only; positions already sync.
 - **3. Cross-map "go here" routing [heavy, optional/future].** No absolute coords — build a
