@@ -211,12 +211,21 @@ Events split by **ownership**, mostly resolved via **self-switches**:
   host fact.
 - "Server's view of events" = **moving positions + self-switches**, not all state.
 
-## 7. Loot [planned]
+## 7. Loot [done — v1]
 
 - **Instanced loot** (personal-loot, Diablo-style): opening a chest syncs its
   self-switch (open for all), and **each player receives their own copy** into
   their own `$game_party`. No grief, simplest.
-- Host arbitrates the roll and applies to the right party/parties.
+- **v1 (`1246 - BSMP Loot.rb`):** hook interpreter commands 125/126/127/128
+  (gold/items/weapons/armors). A positive gain broadcasts `LOOT_GAIN` and each peer
+  grants its own copy by **running the real command on a throwaway interpreter** —
+  so the game's own item-get popup and any other `command_*` mod fire as if the
+  event granted it locally. Sender-broadcast with an anti-echo guard
+  (`$bsmp_applying_loot`); the chest's self-switch sync prevents re-opening, so no
+  double grant. Only gains (not removals); non-event sources (shop/menu/battle) use
+  other code paths and stay personal.
+- **Later:** host-arbitrated rolls for *random* loot (so everyone rolls the same);
+  v1 is deterministic, fine for fixed chest loot.
 - (Alternative considered & rejected for co-op feel: first-come — opener only.)
 
 ## 8. Boss readiness gate [planned]
@@ -336,15 +345,19 @@ freely). Showing **where** other players are, layered by cost:
 
 ## 13. Suggested build order
 
+**Wire-verified over a real WAN link:** handshake, world snapshot, presence +
+location names, movement/interpolation, join/leave visibility, ping, instanced
+loot. (Steam P2P session auto-accept was needed — see §3 / native fix.)
+
 1. ~~**Transport:** compressed flag + zlib threshold (everyone needs it).~~ **[done]**
-2. ~~**Handshake** + world **dump** (bit-packed) on join.~~ **[done]** (untested
-   over the wire — needs a 2-machine run; logic covered by `bsmp_test_*`).
+2. ~~**Handshake** + world **dump** (bit-packed) on join.~~ **[done, wire-verified]**
 3. ~~**Self-switch / tagged-progress sync** with anti-echo → unlocks loot, boss gate,
    mob state.~~ **[done]** — 3a flag layer (host-auth facts + anti-echo,
    `BSMP.shared_*` config) and 3b guest-side cutscene suppression (host-owned
-   autorun/parallel). Untested over the wire (2-machine run pending); classification
-   covered by `bsmp_test [sync]`. Shared switch/var config starts empty (self-switches
-   already shared) — populate as story flags are identified.
+   autorun/parallel). self-switch facts wire-verified; cutscene suppression still to
+   confirm live. Shared switch/var config starts empty (self-switches already
+   shared) — populate as story flags are identified.
+   - Plus: **instanced loot** (§7) and the **roster/presence** UI (ping, locations).
 4. **Host-driven mobs** (reuse interpolation).
 5. **Session-end persistence** (write-back to co-op slot).
 6. **Battle epic** (phased).
