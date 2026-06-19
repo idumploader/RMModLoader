@@ -189,6 +189,16 @@ module BSMPTests
 
   # --- live-sync cases (the shared-flag classification + anti-echo guard) ------
 
+  # Stand-in for an RPG::Event::Page::Condition, for world_owned_condition? tests.
+  FakeCond = Struct.new(:switch1_valid, :switch1_id, :switch2_valid, :switch2_id,
+                        :variable_valid, :variable_id, :self_switch_valid)
+
+  def self.cond(opts = {})
+    c = FakeCond.new
+    opts.each { |k, v| c[k] = v }
+    c
+  end
+
   def self.sync_cases
     s_ids    = BSMP::Config::SHARED_SWITCH_IDS
     s_ranges = BSMP::Config::SHARED_SWITCH_RANGES
@@ -204,6 +214,12 @@ module BSMPTests
       expect("range bounds inclusive",      BSMP.shared_switch?(100) && BSMP.shared_switch?(200))
       expect("unlisted id not shared",      !BSMP.shared_switch?(43))
       expect("out-of-range id not shared",  !BSMP.shared_switch?(201))
+
+      # world-owned page classification (drives guest-side cutscene suppression)
+      expect("self-switch page is world-owned",    BSMP.world_owned_condition?(cond(:self_switch_valid => true)))
+      expect("shared switch1 page is world-owned", BSMP.world_owned_condition?(cond(:switch1_valid => true, :switch1_id => 42)))
+      expect("local switch1 page not world-owned", !BSMP.world_owned_condition?(cond(:switch1_valid => true, :switch1_id => 43)))
+      expect("unconditional page not world-owned", !BSMP.world_owned_condition?(cond))
     ensure
       s_ids.replace(saved_ids)
       s_ranges.replace(saved_ranges)

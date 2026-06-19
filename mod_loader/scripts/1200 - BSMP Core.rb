@@ -177,6 +177,28 @@ module BSMP
       Config::SHARED_VARIABLE_RANGES.any? { |r| r.include?(id) }
   end
 
+  # An event page is "host-owned world progression" (a guest must not run its
+  # autorun/parallel) when its activating condition hinges on a synced flag: any
+  # self-switch (all shared), or a shared switch/variable. Takes a page condition
+  # (RPG::Event::Page::Condition) so it's pure and unit-testable.
+  def self.world_owned_condition?(c)
+    return true if c.self_switch_valid
+    return true if c.switch1_valid and shared_switch?(c.switch1_id)
+    return true if c.switch2_valid and shared_switch?(c.switch2_id)
+    return true if c.variable_valid and shared_variable?(c.variable_id)
+    false
+  end
+
+  # --- network role ---------------------------------------------------------
+
+  def self.host?
+    $bsmp_server and $bsmp_server.running?
+  end
+
+  def self.guest?
+    $bsmp_client and $bsmp_client.connected? and not host?
+  end
+
   module Events
 
     def self.on_packet(packet)
