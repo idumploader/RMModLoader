@@ -359,6 +359,18 @@ module BSMP
       end
     end
 
+    # Host showed a balloon icon on an event (the enemy "!" notice and friends);
+    # mirror it onto our copy. Setting balloon_id is read by Sprite_Character, so the
+    # animation plays just as locally. Only while a guest on the host's map.
+    def self.on_mob_balloon(packet)
+      return if not BSMP.guest?
+      return if not $game_map
+      map_id, event_id, balloon = packet.data.split(';')
+      return if map_id.to_i != $game_map.map_id
+      event = $game_map.events[event_id.to_i]
+      event.balloon_id = balloon.to_i if event
+    end
+
     # --- live world-state facts (applied with the anti-echo guard) ---
 
     def self.on_switch_changed(packet)
@@ -425,6 +437,10 @@ module BSMP
     # that same map glide their event copies to match (see 1247 - BSMP Mobs.rb).
     MOB_SYNC            = 21
 
+    # Host-driven balloon icon (e.g. the enemy "!" notice): the host showed a balloon
+    # on an event; guests on that map show the same. data = "map_id;event_id;balloon".
+    MOB_BALLOON         = 22
+
     HANDLERS = {
       PLAYER_JOINED            => method(:on_player_joined),
       PLAYER_MOVED             => method(:on_player_moved),
@@ -441,6 +457,7 @@ module BSMP
       PLAYER_PING              => method(:on_player_ping),
       LOOT_GAIN                => method(:on_loot_gain),
       MOB_SYNC                 => method(:on_mob_sync),
+      MOB_BALLOON              => method(:on_mob_balloon),
     }
 
     NAMES = {

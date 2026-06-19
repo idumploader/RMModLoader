@@ -65,6 +65,33 @@ class Game_Event < Game_Character
 
 end
 
+# Balloon icons (the enemy "!" notice, "?", "..." etc.) are driven by the host's
+# event logic via the "Show Balloon Icon" command. A guest's copy of that event is
+# a suppressed puppet (or its page is host-owned), so it never shows the balloon
+# locally. Mirror it: on the host, broadcast the balloon when the command runs; the
+# guest sets balloon_id on its event (see Events.on_mob_balloon). Broadcast BEFORE
+# the original so the optional "wait for completion" doesn't delay it.
+class Game_Interpreter
+
+  alias bsmp_orig_command_213 command_213
+  def command_213
+    bsmp_broadcast_balloon if BSMP.host?
+    bsmp_orig_command_213
+  end
+
+  def bsmp_broadcast_balloon
+    return if not bsmp_network_running?
+    return if not $game_map
+    # @params[0]: -1 = player, 0 = this event, n = event n. We sync events only.
+    ref = @params[0]
+    event_id = ref == 0 ? @event_id : ref
+    return if event_id.nil? or event_id <= 0
+    data = "#{$game_map.map_id};#{event_id};#{@params[1]}"
+    bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::MOB_BALLOON, 0, data))
+  end
+
+end
+
 end # if defined?(BSMP)
 
 end # not $imported["IDL-BSMP-Mobs"]
