@@ -266,6 +266,7 @@ class Scene_Base
     bsmp_orig_update
     SteamAPI.run_callbacks
     bsmp_read_packets
+    bsmp_update_ping
   end
 
 end
@@ -339,6 +340,24 @@ end
 def bsmp_read_packets
   $bsmp_server.read_packets if $bsmp_server.running?
   $bsmp_client.read_packets if $bsmp_client.connected?
+end
+
+# Our own last measured ping to the host (ms); -1 = host / not measured yet.
+$bsmp_my_ping = -1
+BSMP_PING_INTERVAL = 60 # frames between measurements (~1s)
+
+# Only guests measure: each periodically reads its round-trip ping to the host and
+# broadcasts it, so everyone's roster shows everyone's ping-to-host. The host is the
+# anchor (no ping). Guarded on the native method so an older DLL just shows no ping.
+def bsmp_update_ping
+  return if not BSMP.guest?
+  return if not SteamAPI.respond_to?(:get_session_ping)
+  $bsmp_ping_timer = ($bsmp_ping_timer || 0) + 1
+  return if $bsmp_ping_timer < BSMP_PING_INTERVAL
+  $bsmp_ping_timer = 0
+  return if not $bsmp_client.server_user_id
+  $bsmp_my_ping = SteamAPI.get_session_ping($bsmp_client.server_user_id)
+  bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::PLAYER_PING, 0, $bsmp_my_ping.to_s))
 end
 
 def set_nick(nick)

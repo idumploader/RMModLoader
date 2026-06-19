@@ -759,6 +759,27 @@ namespace rm_modloader {
 			return result == k_EResultOK ? ruby_true : ruby_false;
 		}
 
+		// Round-trip ping (ms) on the P2P session to a user, or -1 if there is no
+		// live connected session. Steam already measures this on the session.
+		static RubyValue __cdecl get_session_ping_ruby(RubyValue object, RubyValue user_id_value) {
+			ISteamNetworkingMessages* net = SteamNetworkingMessages();
+			if (!net) {
+				return rb_make_number(-1);
+			}
+
+			SteamNetworkingIdentity identity;
+			identity.SetSteamID64(rb_num2ull(user_id_value));
+
+			SteamNetConnectionInfo_t conn_info;
+			SteamNetConnectionRealTimeStatus_t status;
+			ESteamNetworkingConnectionState state = net->GetSessionConnectionInfo(identity, &conn_info, &status);
+			if (state != k_ESteamNetworkingConnectionState_Connected) {
+				return rb_make_number(-1);
+			}
+
+			return rb_make_number(status.m_nPing);
+		}
+
 		static RubyValue __cdecl read_basic_packets_ruby(RubyValue object, RubyValue channel_value, RubyValue max_messages_value, RubyValue recv, RubyValue method_value) {
 			if (!check_ruby_type(channel_value, RUBY_T_FIXNUM)) {
 				rb_raise(*ruby_error_arg_error, "Expected channel as fixnum");
@@ -884,6 +905,7 @@ namespace rm_modloader {
 		rb_define_singleton_method(SteamAPI::klass, "read_messages_on_channel", &SteamAPI::read_messages_on_channel_ruby, 4);
 		rb_define_singleton_method(SteamAPI::klass, "send_basic_packet", &SteamAPI::send_basic_packet_ruby, 4);
 		rb_define_singleton_method(SteamAPI::klass, "read_basic_packets", &SteamAPI::read_basic_packets_ruby, 4);
+		rb_define_singleton_method(SteamAPI::klass, "get_session_ping", &SteamAPI::get_session_ping_ruby, 1);
 	}
 
 	// Steam must be initialised before any interface can be obtained. We only do it

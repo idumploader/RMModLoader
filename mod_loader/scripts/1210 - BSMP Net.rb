@@ -76,13 +76,15 @@ module BSMP
     # used ONLY locally here (never load()ed from a peer); the wire carries just the
     # resulting integer. Cached — the database is constant for the session.
     def self.data_hash
-      return @data_hash if @data_hash
-      blob = Marshal.dump([
+      # NOT cached: some games (incl. BS2) patch $data_* at runtime on save-load /
+      # new-game, so the fingerprint changes with game state. Caching it would make
+      # a stale (e.g. title-screen) hash sticky and wrongly reject a later in-game
+      # join.
+      Zlib.crc32(Marshal.dump([
         $data_actors, $data_classes, $data_skills, $data_items,
         $data_weapons, $data_armors, $data_enemies, $data_troops,
         $data_states, $data_system, $data_common_events,
-      ])
-      @data_hash = Zlib.crc32(blob)
+      ]))
     end
 
   end

@@ -219,11 +219,20 @@ module BSMP
       row_height * (1 + entries.size) + standard_padding * 2
     end
 
-    # [name, location, is_host, is_self] for everyone, with the local player first.
+    # [name, location, ping, is_host, is_self] for everyone, local player first.
     def entries
-      list = [[self_name, self_location, host?, true]]
-      remotes.each { |pl| list << [remote_name(pl), remote_location(pl), host_remote?(pl), false] }
+      list = [[self_name, self_location, self_ping, host?, true]]
+      remotes.each { |pl| list << [remote_name(pl), remote_location(pl), pl.ping, host_remote?(pl), false] }
       list
+    end
+
+    # Ping-to-host: the host is the anchor (none); a guest reports its own.
+    def self_ping
+      host? ? -1 : ($bsmp_my_ping || -1)
+    end
+
+    def ping_text(ms)
+      (ms && ms > 0) ? "#{ms}ms" : "-"
     end
 
     def remotes
@@ -300,15 +309,15 @@ module BSMP
       draw_text(MARGIN_X, 0, w, row_height, "Players (#{list.size})")
 
       y = row_height
-      list.each do |name, loc, is_host, is_self|
+      list.each do |name, loc, ping, is_host, is_self|
         label = name.dup
         label << "  [HOST]" if is_host
         label << "  (you)" if is_self
         self.contents.font.color = is_host ? HOST_COLOR : TEXT_COLOR
         draw_text(MARGIN_X, y, name_w, row_height, label)
-        # Location confined to its own right column (muted, right-aligned).
+        # Location + ping confined to the right column (muted, right-aligned).
         self.contents.font.color = LOC_COLOR
-        draw_text(loc_x, y, loc_w, row_height, loc, 2)
+        draw_text(loc_x, y, loc_w, row_height, "#{loc}   #{ping_text(ping)}", 2)
         y += row_height
       end
     end

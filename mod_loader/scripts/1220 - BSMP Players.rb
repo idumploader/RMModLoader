@@ -20,6 +20,7 @@ module BSMP
     attr_accessor :map_id
     attr_accessor :move_speed
     attr_accessor :location_name
+    attr_accessor :ping
 
     def initialize(player_id, sprite_name, nickname)
       super()
@@ -29,6 +30,7 @@ module BSMP
       @nickname = nickname
       @map_id = 0
       @location_name = ""
+      @ping = -1
     end
 
     def refresh
@@ -180,6 +182,11 @@ module BSMP
     def set_player_location(player_id, location_name)
       return if not @bsmp_players.key?(player_id)
       @bsmp_players[player_id].location_name = location_name
+    end
+
+    def set_player_ping(player_id, ping)
+      return if not @bsmp_players.key?(player_id)
+      @bsmp_players[player_id].ping = ping
     end
 
   end

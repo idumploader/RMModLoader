@@ -64,9 +64,13 @@ module BSMP
     # pair such copies.
     CHECK_GAME = true
 
-    # Content gate: reject peers whose gameplay $data_* fingerprint differs (mods /
-    # database mismatch). Set false to allow knowingly-different content.
-    CHECK_DATA_HASH = true
+    # Content gate: reject peers whose gameplay $data_* fingerprint differs.
+    # OFF by default -- the fingerprint is state-dependent: BS2 (and others) patch
+    # $data_* at runtime on save-load/new-game, so it only matches in-game-to-
+    # in-game; a guest joining from the title (unpatched $data_*) hashes differently
+    # and gets falsely rejected as "content mismatch". Enable only for strict,
+    # same-state play.
+    CHECK_DATA_HASH = false
 
     DEFAULT_SERVER_CHANNEL_ID = 0
     DEFAULT_SERVER_CLIENT_ID = 1
@@ -269,6 +273,10 @@ module BSMP
 
     end
 
+    def self.on_player_ping(packet)
+      $bsmp_players.set_player_ping(packet.from_id, packet.data.to_i)
+    end
+
     # --- live world-state facts (applied with the anti-echo guard) ---
 
     def self.on_switch_changed(packet)
@@ -319,6 +327,9 @@ module BSMP
     VARIABLE_CHANGED    = 16
     SELF_SWITCH_CHANGED = 17
 
+    # A player's round-trip ping to the host (ms), self-reported by each guest.
+    PLAYER_PING         = 18
+
     HANDLERS = {
       PLAYER_JOINED            => method(:on_player_joined),
       PLAYER_MOVED             => method(:on_player_moved),
@@ -332,6 +343,7 @@ module BSMP
       SWITCH_CHANGED           => method(:on_switch_changed),
       VARIABLE_CHANGED         => method(:on_variable_changed),
       SELF_SWITCH_CHANGED      => method(:on_self_switch_changed),
+      PLAYER_PING              => method(:on_player_ping),
     }
 
     NAMES = {
