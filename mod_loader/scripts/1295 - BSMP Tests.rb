@@ -115,21 +115,16 @@ module BSMPTests
     (BSMP::Config::ACCEPTED_MINOR_MIN..BSMP::Config::ACCEPTED_MINOR_MAX).find { |m| m != base[:minor] }
   end
 
-  # Flip Config::CHECK_DATA_HASH without the "already initialized constant" warning,
-  # restoring it even if the block raises.
+  # Flip the data-hash gate around a block, restoring it even if the block raises.
+  # Now a plain Settings attribute (was a Config constant needing remove_const).
   def self.with_data_hash_check(value)
-    old = BSMP::Config::CHECK_DATA_HASH
-    set_data_hash_check(value)
+    old = BSMP.settings.check_data_hash
+    BSMP.settings.check_data_hash = value
     begin
       yield
     ensure
-      set_data_hash_check(old)
+      BSMP.settings.check_data_hash = old
     end
-  end
-
-  def self.set_data_hash_check(value)
-    BSMP::Config.send(:remove_const, :CHECK_DATA_HASH)
-    BSMP::Config.const_set(:CHECK_DATA_HASH, value)
   end
 
   # --- world cases ---------------------------------------------------------

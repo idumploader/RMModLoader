@@ -57,24 +57,17 @@ module BSMP
     ACCEPTED_MINOR_MIN = 0
     ACCEPTED_MINOR_MAX = 2
 
-    # Reject peers running a different game ($data_system.game_title mismatch).
     # NB both game_title and the content hash are translation-sensitive: a translated
     # vs original copy of the SAME game differs in display strings but is structurally
-    # identical (sync is by id), so it's co-op-compatible. Turn both checks off to
-    # pair such copies.
-    CHECK_GAME = true
-
-    # Content gate: reject peers whose gameplay $data_* fingerprint differs.
-    # OFF by default -- the fingerprint is state-dependent: BS2 (and others) patch
-    # $data_* at runtime on save-load/new-game, so it only matches in-game-to-
-    # in-game; a guest joining from the title (unpatched $data_*) hashes differently
-    # and gets falsely rejected as "content mismatch". Enable only for strict,
-    # same-state play.
-    CHECK_DATA_HASH = false
+    # identical (sync is by id), so it's co-op-compatible. The enforcement toggles for
+    # both live in Settings (check_game / check_data_hash) so a menu can flip them; see
+    # there for why the data-hash gate defaults off (BS2 patches $data_* at runtime).
 
     DEFAULT_SERVER_CHANNEL_ID = 0
     DEFAULT_SERVER_CLIENT_ID = 1
 
+    # Steam ELobbyType (as the native create_lobby binding expects it). Default lobby
+    # visibility when hosting; Settings.lobby_type defaults to this.
     LOBBY_ONLY_FRIENDS = 10
 
     LOBBY_CHAT_UPDATE_JOINED = 1
@@ -87,11 +80,6 @@ module BSMP
     CALLBACK_LOBBY_CHAT_UPDATE = 506
 
     SEND_FLAG_RELIABLE = 8
-
-    # Hold this key to show the full player roster overlay (scoreboard-style).
-    # A ModLoader::Keyboard VK code passed to ModLoader.input_press? (raw key state,
-    # independent of the game's own bindings). Change if it clashes.
-    ROSTER_KEY = ModLoader::Keyboard::TAB
 
     # --- Shared world state (live sync) ---
     # Which switches / variables count as "shared progression" and sync live as
@@ -111,6 +99,53 @@ module BSMP
     # (teleport, map seam, first sync). Mirrors the remote-player SNAP_DISTANCE.
     MOB_SNAP_DISTANCE = 3
 
+  end
+
+  # Runtime, user-changeable preferences — as opposed to Config, which is fixed
+  # protocol / wire / Steam-enum values. A future in-game settings menu flips these
+  # live (host lobby visibility, the strict content-hash gate, the roster key, ...);
+  # they default to the previous constants so behaviour is unchanged. Access the
+  # singleton via BSMP.settings. to_h / update give a future menu a load/save hook.
+  class Settings
+    attr_accessor :check_game       # reject a peer whose game (title) differs
+    attr_accessor :check_data_hash  # strict gameplay-database fingerprint gate
+    attr_accessor :lobby_type       # Steam ELobbyType handed to create_lobby when hosting
+    attr_accessor :max_players      # lobby capacity when hosting
+    attr_accessor :roster_key       # held key (ModLoader VK) for the roster overlay
+
+    def initialize
+      reset
+    end
+
+    def reset
+      @check_game      = true
+      @check_data_hash = false
+      @lobby_type      = Config::LOBBY_ONLY_FRIENDS
+      @max_players     = 10
+      @roster_key      = ModLoader::Keyboard::TAB
+      self
+    end
+
+    def to_h
+      {
+        :check_game      => @check_game,
+        :check_data_hash => @check_data_hash,
+        :lobby_type      => @lobby_type,
+        :max_players     => @max_players,
+        :roster_key      => @roster_key,
+      }
+    end
+
+    # Apply a subset of keys (e.g. loaded from disk by a future settings menu);
+    # unknown keys are ignored so an older save can't crash a newer build.
+    def update(hash)
+      hash.each { |k, v| send("#{k}=", v) if respond_to?("#{k}=") }
+      self
+    end
+  end
+
+  def self.settings
+    @settings ||= Settings.new
   end
 
   # Wire framing for BasicNetworkPacket.data: a 1-byte flags header followed by the

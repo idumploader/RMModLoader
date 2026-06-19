@@ -109,7 +109,7 @@ class Spriteset_Map
 
   # Full roster overlay while the roster key is held (scoreboard-style).
   def update_bsmp_roster
-    if ModLoader.respond_to?(:input_press?) and ModLoader.input_press?(BSMP::Config::ROSTER_KEY)
+    if ModLoader.respond_to?(:input_press?) and ModLoader.input_press?(BSMP.settings.roster_key)
       @bsmp_roster_window ||= BSMP::Roster_Window.new
       @bsmp_roster_window.update
     elsif @bsmp_roster_window
@@ -441,7 +441,7 @@ def mech
   return SceneManager.scene.spriteset.character_sprites[-1]
 end
 
-def make_server(type = BSMP::Config::LOBBY_ONLY_FRIENDS, max_players = 10)
+def make_server(type = BSMP.settings.lobby_type, max_players = BSMP.settings.max_players)
   # $bsmp_server = BSMP::Server.new
   $bsmp_client.leave_lobby if $bsmp_client.connected?
   $bsmp_server.create_lobby(type, max_players)

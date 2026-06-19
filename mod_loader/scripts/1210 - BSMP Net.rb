@@ -59,10 +59,10 @@ module BSMP
       if peer[:major] != Config::MAJOR_VERSION || peer[:minor] != Config::MINOR_VERSION
         p "BSMP handshake: minor differs (peer #{peer[:major]}.#{peer[:minor]}, us #{Config::MAJOR_VERSION}.#{Config::MINOR_VERSION}) but mutually accepted"
       end
-      if Config::CHECK_GAME and peer[:game_title] != game_title
+      if BSMP.settings.check_game and peer[:game_title] != game_title
         return [false, "different game (peer '#{peer[:game_title]}' vs '#{game_title}')"]
       end
-      if Config::CHECK_DATA_HASH and peer[:data_hash] != data_hash
+      if BSMP.settings.check_data_hash and peer[:data_hash] != data_hash
         return [false, "content/mod mismatch (data hash)"]
       end
       [true, "ok"]

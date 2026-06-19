@@ -186,7 +186,7 @@ module BSMP
 
   end
 
-  # Full player roster overlay, centered, shown while Config::ROSTER_KEY is held
+  # Full player roster overlay, centered, shown while BSMP.settings.roster_key is held
   # (scoreboard-style). Lists everyone — you first, then the remote players — with
   # the host marked. Created/disposed on demand by the Spriteset_Map hook and
   # resized to the current player count.
