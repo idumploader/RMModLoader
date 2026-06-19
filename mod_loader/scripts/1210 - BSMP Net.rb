@@ -44,7 +44,7 @@ module BSMP
 
     def send_packet(packet)
       return if not initted? or not connected?
-      SteamAPI.send_basic_packet(@server_user_id, @channel_id, packet, Config::SEND_FLAG_RELIABLE)
+      Wire.send_framed(@server_user_id, @channel_id, packet, Config::SEND_FLAG_RELIABLE)
     end
 
     def read_packets
@@ -109,6 +109,7 @@ module BSMP
     end
 
     def on_packet_read(user_id, packet)
+      packet.data = Wire.unpack(packet.data)
       p "Client got packet from #{packet.from_id}, type=#{packet.type}, data=#{packet.data}"
       Events.on_packet(packet)
     end
@@ -173,7 +174,7 @@ module BSMP
 
     def send_packet_to(client, packet)
       return if not initted? or not running?
-      SteamAPI.send_basic_packet(client.user_id, client.channel_id, packet, Config::SEND_FLAG_RELIABLE)
+      Wire.send_framed(client.user_id, client.channel_id, packet, Config::SEND_FLAG_RELIABLE)
     end
 
     def send_packet_to_all(packet)
@@ -289,9 +290,11 @@ module BSMP
     end
 
     def on_packet_read(user_id, packet)
+      packet.from_id = user_id
+      packet.data = Wire.unpack(packet.data)
       p "Got packet from #{user_id}, type=#{packet.type}, data=#{packet.data}"
       # p "Got packet from #{user_id}. type=#{Events::NAMES[packet.type]}, data=#{packet.data}"
-      packet.from_id = user_id
+      # Relay carries the plaintext data; send_packet_to re-frames per hop.
       client = find_client(user_id)
       if client
         send_packet_to_all_except(packet, client)

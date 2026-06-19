@@ -69,6 +69,52 @@ module BSMP
 
   end
 
+  # Wire framing for BasicNetworkPacket.data: a 1-byte flags header followed by the
+  # payload, optionally zlib-compressed. Lives entirely in Ruby — the native packet
+  # treats data as an opaque binary blob — so the C++ transport stays untouched and
+  # there's room for more flag bits later. Applied ONLY at the true wire boundary
+  # (Client/Server send + read); packets dispatched locally stay plaintext.
+  module Wire
+
+    FLAG_COMPRESSED = 0x01
+
+    # Below this many bytes deflate rarely wins and just burns CPU, so movement spam
+    # and other tiny packets ship raw (paying only the 1-byte flag).
+    COMPRESS_THRESHOLD = 256
+
+    # data (any encoding) -> framed binary string: flags byte + payload.
+    def self.pack(data)
+      bin = data.to_s.dup.force_encoding(Encoding::ASCII_8BIT)
+      if bin.bytesize >= COMPRESS_THRESHOLD
+        deflated = Zlib::Deflate.deflate(bin, Zlib::BEST_COMPRESSION)
+        # Only flag compressed if it actually shrank (deflate can grow tiny/noisy data).
+        return flag_byte(FLAG_COMPRESSED) + deflated if deflated.bytesize < bin.bytesize
+      end
+      flag_byte(0) + bin
+    end
+
+    # framed binary string -> original payload (binary). Tolerates empty input.
+    def self.unpack(data)
+      return "" if data.nil? or data.bytesize == 0
+      flags = data.getbyte(0)
+      body = data[1, data.bytesize - 1] || ""
+      body.force_encoding(Encoding::ASCII_8BIT)
+      (flags & FLAG_COMPRESSED) != 0 ? Zlib::Inflate.inflate(body) : body
+    end
+
+    # Build a framed COPY of packet and hand it to the native sender, leaving the
+    # caller's packet untouched (some are dispatched locally right after sending).
+    def self.send_framed(user_id, channel_id, packet, flags)
+      framed = BasicNetworkPacket.new(packet.type, packet.from_id, pack(packet.data))
+      SteamAPI.send_basic_packet(user_id, channel_id, framed, flags)
+    end
+
+    def self.flag_byte(bits)
+      [bits].pack("C")
+    end
+
+  end
+
   module Events
 
     def self.on_packet(packet)

@@ -38,9 +38,20 @@ undecided.
 - **BasicNetworkPacket** (native): `magic | type | from_id(u64 LE) | data`.
   Reliable, ordered via Steam channels. **[done]**
 - **Compression:** zlib (RGSS3 ships `Zlib`). Only for **large** payloads — small
-  movement packets (`"4"`, `"12;15"`) would grow under deflate. Plan: a
-  `compressed` flag bit in the packet header + size threshold (~64-100 B); set in
-  native `to_raw_data`, transparent to the Ruby layer. **[planned]**
+  movement packets (`"4"`, `"12;15"`) would grow under deflate. **[done]**
+  - Framing lives in Ruby, not native: `BSMP::Wire` prepends a 1-byte flags header
+    to `data` (`bit0 = compressed`), so the C++ packet stays an opaque blob and more
+    flag bits can be added later. `pack` deflates only above a ~256 B threshold and
+    only if it actually shrinks; `unpack` reverses it.
+  - Applied ONLY at the true wire boundary — `Wire.send_framed` on send (builds a
+    framed copy, never mutates the caller's packet), `Wire.unpack` in
+    `Client/Server#on_packet_read` before dispatch. Locally dispatched packets
+    (`send_client_joined/leaved`, test ghost) stay plaintext. The server relay
+    unpacks once on read and re-frames per hop.
+  - Native ingest made binary-safe: `BasicNetworkPacket#data=` / `initialize` now
+    read the Ruby string by length (`rb_str_value`) instead of as a C-string, and
+    `rb_str_value`'s embedded-string branch reads `RSTRING_EMBED_LEN` from the flags
+    instead of `strlen` — otherwise a leading `0x00` flag byte truncated the payload.
 - **No Marshal over the wire.** `Marshal.load` of peer data is an RCE vector and
   version-brittle. Use explicit compact formats (see World). **[principle]**
 - **Anti-echo:** when applying a received change, never re-broadcast it (guard
@@ -198,7 +209,7 @@ participant count):
 - [ ] single owner per shared change (no double-fire)
 - [ ] host-leave = graceful session-end + guest persistence
 - [ ] battle-disconnect cleanup
-- [ ] compressed-flag + zlib threshold in the transport
+- [x] compressed-flag + zlib threshold in the transport
 - [ ] protocol/content version handshake before world transfer
 
 ## 11b. Player presence & navigation [planned]
@@ -239,7 +250,7 @@ freely). Showing **where** other players are, layered by cost:
 
 ## 13. Suggested build order
 
-1. **Transport:** compressed flag + zlib threshold (everyone needs it).
+1. ~~**Transport:** compressed flag + zlib threshold (everyone needs it).~~ **[done]**
 2. **Handshake** + world **dump** (bit-packed) on join.
 3. **Self-switch / tagged-progress sync** with anti-echo → unlocks loot, boss gate,
    mob state.

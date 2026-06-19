@@ -417,11 +417,17 @@ namespace rm_modloader {
 			if (!check_ruby_type(from_id_value, RUBY_T_FIXNUM, RUBY_T_BIGNUM)) {
 				rb_raise(*ruby_error_arg_error, "Expected from_id as fixnum or bignum");
 			}
+			if (!check_ruby_type(data_value, RUBY_T_STRING)) {
+				rb_raise(*ruby_error_arg_error, "Expected data as string");
+			}
 
 			BasicNetworkPacket* packet = get_rb_data_data<BasicNetworkPacket>(object);
 			packet->type = rb_parse_int(type_value);
 			packet->from_id = rb_num2ull(from_id_value);
-			packet->data = rb_get_string_data(&data_value);
+			// Length-based, not C-string: data may be binary (compressed/bit-packed) and
+			// contain NUL bytes; rb_get_string_data would truncate at the first NUL.
+			const std::string_view data_view = rb_str_value(data_value);
+			packet->data.assign(data_view.data(), data_view.size());
 
 			return object;
 		}
@@ -468,12 +474,17 @@ namespace rm_modloader {
 		}
 
 		static RubyValue __cdecl set_data_ruby(RubyValue object, RubyValue data_value) {
+			if (!check_ruby_type(data_value, RUBY_T_STRING)) {
+				rb_raise(*ruby_error_arg_error, "Expected data as string");
+			}
+
 			BasicNetworkPacket* packet = get_rb_data_data<BasicNetworkPacket>(object);
 
-			RubyValue data_value_orig = data_value;
-			packet->data = rb_get_string_data(&data_value);
+			// Length-based, not C-string: binary-safe for NUL-containing payloads.
+			const std::string_view data_view = rb_str_value(data_value);
+			packet->data.assign(data_view.data(), data_view.size());
 
-			return data_value_orig;
+			return data_value;
 		}
 
 		std::string to_raw_data() {
