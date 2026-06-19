@@ -175,21 +175,40 @@ module BSMP
     # title has no actor / no world objects yet.
     def ensure_announced
       return if not connected?
-      if @handshake_state != :ready and update_player_data
-        @handshake_state = :ready
-        request_world # now in-game — pull the host's current world (covers menu/save joins)
-      end
+      @handshake_state = :ready if @handshake_state != :ready and update_player_data
       tick_await_timeout
       apply_pending_world
     end
 
     # Ask the host for a fresh world snapshot, and arm the sync overlay until it
-    # comes back. Sent the frame we transition to in-game and on every save-load,
-    # so the apply lands after any DataManager.load_game.
+    # comes back. World adoption itself is driven by the load_game / setup_new_game
+    # hooks (which call sync_world_blocking) and by the WELCOME snapshot.
     def request_world
       @awaiting_world = true
       @await_frames = AWAIT_TIMEOUT
       send_packet(BasicNetworkPacket.new(Events::WORLD_REQUEST, 0, ""))
+    end
+
+    # Block until the host's current world arrives and is applied, behind the
+    # "Syncing game..." overlay. Called right after a save-load / new-game, BEFORE
+    # the scene transitions to the map, so the map is never shown with the stale
+    # save world (an overlay driven from Scene#update can't help: no scene update
+    # runs during the load's Graphics.transition). Pumps Steam + our packet read +
+    # Graphics each iteration so the round-trip completes and the overlay paints.
+    # Bounded by AWAIT_TIMEOUT so a gone host can't hang the load.
+    def sync_world_blocking
+      return if not connected?
+      request_world
+      guard = 0
+      while syncing? and guard < AWAIT_TIMEOUT
+        SteamAPI.run_callbacks
+        read_packets        # may set @pending_world via handle_world_snapshot
+        apply_pending_world
+        BSMP::UI.update_sync_overlay
+        Graphics.update     # paint the overlay and pace the loop to the frame rate
+        guard += 1
+      end
+      BSMP::UI.update_sync_overlay # dispose the overlay once we're done / timed out
     end
 
     # Frames to hold a ready snapshot before the blocking World.load, so the sync
