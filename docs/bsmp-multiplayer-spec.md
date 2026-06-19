@@ -226,7 +226,23 @@ Events split by **ownership**, mostly resolved via **self-switches**:
 - **Autonomous / moving (enemies, random NPCs):** suppress the client's move-route
   processing; host drives their positions, broadcast like remote players —
   **reuses the existing interpolation** (a mob = "remote character driven by
-  host"). Only movers are host-positioned.
+  host"). Only movers are host-positioned. **[done — v1, untested]** Implemented in
+  `1247 - BSMP Mobs.rb` + the host broadcast in `1240`:
+  - A mob = a `Game_Event` whose active page has `@move_type != 0` (random/approach/
+    custom). We puppet the **real event** (not a ghost sprite — the game already
+    draws it, and graphic/page/passability stay correct for free; page changes
+    follow from the synced self-switches, so only position needs the wire).
+  - Host: every `MOB_SYNC_INTERVAL` (4) frames, broadcast `MOB_SYNC` =
+    `map_id;id,x,y,dir;...` for all movers on its map — skipped when no remote
+    player shares the map. Guest on that map: `Game_Event#update_self_movement`
+    returns early (`bsmp_puppet?`) and `bsmp_apply_sync` glides/snaps to the host's
+    position (mirrors `Player_Character#network_moveto`).
+  - **Authority is per-map** (`BSMP.host_here?`): mobs are the host's only on the map
+    the host occupies. A guest alone elsewhere simulates its mobs locally (no one to
+    desync against). Known gap: two guests sharing a map the host is absent from will
+    diverge — deferred (rare; no per-map authority election in v1).
+  - **Triggers/battle untouched** (step 6): a puppet mob can still touch-trigger a
+    guest's own local encounter for now.
 - **Interactive static (chests, NPCs, doors):** keep client-side (positions are in
   map data, identical for all); sync only the **state change** (self-switch) as a
   host fact.
@@ -379,6 +395,8 @@ loot. (Steam P2P session auto-accept was needed — see §3 / native fix.)
    confirm live. Shared switch/var config starts empty (self-switches already
    shared) — populate as story flags are identified.
    - Plus: **instanced loot** (§7) and the **roster/presence** UI (ping, locations).
-4. **Host-driven mobs** (reuse interpolation).
+4. ~~**Host-driven mobs** (reuse interpolation).~~ **[done — v1, not yet wire-tested]**
+   Movers puppeted on guests on the host's map; per-map host authority; triggers/
+   battle deferred to step 6. See §6.
 5. **Session-end persistence** (write-back to co-op slot).
 6. **Battle epic** (phased).

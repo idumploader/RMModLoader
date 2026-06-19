@@ -102,6 +102,15 @@ module BSMP
     SHARED_VARIABLE_RANGES = []
     SHARED_VARIABLE_IDS    = []
 
+    # --- Host-driven mobs (step 4) ---
+    # The host re-broadcasts the positions of all moving events on its current map
+    # every this many frames; guests on that map glide their copies to match. Small
+    # = smoother but chattier (zlib + "only movers" keep it cheap).
+    MOB_SYNC_INTERVAL = 4
+    # Tiles of position error before a guest hard-snaps a mob instead of gliding
+    # (teleport, map seam, first sync). Mirrors the remote-player SNAP_DISTANCE.
+    MOB_SNAP_DISTANCE = 3
+
   end
 
   # Wire framing for BasicNetworkPacket.data: a 1-byte flags header followed by the
@@ -210,6 +219,29 @@ module BSMP
     $bsmp_client and $bsmp_client.connected? and not host?
   end
 
+  # --- host presence (host-driven mobs) -------------------------------------
+  # Mobs are host-authoritative only on the map the host is currently on. A guest
+  # uses these to decide whether to hand its moving events over to the host's
+  # positions (host_here?) or keep simulating them locally (host elsewhere).
+
+  def self.host_user_id
+    ($bsmp_client and $bsmp_client.connected?) ? $bsmp_client.server_user_id : nil
+  end
+
+  # The host's remote-player character on this guest (carries the host's map_id).
+  def self.host_character
+    id = host_user_id
+    (id and $bsmp_players) ? $bsmp_players[id] : nil
+  end
+
+  # True on a guest when the host is present on our current map, so the host is
+  # simulating these mobs and we should puppet ours to its broadcasts.
+  def self.host_here?
+    return false if not guest?
+    hc = host_character
+    hc and $game_map and hc.map_id == $game_map.map_id
+  end
+
   module Events
 
     def self.on_packet(packet)
@@ -308,6 +340,25 @@ module BSMP
       end
     end
 
+    # Host-driven mobs: apply the host's positions to our copies of the moving
+    # events, but only while we're a guest on the host's current map (otherwise the
+    # mobs are ours to simulate). Each entry is "id,x,y,dir"; the event glides or
+    # snaps to it (see Game_Event#bsmp_apply_sync). Unknown ids are skipped.
+    def self.on_mob_sync(packet)
+      return if not BSMP.guest?
+      return if not $game_map
+      parts = packet.data.split(';')
+      return if parts.empty?
+      map_id = parts.shift.to_i
+      return if map_id != $game_map.map_id # host is on another map than us
+      parts.each do |entry|
+        f = entry.split(',')
+        next if f.size < 4
+        event = $game_map.events[f[0].to_i]
+        event.bsmp_apply_sync(f[1].to_i, f[2].to_i, f[3].to_i) if event
+      end
+    end
+
     # --- live world-state facts (applied with the anti-echo guard) ---
 
     def self.on_switch_changed(packet)
@@ -369,6 +420,11 @@ module BSMP
     # copy. data = "type;id;amount" (type 0=item 1=weapon 2=armor 3=gold).
     LOOT_GAIN           = 19
 
+    # Host-driven mobs: the host's periodic position broadcast for every moving
+    # event on its current map. data = "map_id;id,x,y,dir;id,x,y,dir;...". Guests on
+    # that same map glide their event copies to match (see 1247 - BSMP Mobs.rb).
+    MOB_SYNC            = 21
+
     HANDLERS = {
       PLAYER_JOINED            => method(:on_player_joined),
       PLAYER_MOVED             => method(:on_player_moved),
@@ -384,6 +440,7 @@ module BSMP
       SELF_SWITCH_CHANGED      => method(:on_self_switch_changed),
       PLAYER_PING              => method(:on_player_ping),
       LOOT_GAIN                => method(:on_loot_gain),
+      MOB_SYNC                 => method(:on_mob_sync),
     }
 
     NAMES = {

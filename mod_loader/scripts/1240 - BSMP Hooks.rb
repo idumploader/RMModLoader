@@ -39,7 +39,34 @@ class Spriteset_Map
   def update
     bsmp_orig_update
     bsmp_reconcile_players
+    bsmp_broadcast_mobs
     update_bsmp_status
+  end
+
+  # Host only: every MOB_SYNC_INTERVAL frames, broadcast the positions of all moving
+  # events on this map so guests here glide their copies to match. Skipped when no
+  # remote player shares our map (no one to render them), so a host wandering alone
+  # spends nothing. "Only movers" + zlib keep the packet small.
+  def bsmp_broadcast_mobs
+    return if not BSMP.host?
+    return if not $game_map
+    @bsmp_mob_tick = (@bsmp_mob_tick || 0) + 1
+    return if @bsmp_mob_tick < BSMP::Config::MOB_SYNC_INTERVAL
+    @bsmp_mob_tick = 0
+    return if not bsmp_guest_on_this_map?
+    movers = $game_map.events.values.select { |e| e.bsmp_mover? }
+    return if movers.empty?
+    data = $game_map.map_id.to_s
+    movers.each { |e| data << ";#{e.id},#{e.x},#{e.y},#{e.direction}" }
+    bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::MOB_SYNC, 0, data))
+  end
+
+  def bsmp_guest_on_this_map?
+    return false if not $bsmp_players
+    $bsmp_players.bsmp_players.each_value do |pl|
+      return true if pl.map_id == $game_map.map_id
+    end
+    false
   end
 
   # Self-healing: keep the on-screen sprites matching the players currently on this
