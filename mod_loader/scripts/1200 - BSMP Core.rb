@@ -57,6 +57,13 @@ module BSMP
     ACCEPTED_MINOR_MIN = 0
     ACCEPTED_MINOR_MAX = 2
 
+    # Reject peers running a different game ($data_system.game_title mismatch).
+    # NB both game_title and the content hash are translation-sensitive: a translated
+    # vs original copy of the SAME game differs in display strings but is structurally
+    # identical (sync is by id), so it's co-op-compatible. Turn both checks off to
+    # pair such copies.
+    CHECK_GAME = true
+
     # Content gate: reject peers whose gameplay $data_* fingerprint differs (mods /
     # database mismatch). Set false to allow knowingly-different content.
     CHECK_DATA_HASH = true
