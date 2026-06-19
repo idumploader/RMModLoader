@@ -97,14 +97,21 @@ logic is covered by `bsmp_test_handshake`.
   it). And any `DataManager.load_game` replaces our world with the *save's*. So:
   - The client **caches** a snapshot blob (`@pending_world`) and applies it once
     `World.ready?`, as a best-effort fast path.
-  - The authoritative trigger is a **`DataManager.load_game` hook**: every save-load,
-    a connected guest sends `WORLD_REQUEST`; the host replies with the current
-    snapshot, which applies on top of the just-loaded save world. This is what makes
-    joining-from-menu and **F12** work: F12 raises `RGSSReset`, caught in `rgss_main`
-    — it only restarts the scene loop (Audio/Graphics reset), **globals and the Steam
-    session persist**, so the guest re-loads a save while still connected, and the
-    once-per-client `:ready` transition would otherwise never re-fire.
-  - Already-in-game lobby joins apply the WELCOME snapshot immediately.
+  - The authoritative trigger is a **`DataManager.load_game` / `setup_new_game`
+    hook** that **blocks** on the sync (`Client#sync_world_blocking`): it sends
+    `WORLD_REQUEST` and pumps Steam + packet-read + `Graphics.update` (behind a
+    centered `Sync_Window` "Syncing game...") until the snapshot applies, **before**
+    the scene transitions to the map — so the map never renders with the stale save
+    world. (An overlay driven from `Scene#update` can't help: no scene update runs
+    during the load's `Graphics.transition`, which is exactly when the stale world is
+    on screen.) Bounded by `AWAIT_TIMEOUT` so a gone host can't hang the load.
+  - This is what makes joining-from-menu and **F12** work: F12 raises `RGSSReset`,
+    caught in `rgss_main` — it only restarts the scene loop (Audio/Graphics reset),
+    **globals and the Steam session persist**, so the guest re-loads a save while
+    still connected, and the once-per-client `:ready` transition would never re-fire.
+  - Already-in-game lobby joins apply the WELCOME snapshot immediately (a 1–2 frame
+    apply that lands with the map/UI, so no blocking needed — the `Scene#update`
+    overlay covers it but is effectively invisible).
 
 ## 5. World state [planned]
 
