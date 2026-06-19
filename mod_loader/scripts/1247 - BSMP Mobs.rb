@@ -61,43 +61,34 @@ class Game_Event < Game_Character
     bsmp_orig_update_self_movement
   end
 
-  # Pin a puppet's host-synced visibility AFTER the stock update, which otherwise
-  # keeps resetting @opacity to full each frame (the death animation's opacity-0 then
-  # only flickered through). Cheap for everything else: events never synced skip via
-  # the nil guard, host/single-player skip via bsmp_puppet?.
-  alias bsmp_orig_update_visibility update
-  def update
-    bsmp_orig_update_visibility
-    return if @bsmp_net_opacity.nil? and @bsmp_net_transparent.nil?
-    return if not bsmp_puppet?
-    @opacity = @bsmp_net_opacity unless @bsmp_net_opacity.nil?
-    @transparent = @bsmp_net_transparent unless @bsmp_net_transparent.nil?
+  # The BASE opacity the symbol logic restores @opacity to every frame
+  # (update_symbol_opacity does `@opacity = @origin_opacity`). The death move-route
+  # drops @origin_opacity to 0 on the host, but that route is suppressed on the
+  # guest, so the guest kept restoring @opacity to a stale full value. We sync THIS
+  # source (not the derived @opacity), so the guest's own logic computes the right
+  # visibility — this is what finally hides/respawns a defeated enemy on the guest.
+  def bsmp_base_opacity
+    @origin_opacity || @opacity
   end
 
-  # Apply an authoritative position (and opacity) from the host: glide for small
+  # Apply an authoritative position (and visibility) from the host: glide for small
   # corrections (the common per-tick case), hard-snap for big jumps (teleport / map
   # seam / first sync). Mirrors Player_Character#network_moveto — leaving @x/@y ahead
   # of @real lets Game_CharacterBase#update glide there and play the walk animation.
-  # Opacity comes from the host because update_symbol_opacity is suppressed on the
-  # puppet (the host fades the enemy by ITS distance; we mirror that, not recompute).
   def bsmp_apply_sync(x, y, dir, opacity = nil, speed = nil, transparent = nil)
     set_direction(dir) if dir && dir != 0
-    # Remember the host's visibility and re-assert it every frame in update: the
-    # game's own per-frame symbol logic keeps resetting a puppet's @opacity back to
-    # full, which fought this 4-frame sync and left a defeated enemy flickering. The
-    # host is the authority for a puppet's look, so we pin it.
+    # opacity here is the host's @origin_opacity (see bsmp_base_opacity). Set the
+    # source so the game's per-frame restore lands on the right value, and @opacity
+    # too for an immediate effect.
     unless opacity.nil?
+      @origin_opacity = opacity
       @opacity = opacity
-      @bsmp_net_opacity = opacity
     end
     # Match the host's current move_speed so the glide keeps pace: when an enemy
     # starts chasing the host bumps it to @reaction_after_speed; without this the
     # puppet glided at its idle speed, fell behind and then hard-snapped (teleport).
     @move_speed = speed unless speed.nil?
-    unless transparent.nil?
-      @transparent = (transparent == 1)
-      @bsmp_net_transparent = (transparent == 1)
-    end
+    @transparent = (transparent == 1) unless transparent.nil?
     if (x - @real_x).abs + (y - @real_y).abs > BSMP::Config::MOB_SNAP_DISTANCE
       moveto(x, y)
     else

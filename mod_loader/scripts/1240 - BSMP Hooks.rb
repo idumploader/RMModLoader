@@ -62,8 +62,8 @@ class Spriteset_Map
     return if movers.empty?
     data = $game_map.map_id.to_s
     movers.each do |e|
-      data << ";#{e.id},#{e.x},#{e.y},#{e.direction},#{e.opacity},#{e.move_speed},#{e.transparent ? 1 : 0}"
-      BSMP.log("bcast mob #{e.id} op=#{e.opacity} tr=#{e.transparent}") if e.opacity != 255 or e.transparent
+      data << ";#{e.id},#{e.x},#{e.y},#{e.direction},#{e.bsmp_base_opacity},#{e.move_speed},#{e.transparent ? 1 : 0}"
+      BSMP.log("bcast mob #{e.id} base_op=#{e.bsmp_base_opacity} op=#{e.opacity} tr=#{e.transparent}") if e.bsmp_base_opacity != 255 or e.transparent
     end
     bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::MOB_SYNC, 0, data))
   end
