@@ -91,13 +91,20 @@ logic is covered by `bsmp_test_handshake`.
 - Host validates → `Accept { world snapshot follows }` or `Reject { reason }`
   (reason surfaced to the client for a useful message).
 - Also the place to negotiate optional feature capabilities.
-- **Deferred snapshot apply (joining from the menu).** A guest can accept the
-  handshake while still at the title/load menu, so `WORLD_SNAPSHOT` may arrive
-  before any game is loaded — and a later `DataManager.load_game` would overwrite
-  an early apply with the *save's* world. So the client **caches the blob**
-  (`@pending_world`) and applies it from `ensure_announced` only once
-  `World.ready?` (in-game), which is guaranteed to be **after** the save-load.
-  Re-attempted every frame, consumed once. (Already-in-game joins apply immediately.)
+- **World re-adoption on save-load (`WORLD_REQUEST`).** A guest can accept the
+  handshake while still at the title/load menu, so the WELCOME-time `WORLD_SNAPSHOT`
+  may arrive before any game is loaded (`World.ready?` false → `World.load` skips
+  it). And any `DataManager.load_game` replaces our world with the *save's*. So:
+  - The client **caches** a snapshot blob (`@pending_world`) and applies it once
+    `World.ready?`, as a best-effort fast path.
+  - The authoritative trigger is a **`DataManager.load_game` hook**: every save-load,
+    a connected guest sends `WORLD_REQUEST`; the host replies with the current
+    snapshot, which applies on top of the just-loaded save world. This is what makes
+    joining-from-menu and **F12** work: F12 raises `RGSSReset`, caught in `rgss_main`
+    — it only restarts the scene loop (Audio/Graphics reset), **globals and the Steam
+    session persist**, so the guest re-loads a save while still connected, and the
+    once-per-client `:ready` transition would otherwise never re-fire.
+  - Already-in-game lobby joins apply the WELCOME snapshot immediately.
 
 ## 5. World state [planned]
 

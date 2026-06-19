@@ -300,6 +300,24 @@ class Game_Map
 
 end
 
+# Loading a save replaces our world ($game_switches/variables/self_switches) with
+# the save's. A connected guest must re-adopt the host's world afterwards, so pull a
+# fresh snapshot. This is the correct trigger (every load), unlike the once-per-client
+# :ready transition — it also covers F12 (RGSSReset keeps globals/connection, just
+# restarts the scene loop, so the guest re-loads a save while still connected).
+module DataManager
+  class << self
+    alias bsmp_orig_load_game load_game
+    def load_game(index)
+      result = bsmp_orig_load_game(index)
+      # Adopting the host's world is always safe, so don't depend on load_game's
+      # return convention (BS2 may override it) — request whenever we're connected.
+      $bsmp_client.request_world if $bsmp_client and $bsmp_client.connected?
+      result
+    end
+  end
+end
+
 # --- Live world-state sync: broadcast a fact whenever a SHARED flag is written
 # locally. The anti-echo guard ($bsmp_applying_fact) suppresses re-broadcast while
 # we're applying a received fact / world snapshot. self-switches are all shared.

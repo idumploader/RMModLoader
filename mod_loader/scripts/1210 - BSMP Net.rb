@@ -170,8 +170,17 @@ module BSMP
     # title has no actor / no world objects yet.
     def ensure_announced
       return if not connected?
-      @handshake_state = :ready if @handshake_state != :ready and update_player_data
+      if @handshake_state != :ready and update_player_data
+        @handshake_state = :ready
+        request_world # now in-game — pull the host's current world (covers menu/save joins)
+      end
       apply_pending_world
+    end
+
+    # Ask the host for a fresh world snapshot. Sent once, the frame we transition
+    # to in-game, so the apply lands after any DataManager.load_game.
+    def request_world
+      send_packet(BasicNetworkPacket.new(Events::WORLD_REQUEST, 0, ""))
     end
 
     # Adopt the host's world. Deferred until World.ready? so it lands AFTER any
@@ -473,6 +482,11 @@ module BSMP
       packet.data = Wire.unpack(packet.data)
       if packet.type == Events::HANDSHAKE_HELLO
         return handle_hello(user_id, packet) # control message: validate, never relay
+      end
+      if packet.type == Events::WORLD_REQUEST
+        # A guest that just loaded in wants the current world. Point-to-point, never relayed.
+        send_world_snapshot(user_id) if find_client(user_id)
+        return
       end
       p "Got packet from #{user_id}, type=#{packet.type}, data=#{packet.data}"
       # p "Got packet from #{user_id}. type=#{Events::NAMES[packet.type]}, data=#{packet.data}"

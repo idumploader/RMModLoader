@@ -352,6 +352,10 @@ module BSMP
     HANDSHAKE_WELCOME = 12
     HANDSHAKE_REJECT  = 13
     WORLD_SNAPSHOT    = 14
+    # Guest -> host: "I'm in-game now, send me the current world." Lets a guest that
+    # joined from the title/menu pull a fresh snapshot the moment it loads in, instead
+    # of relying on the (possibly never received, or pre-load) WELCOME-time snapshot.
+    WORLD_REQUEST     = 20
 
     # Live world-state facts (shared switches/variables + all self-switches).
     SWITCH_CHANGED      = 15
