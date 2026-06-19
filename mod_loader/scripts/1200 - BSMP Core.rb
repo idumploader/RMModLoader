@@ -546,6 +546,15 @@ module BSMP
     # local (not a self-switch), so mirror it. data = "map_id;event_id".
     MOB_ERASE           = 23
 
+    # --- co-op battle (step 6) ---
+    # Battle lifecycle. The host announces its battle so guests join as mute clients
+    # (BATTLE_START = troop id + escape flag) and the authoritative end so they leave
+    # (BATTLE_END = result 0/1/2). Handlers live in 1250 - BSMP Battle.rb (registered
+    # into HANDLERS there). 26-39 reserved for the rest of the battle epic (snapshot,
+    # ATB / HP / state facts, input request/response).
+    BATTLE_START        = 24
+    BATTLE_END          = 25
+
     HANDLERS = {
       PLAYER_JOINED            => method(:on_player_joined),
       PLAYER_MOVED             => method(:on_player_moved),

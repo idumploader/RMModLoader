@@ -310,6 +310,92 @@ interface that is either local calls (host) or packets (guests).
 - Phasing: (1) snapshot + join, (2) authoritative action execution + remote
   render, (3) remote-turn input request/response.
 
+### 9.0 Engine map (BS2 custom "71's ATB") — injection points
+
+Studied from the decompile before building. The custom ATB lives in `161 - 71
+Scene_Battle.rb` (it **reopens both `Scene_Battle` and `BattleManager`**); the
+stock resolve/scene is `116 - Scene_Battle.rb`, `6 - BattleManager.rb`, `23 -
+Game_Battler.rb`; AP charging is `165 - Game_Battler フレーム更新.rb`, config
+`160 - ATB设定.rb`. Key seams:
+- **ATB/AP tick (deterministic, no RNG):** `Game_Battler#ap_gain_point`/`ap_update`
+  (165) charges `@ap` to `ATB::MAX_AP` (8000); driven by AGI + states + `FRAME_AP_GAIN`.
+  Ticked in `Scene_Battle#battlers_frame_update` → `frame_update` inside the charge
+  loop of `start_party_command_selection` (161). **Mute client suppresses this.**
+- **Turn-ready / order:** `BattleManager.action_battler` (161) = `[act_forced,
+  act_chant, input_battler].compact[0]`; `input_battler` = first battler with `ap >=
+  MAX_AP`. Single funnel for "whose turn".
+- **Command input:** `Scene_Battle` window handlers (116): `command_attack/skill/
+  guard/item` → `BattleManager.actor.input` (`Game_Action`); target via
+  `on_enemy_ok`/`on_actor_ok`.
+- **Action resolution / RNG boundary (host authority):** `Scene_Battle#invoke_item`
+  (116) → counter/reflect RNG; `Game_Battler#item_apply` (23) → hit/evade/crit +
+  `make_damage_value`/`apply_variance` RNG → `execute_damage` (HP/MP). Animations via
+  `show_animation`. **Host computes here; client only replays results.**
+- **Enemy AI:** `Game_Enemy#make_actions`/`select_enemy_action` (25), RNG-weighted.
+- **Main loop:** `Scene_Battle#update` (116) → if `in_turn?` `process_event` +
+  `process_action`; then `judge_win_loss`.
+- **Members:** everywhere `$game_party.* + $game_troop.*` (`all_alive_members` 161,
+  `check_members` 161, `all_battle_members` 116) — the combined-party seam.
+- **Win/lose / end:** `BattleManager.judge_win_loss` → `process_victory/defeat/abort`
+  → `battle_end(result)`.
+- **Net pump:** `bsmp_read_packets` runs in `Scene_Base#update` (1240), so a mute
+  Scene_Battle that calls `super` renders (`update_basic`) AND reads packets.
+
+### 9.1b Authority decision [locked 2026-06-20]
+
+After 6.1 wire-tested, the model is locked: **lobby-host authority, ONE global
+co-op battle, everyone participates** (combined party vs one scaled troop).
+Alternatives considered and rejected:
+- **Initiator-authoritative per-skirmish** (each fight run by whoever started it →
+  free N-parallel battles, host not overloaded). Clean and cheaper than host-headless,
+  but the team chose host+all-join for **balance simplicity** (one party vs one troop)
+  and consistency (the mob dies for everyone anyway).
+- **Host runs N battles headless** (host's original idea). Needs an instanceable,
+  headless ATB engine — extract BS2's heavy custom ATB out of `Scene_Battle` and swap
+  `$game_troop`/`BattleManager`/`$game_party` per instance per frame. Huge and fragile;
+  the all-join model sidesteps it entirely (one battle, host is a participant).
+
+All-join does NOT foreclose **mid-join by proximity** later: that's a trigger-layer
+policy (a guest enters when it walks into the on-map skirmish and gets the current
+snapshot instead of the start) — the snapshot + combined-party machinery (6.2/6.3),
+built anyway for mid-battle join (§9), already supports adding a participant at any time.
+
+Stats on join (default): **newcomer makes it easier**, no rescale, scale locked at
+start (§9.1). Do NOT mid-battle rescale **multi-phase bosses** (HP-threshold phase
+transitions would re-trigger); boss-specific handling deferred. Most enemies are
+single-phase, so the default fits them.
+
+### 9.2 Build sub-steps (6.1–6.6) + status
+
+- **6.1 Session lifecycle + mute client [done — code, not yet wire-tested].**
+  `1250 - BSMP Battle.rb` (+ `BATTLE_START`=24 / `BATTLE_END`=25 in 1200). Host hooks
+  `Scene_Battle#start` → broadcast `BATTLE_START`=`"troop_id;can_escape"` and
+  `BattleManager.battle_end` → `BATTLE_END`=`result`; both guarded `BSMP.host?` so
+  guests never emit. Guest: `on_battle_start` queues `BSMP::Battle.pending`,
+  `Scene_Map#update` enters it (`BattleManager.setup` + `SceneManager.call(Scene_Battle)`,
+  `can_lose=true`), the transition visuals fire from Scene_Map's terminate hooks;
+  `BATTLE_END` → `request_end` → mute `Scene_Battle#update` does `SceneManager.return`.
+  Mute scene: `battle_start` only `on_battle_start`s party/troop (no emerge msgs / no
+  ATB charge / no command window), `update` = `super` (render + net pump) and nothing
+  else (no FSM, no win/lose). v1 pull-in = ALL guests join a host-initiated battle
+  regardless of map ("fight together"); guest-touched local encounters still fight
+  locally (changed in 6.6). First wire test: guest enters/exits battle in lockstep,
+  sees the same enemies (actor side is still the guest's own party until 6.3).
+- **6.2 Snapshot + authoritative state streaming [next].** Stream ATB fill, HP/MP/TP,
+  states(+turns) and action events (anim/damage/log) so the mute scene animates; full
+  join snapshot vs per-tick deltas; capture at the RNG/resolve boundary on the host.
+- **6.3 Combined party (guest actor in the fight) [planned].** Guest sends actor
+  snapshot; host rebuilds proxy `Game_Actor`(s) and merges so `$game_party.*` /
+  `battle_members` span all players. Most invasive.
+- **6.4 Remote-turn input [planned].** Host requests a guest's command when its ATB
+  fills; guest opens its command window, replies; host validates + resolves.
+- **6.5 End / rewards / death / disconnect [planned].** Authoritative win/lose;
+  personal reward grants (like loot §7); downed=spectator; disconnect-while-downed
+  cleanup so the battle never deadlocks.
+- **6.6 Scaling + guest-initiated encounters [planned].** Enemy HP×N / ATB speed
+  locked at start (§9.1); change step-4's local guest encounter into a host-auth
+  request; settle the pull-in rule (all vs same-map vs proximity).
+
 ### 9.1 Balance scaling by player count
 
 Co-op breaks action economy (more attackers per ATB cycle), so difficulty must
