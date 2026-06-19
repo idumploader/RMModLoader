@@ -12,6 +12,81 @@ if defined?(BSMP)
 
 module BSMP
 
+  # Handshake payloads + validation. The HELLO is a small ';'-delimited string the
+  # guest sends right after entering the lobby; the host validates it (mutual
+  # version acceptance + game + content hash) and answers WELCOME (+ world snapshot)
+  # or REJECT. See spec section 4.
+  module Handshake
+
+    DELIM = ';'
+
+    # Our HELLO: own version, the peer-version range we accept, game title, and a
+    # local fingerprint of the gameplay database.
+    def self.hello
+      [
+        Config::MAJOR_VERSION,
+        Config::MINOR_VERSION,
+        Config::ACCEPTED_MINOR_MIN,
+        Config::ACCEPTED_MINOR_MAX,
+        game_title,
+        data_hash,
+      ].join(DELIM)
+    end
+
+    def self.parse(data)
+      a = data.dup.force_encoding("UTF-8").split(DELIM)
+      {
+        :major      => a[0].to_i,
+        :minor      => a[1].to_i,
+        :accept_min => a[2].to_i,
+        :accept_max => a[3].to_i,
+        :game_title => a[4].to_s,
+        :data_hash  => a[5].to_i,
+      }
+    end
+
+    # => [accepted(bool), reason(String)]
+    def self.validate(peer)
+      if peer[:major] != Config::MAJOR_VERSION
+        return [false, "protocol major #{peer[:major]} != #{Config::MAJOR_VERSION}"]
+      end
+      # Mutual MINOR acceptance: peer must accept our minor AND we must accept theirs.
+      peer_accepts_us = peer[:accept_min] <= Config::MINOR_VERSION && Config::MINOR_VERSION <= peer[:accept_max]
+      we_accept_peer  = Config::ACCEPTED_MINOR_MIN <= peer[:minor] && peer[:minor] <= Config::ACCEPTED_MINOR_MAX
+      if not (peer_accepts_us and we_accept_peer)
+        return [false, "minor #{peer[:minor]} not mutually accepted (ours #{Config::MINOR_VERSION})"]
+      end
+      if peer[:major] != Config::MAJOR_VERSION || peer[:minor] != Config::MINOR_VERSION
+        p "BSMP handshake: minor differs (peer #{peer[:major]}.#{peer[:minor]}, us #{Config::MAJOR_VERSION}.#{Config::MINOR_VERSION}) but mutually accepted"
+      end
+      if peer[:game_title] != game_title
+        return [false, "different game"]
+      end
+      if Config::CHECK_DATA_HASH and peer[:data_hash] != data_hash
+        return [false, "content/mod mismatch (data hash)"]
+      end
+      [true, "ok"]
+    end
+
+    def self.game_title
+      $data_system ? $data_system.game_title.to_s : ""
+    end
+
+    # crc32 of a local Marshal.dump of the gameplay-relevant database. Marshal is
+    # used ONLY locally here (never load()ed from a peer); the wire carries just the
+    # resulting integer. Cached — the database is constant for the session.
+    def self.data_hash
+      return @data_hash if @data_hash
+      blob = Marshal.dump([
+        $data_actors, $data_classes, $data_skills, $data_items,
+        $data_weapons, $data_armors, $data_enemies, $data_troops,
+        $data_states, $data_system, $data_common_events,
+      ])
+      @data_hash = Zlib.crc32(blob)
+    end
+
+  end
+
   class Client
 
     attr_reader :lobby_id
@@ -28,6 +103,7 @@ module BSMP
       @read_channel_id = 0
       @server_user_id = nil
       @max_read_packets = 10
+      @handshake_state = :idle # :idle -> :hello_sent -> :accepted / :rejected
     end
 
     def join_lobby(lobby_id)
@@ -91,7 +167,33 @@ module BSMP
       @lobby_id = lobby_id
       @server_user_id = SteamAPI.get_lobby_owner(lobby_id)
 
+      # Don't announce ourselves yet — first do the handshake. We send player data
+      # only once the host accepts and we've adopted its world (see handle_welcome).
+      send_hello
+    end
+
+    def send_hello
+      @handshake_state = :hello_sent
+      send_packet(BasicNetworkPacket.new(Events::HANDSHAKE_HELLO, 0, Handshake.hello))
+    end
+
+    def handle_welcome(packet)
+      @handshake_state = :accepted
+      p "Handshake accepted by host"
+      # Adopt-then-announce ordering isn't required (our position is independent of
+      # the host world), so announce on accept — robust even if no snapshot follows.
       update_player_data
+    end
+
+    def handle_world_snapshot(packet)
+      applied = World.load(packet.data)
+      p "World snapshot #{applied ? 'applied' : 'skipped'} (#{packet.data.bytesize} B)"
+    end
+
+    def handle_reject(packet)
+      @handshake_state = :rejected
+      p "Connection rejected by host: #{packet.data}"
+      leave_lobby
     end
 
     def on_lobby_chat_update(lobby_id, update_enum, user_id, failure)
@@ -110,6 +212,14 @@ module BSMP
 
     def on_packet_read(user_id, packet)
       packet.data = Wire.unpack(packet.data)
+      case packet.type
+      when Events::HANDSHAKE_WELCOME
+        return handle_welcome(packet)
+      when Events::HANDSHAKE_REJECT
+        return handle_reject(packet)
+      when Events::WORLD_SNAPSHOT
+        return handle_world_snapshot(packet) # binary blob — don't log its data
+      end
       p "Client got packet from #{packet.from_id}, type=#{packet.type}, data=#{packet.data}"
       Events.on_packet(packet)
     end
@@ -211,6 +321,40 @@ module BSMP
       send_joined_data_to_client(client)
     end
 
+    # Validate a guest's HELLO and either onboard it (WELCOME + world snapshot +
+    # normal join) or reject it with a reason. Never relayed to other clients.
+    def handle_hello(user_id, packet)
+      peer = Handshake.parse(packet.data)
+      ok, reason = Handshake.validate(peer)
+      if not ok
+        p "Rejecting #{user_id}: #{reason}"
+        send_control(user_id, Events::HANDSHAKE_REJECT, reason)
+        return
+      end
+      return if find_client(user_id) # duplicate HELLO, already onboarded
+      p "Accepting #{user_id}"
+      send_control(user_id, Events::HANDSHAKE_WELCOME, "")
+      send_world_snapshot(user_id)
+      # Admit last: registers the client, announces the join to everyone and pushes
+      # the host's own player data to the newcomer.
+      add_client(ServerClient.new(user_id, @channel_id))
+    end
+
+    # Send a point-to-point control packet to a user that may not be a client yet.
+    def send_control(user_id, type, data)
+      return if not running?
+      target = ServerClient.new(user_id, @channel_id)
+      send_packet_to(target, BasicNetworkPacket.new(type, @server_user_id, data))
+    end
+
+    def send_world_snapshot(user_id)
+      return if not World.ready?
+      blob = World.dump
+      target = ServerClient.new(user_id, @channel_id)
+      send_packet_to(target, BasicNetworkPacket.new(Events::WORLD_SNAPSHOT, @server_user_id, blob))
+      p "Sent world snapshot to #{user_id} (#{blob.bytesize} B raw)"
+    end
+
     def send_joined_data_to_client(client)
       char_packet = BasicNetworkPacket.new(Events::PLAYER_JOINED, @server_user_id, $game_player.actor.name)
       send_packet_to(client, char_packet)
@@ -271,11 +415,9 @@ module BSMP
 
       return if update_enum == 0
       if update_enum == Config::LOBBY_CHAT_UPDATE_JOINED
-        return if find_client(user_id)
-        channel_id = 0
-        # channel_id = 1 if Config::DEBUG
-        client = ServerClient.new(user_id, channel_id)
-        add_client(client)
+        # Admission is deferred to the handshake: the client is added only after a
+        # valid HELLO (see handle_hello). Here we just note the lobby join.
+        p "User #{user_id} entered the lobby; awaiting handshake"
       else
         client = find_client(user_id)
         return if not client
@@ -292,6 +434,9 @@ module BSMP
     def on_packet_read(user_id, packet)
       packet.from_id = user_id
       packet.data = Wire.unpack(packet.data)
+      if packet.type == Events::HANDSHAKE_HELLO
+        return handle_hello(user_id, packet) # control message: validate, never relay
+      end
       p "Got packet from #{user_id}, type=#{packet.type}, data=#{packet.data}"
       # p "Got packet from #{user_id}. type=#{Events::NAMES[packet.type]}, data=#{packet.data}"
       # Relay carries the plaintext data; send_packet_to re-frames per hop.

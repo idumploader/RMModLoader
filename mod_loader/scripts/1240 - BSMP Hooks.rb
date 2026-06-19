@@ -25,6 +25,7 @@ class Spriteset_Map
   alias bsmp_orig_initialize initialize
   alias bsmp_orig_create_characters create_characters
   alias bsmp_orig_update update
+  alias bsmp_orig_dispose dispose
 
   def create_characters
     bsmp_orig_create_characters
@@ -41,6 +42,25 @@ class Spriteset_Map
     # @bsmp_players here holds sprites, which bsmp_orig_update already updates.
     $bsmp_players.bsmp_players.each_value do |character|
       character.update if character.map_id == $game_map.map_id
+    end
+    update_bsmp_status
+  end
+
+  def dispose
+    @bsmp_status_window.dispose if @bsmp_status_window
+    @bsmp_status_window = nil
+    bsmp_orig_dispose
+  end
+
+  # Show the status panel while networking runs; create it lazily (so toggling the
+  # server on/off mid-map works) and drop it the moment networking stops.
+  def update_bsmp_status
+    if bsmp_network_running?
+      @bsmp_status_window ||= BSMP::Status_Window.new
+      @bsmp_status_window.update
+    elsif @bsmp_status_window
+      @bsmp_status_window.dispose
+      @bsmp_status_window = nil
     end
   end
 

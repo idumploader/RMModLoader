@@ -51,6 +51,16 @@ module BSMP
     MAJOR_VERSION = 0
     MINOR_VERSION = 2
 
+    # Protocol compatibility (handshake). Same MAJOR is mandatory (breaking wire
+    # changes bump it); a peer MINOR is accepted iff it falls in this range on BOTH
+    # sides (mutual acceptance). Divergence inside the range is fine.
+    ACCEPTED_MINOR_MIN = 0
+    ACCEPTED_MINOR_MAX = 2
+
+    # Content gate: reject peers whose gameplay $data_* fingerprint differs (mods /
+    # database mismatch). Set false to allow knowingly-different content.
+    CHECK_DATA_HASH = true
+
     DEFAULT_SERVER_CHANNEL_ID = 0
     DEFAULT_SERVER_CLIENT_ID = 1
 
@@ -84,7 +94,7 @@ module BSMP
 
     # data (any encoding) -> framed binary string: flags byte + payload.
     def self.pack(data)
-      bin = data.to_s.dup.force_encoding(Encoding::ASCII_8BIT)
+      bin = data.to_s.dup.force_encoding("ASCII-8BIT")
       if bin.bytesize >= COMPRESS_THRESHOLD
         deflated = Zlib::Deflate.deflate(bin, Zlib::BEST_COMPRESSION)
         # Only flag compressed if it actually shrank (deflate can grow tiny/noisy data).
@@ -98,7 +108,7 @@ module BSMP
       return "" if data.nil? or data.bytesize == 0
       flags = data.getbyte(0)
       body = data[1, data.bytesize - 1] || ""
-      body.force_encoding(Encoding::ASCII_8BIT)
+      body.force_encoding("ASCII-8BIT")
       (flags & FLAG_COMPRESSED) != 0 ? Zlib::Inflate.inflate(body) : body
     end
 
@@ -188,6 +198,13 @@ module BSMP
     PLAYER_LEAVED = 9
 
     SAVE_CONTENTS_PART = 10
+
+    # Handshake / world-transfer control messages. Point-to-point host<->guest,
+    # handled directly in Client/Server#on_packet_read (NOT relayed, NOT in HANDLERS).
+    HANDSHAKE_HELLO   = 11
+    HANDSHAKE_WELCOME = 12
+    HANDSHAKE_REJECT  = 13
+    WORLD_SNAPSHOT    = 14
 
     HANDLERS = {
       PLAYER_JOINED            => method(:on_player_joined),

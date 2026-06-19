@@ -57,9 +57,14 @@ undecided.
 - **Anti-echo:** when applying a received change, never re-broadcast it (guard
   flag), mirroring the `from_id` relay rule. **[principle]**
 
-## 4. Handshake [planned]
+## 4. Handshake [done]
 
 Runs at lobby join, **before** admitting the guest / sending the world.
+Implemented as `BSMP::Handshake` + the Client/Server join flow: guest sends
+`HELLO` on lobby enter; host validates and replies `WELCOME` + `WORLD_SNAPSHOT`
+or `REJECT{reason}`; admission (client record + join broadcast) is deferred until
+a valid HELLO. Control packets are point-to-point and never relayed. Validation
+logic is covered by `bsmp_test_handshake`.
 
 - `Hello { bsmp_protocol_version, accepted_versions, game_id/title, data_hash, mod_manifest }`.
   - `data_hash`: hash of `$data_*` / scripts so both have compatible content
@@ -72,6 +77,17 @@ Runs at lobby join, **before** admitting the guest / sending the world.
   above a declared minimum. A range is less to maintain than an explicit set.
   - Separate axes: **protocol** (wire format, strict) vs **content/mod** version
     (`data_hash`, ~binary compatible-or-not) vs mod-loader version.
+- **Decided reject rules:**
+  - **MAJOR mismatch → REJECT** (hard, breaking wire change).
+  - **MINOR:** accepted iff mutually in range (`ACCEPTED_MINOR_MIN..MAX` on both
+    sides); divergence inside the accepted range is fine (log only, no reject).
+  - **game (title) mismatch → REJECT** (different game/content entirely).
+  - **`data_hash` mismatch → REJECT**, but gated by `Config::CHECK_DATA_HASH` so it
+    can be switched off when peers knowingly run differing mods/database.
+  - `data_hash` = `Zlib.crc32` over a local `Marshal.dump` of the gameplay-relevant
+    `$data_*` (actors/classes/skills/items/weapons/armors/enemies/troops/states/
+    system/common_events) — Marshal is used **locally only** (never loaded from a
+    peer), the wire carries just the integer.
 - Host validates → `Accept { world snapshot follows }` or `Reject { reason }`
   (reason surfaced to the client for a useful message).
 - Also the place to negotiate optional feature capabilities.
@@ -88,11 +104,25 @@ write-back**.
 - **Character (personal, never overwritten):** each player's `$game_party`
   (actors, levels, inventory, gold, equipment), `$game_actors`.
 
-### 5.2 Serialization
+### 5.2 Serialization — `BSMP::World` **[done]**
 
-- **No Marshal.** Bit-pack switches (1 bit each → ~125 B / 1000), int-pack
-  variables; self-switches as `(map_id, event_id, ch) -> bool` facts. Compact,
-  safe (numbers only), version-tolerant. zlib the whole snapshot (it's large).
+- **No Marshal.** Bit-pack switches (1 bit each), sparse variables (only non-zero,
+  `varint index + tagged value`), self-switches as the `true` `(map_id, event_id,
+  ch)` facts. Version-tagged (`FORMAT`), all ints LEB128 varint. zlib via the
+  transport once over threshold.
+- **Variable value codec is recursive & primitive-only:** `Integer / String /
+  Array / true / false / nil / Float` (BS2 actually uses Array-typed variables —
+  e.g. vars 1001-1009). Decoding constructs only plain primitives (no object
+  instantiation from peer data) → RCE-safe, unlike `Marshal.load`. Unknown classes
+  (Hash / Symbol / custom) are logged and stored as nil.
+- **Apply = full replace** (host world is canonical): switches overwritten
+  wholesale, variables reset to 0 then re-applied (so a guest's stray vars — incl.
+  Array vars — don't survive), self-switches cleared then re-set; writes go through
+  the public `[]=` so `need_refresh` fires.
+- **Measured size (BS2):** ~19 KB raw → **~0.85 KB on the wire** after zlib (~4%;
+  the big Array vars compress hard). Sub-1 KB, one-shot at join — negligible.
+- Verified by `bsmp_test_world` (dump → mutate → apply → re-dump must be
+  byte-identical).
 
 ### 5.3 Live sync — the softlock trap
 
@@ -246,12 +276,16 @@ freely). Showing **where** other players are, layered by cost:
   smoothing) — reused for host-driven mobs.
 - Self-sufficient Steam init + callback pump; null-guarded interfaces.
 - `module BSMP` split across load-ordered files; `BasicNetworkPacket` binary-safe.
-- Test ghost harness (single-account local testing).
+- **Transport compression** (`BSMP::Wire`, 1-byte flag frame + zlib threshold).
+- **Handshake** (`BSMP::Handshake`) + **world dump/apply** (`BSMP::World`).
+- **Status panel** (`BSMP::Status_Window`: role / online count / nicknames).
+- Test harnesses: ghost (interactive) + `bsmp_test` (handshake + world unit tests).
 
 ## 13. Suggested build order
 
 1. ~~**Transport:** compressed flag + zlib threshold (everyone needs it).~~ **[done]**
-2. **Handshake** + world **dump** (bit-packed) on join.
+2. ~~**Handshake** + world **dump** (bit-packed) on join.~~ **[done]** (untested
+   over the wire — needs a 2-machine run; logic covered by `bsmp_test_*`).
 3. **Self-switch / tagged-progress sync** with anti-echo → unlocks loot, boss gate,
    mob state.
 4. **Host-driven mobs** (reuse interpolation).
