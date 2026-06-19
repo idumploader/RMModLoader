@@ -164,6 +164,13 @@ design is two layers tied to one marking.
 
 ### 5.4 Persistence (equal progress for all)
 
+**Storage model: Terraria, not Minecraft [decided — team consensus].** Each player
+stores their **own character locally** (own save); the host stores only the
+**world** (shared progress), NOT guests' character data. (Minecraft's model — the
+server/world holding every player's data — was considered and rejected.) So a guest
+brings its character each session and the host never persists foreign characters —
+simpler for the host and consistent with the World+Character split.
+
 - During session: host world canonical, synced live (guests hold a mirror).
 - On **session end** (host graceful leave or guest leave): each player writes
   `host world` + `own character` to a **dedicated co-op save slot**.

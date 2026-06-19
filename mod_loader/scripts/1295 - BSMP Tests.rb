@@ -31,6 +31,7 @@ module BSMPTests
     reset
     run_section("handshake") { handshake_cases }
     run_section("world")     { world_cases }
+    run_section("sync")      { sync_cases }
     summary
   end
 
@@ -43,6 +44,12 @@ module BSMPTests
   def self.run_world
     reset
     run_section("world") { world_cases }
+    summary
+  end
+
+  def self.run_sync
+    reset
+    run_section("sync") { sync_cases }
     summary
   end
 
@@ -180,6 +187,35 @@ module BSMPTests
     a.bytesize == b.bytesize ? -1 : n
   end
 
+  # --- live-sync cases (the shared-flag classification + anti-echo guard) ------
+
+  def self.sync_cases
+    s_ids    = BSMP::Config::SHARED_SWITCH_IDS
+    s_ranges = BSMP::Config::SHARED_SWITCH_RANGES
+    saved_ids    = s_ids.dup
+    saved_ranges = s_ranges.dup
+    begin
+      s_ids.clear
+      s_ranges.clear
+      s_ids << 42
+      s_ranges << (100..200)
+      expect("allowlist id is shared",      BSMP.shared_switch?(42))
+      expect("range id is shared",          BSMP.shared_switch?(150))
+      expect("range bounds inclusive",      BSMP.shared_switch?(100) && BSMP.shared_switch?(200))
+      expect("unlisted id not shared",      !BSMP.shared_switch?(43))
+      expect("out-of-range id not shared",  !BSMP.shared_switch?(201))
+    ensure
+      s_ids.replace(saved_ids)
+      s_ranges.replace(saved_ranges)
+    end
+
+    # Anti-echo guard: apply_fact must set the flag inside the block and clear it
+    # after (even self-switch facts apply under it).
+    $bsmp_applying_fact = false
+    BSMP::Events.apply_fact { expect("apply_fact sets guard", $bsmp_applying_fact == true) }
+    expect("apply_fact clears guard", $bsmp_applying_fact == false)
+  end
+
 end
 
 def bsmp_test
@@ -192,6 +228,10 @@ end
 
 def bsmp_test_world
   BSMPTests.run_world
+end
+
+def bsmp_test_sync
+  BSMPTests.run_sync
 end
 
 end # if defined?(BSMP)

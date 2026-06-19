@@ -282,7 +282,47 @@ class Game_Map
 
 end
 
+# --- Live world-state sync: broadcast a fact whenever a SHARED flag is written
+# locally. The anti-echo guard ($bsmp_applying_fact) suppresses re-broadcast while
+# we're applying a received fact / world snapshot. self-switches are all shared.
+
+class Game_Switches
+  alias bsmp_orig_set []=
+  def []=(switch_id, value)
+    bsmp_orig_set(switch_id, value)
+    return if $bsmp_applying_fact
+    return if not bsmp_network_running?
+    return if not BSMP.shared_switch?(switch_id)
+    bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::SWITCH_CHANGED, 0, "#{switch_id};#{value ? 1 : 0}"))
+  end
+end
+
+class Game_Variables
+  alias bsmp_orig_set []=
+  def []=(variable_id, value)
+    bsmp_orig_set(variable_id, value)
+    return if $bsmp_applying_fact
+    return if not bsmp_network_running?
+    return if not BSMP.shared_variable?(variable_id)
+    # Shared variables are assumed integer (story counters); extend with the World
+    # value codec later if a shared var ever holds something else.
+    bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::VARIABLE_CHANGED, 0, "#{variable_id};#{value.to_i}"))
+  end
+end
+
+class Game_SelfSwitches
+  alias bsmp_orig_set []=
+  def []=(key, value)
+    bsmp_orig_set(key, value)
+    return if $bsmp_applying_fact
+    return if not bsmp_network_running?
+    bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::SELF_SWITCH_CHANGED, 0, "#{key[0]};#{key[1]};#{key[2]};#{value ? 1 : 0}"))
+  end
+end
+
 # --- BSMP globals + debug console commands ---
+
+$bsmp_applying_fact = false
 
 $bsmp_client = BSMP::Client.new()
 $bsmp_server = BSMP::Server.new()
@@ -359,12 +399,14 @@ end
 
 def show_test_window
   $bwnd = BSMP::Progress_Window.new()
-  $bwnd.text = MLLocalizedStrings["BSMP_SAVE_TRANSFER"]
+  $bwnd.text = defined?(MLLocalizedStrings) ? MLLocalizedStrings["BSMP_SAVE_TRANSFER"] : "Transferring save..."
   $bwnd.progress = 0.3
   $game_temp.streffect.push($bwnd)
 end
 
-MLLocalizedStrings.add_required("bsmp")
+# Optional: the loader's localization module isn't present in every bundle, so
+# don't hard-require it (degrade gracefully when absent).
+MLLocalizedStrings.add_required("bsmp") if defined?(MLLocalizedStrings)
 
 end # if defined?(BSMP)
 

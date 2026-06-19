@@ -88,9 +88,16 @@ module BSMP
         p "BSMP::World: snapshot format #{format} != #{FORMAT}, ignoring"
         return false
       end
-      load_switches(r)
-      load_variables(r)
-      load_self_switches(r)
+      # Applying the snapshot writes thousands of switches/vars; guard so the
+      # live-sync setter hooks don't re-broadcast each one as a fact.
+      $bsmp_applying_fact = true
+      begin
+        load_switches(r)
+        load_variables(r)
+        load_self_switches(r)
+      ensure
+        $bsmp_applying_fact = false
+      end
       $game_map.need_refresh = true if $game_map
       true
     end

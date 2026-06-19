@@ -82,6 +82,15 @@ module BSMP
     # independent of the game's own bindings). Change if it clashes.
     ROSTER_KEY = ModLoader::Keyboard::TAB
 
+    # --- Shared world state (live sync) ---
+    # Which switches / variables count as "shared progression" and sync live as
+    # facts. self-switches are ALWAYS shared (no list). Start empty and grow as the
+    # real flags are identified. Ranges are inclusive Ruby Ranges.
+    SHARED_SWITCH_RANGES   = []
+    SHARED_SWITCH_IDS      = []
+    SHARED_VARIABLE_RANGES = []
+    SHARED_VARIABLE_IDS    = []
+
   end
 
   # Wire framing for BasicNetworkPacket.data: a 1-byte flags header followed by the
@@ -155,6 +164,19 @@ module BSMP
     (info and info.name and not info.name.empty?) ? info.name : "?"
   end
 
+  # --- shared world-state classification (live sync) ------------------------
+  # self-switches are always shared, so they have no predicate.
+
+  def self.shared_switch?(id)
+    Config::SHARED_SWITCH_IDS.include?(id) or
+      Config::SHARED_SWITCH_RANGES.any? { |r| r.include?(id) }
+  end
+
+  def self.shared_variable?(id)
+    Config::SHARED_VARIABLE_IDS.include?(id) or
+      Config::SHARED_VARIABLE_RANGES.any? { |r| r.include?(id) }
+  end
+
   module Events
 
     def self.on_packet(packet)
@@ -218,6 +240,31 @@ module BSMP
 
     end
 
+    # --- live world-state facts (applied with the anti-echo guard) ---
+
+    def self.on_switch_changed(packet)
+      id, val = packet.data.split(';')
+      apply_fact { $game_switches[id.to_i] = (val.to_i != 0) }
+    end
+
+    def self.on_variable_changed(packet)
+      id, val = packet.data.split(';')
+      apply_fact { $game_variables[id.to_i] = val.to_i }
+    end
+
+    def self.on_self_switch_changed(packet)
+      map_id, event_id, ch, val = packet.data.split(';')
+      apply_fact { $game_self_switches[[map_id.to_i, event_id.to_i, ch]] = (val.to_i != 0) }
+    end
+
+    # Apply a received world fact without the setter hooks re-broadcasting it.
+    def self.apply_fact
+      $bsmp_applying_fact = true
+      yield
+    ensure
+      $bsmp_applying_fact = false
+    end
+
     INVALID_PACKET = 0
     PLAYER_JOINED = 1
     PLAYER_MOVED = 2
@@ -238,6 +285,11 @@ module BSMP
     HANDSHAKE_REJECT  = 13
     WORLD_SNAPSHOT    = 14
 
+    # Live world-state facts (shared switches/variables + all self-switches).
+    SWITCH_CHANGED      = 15
+    VARIABLE_CHANGED    = 16
+    SELF_SWITCH_CHANGED = 17
+
     HANDLERS = {
       PLAYER_JOINED            => method(:on_player_joined),
       PLAYER_MOVED             => method(:on_player_moved),
@@ -248,6 +300,9 @@ module BSMP
       PLAYER_MOVED_DIAG        => method(:on_player_moved_diag),
       PLAYER_LEAVED            => method(:on_player_leaved),
       SAVE_CONTENTS_PART       => method(:on_save_contents_part),
+      SWITCH_CHANGED           => method(:on_switch_changed),
+      VARIABLE_CHANGED         => method(:on_variable_changed),
+      SELF_SWITCH_CHANGED      => method(:on_self_switch_changed),
     }
 
     NAMES = {
