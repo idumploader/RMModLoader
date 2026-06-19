@@ -54,11 +54,30 @@ class Spriteset_Map
     return if @bsmp_mob_tick < BSMP::Config::MOB_SYNC_INTERVAL
     @bsmp_mob_tick = 0
     return if not bsmp_guest_on_this_map?
-    movers = $game_map.events.values.select { |e| e.bsmp_mover? }
+    events = $game_map.events.values
+    # Balloons can appear on any event (a static enemy shows "!" before it starts
+    # moving), so scan all of them; positions only matter for movers.
+    events.each { |e| bsmp_detect_balloon(e) }
+    movers = events.select { |e| e.bsmp_mover? }
     return if movers.empty?
     data = $game_map.map_id.to_s
     movers.each { |e| data << ";#{e.id},#{e.x},#{e.y},#{e.direction}" }
     bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::MOB_SYNC, 0, data))
+  end
+
+  # Rising-edge balloon detection. A mob's balloon_id (the "!" notice etc.) is set
+  # by AI as a direct ivar write, so we watch the value rather than the write: when
+  # it goes 0 -> N (or N -> M), broadcast MOB_BALLOON once. Sprite_Character zeroes
+  # balloon_id when the animation ends, which re-arms the edge. Per-map state in
+  # @bsmp_balloons (Scene_Map is recreated per map, so it resets on transfer).
+  def bsmp_detect_balloon(event)
+    @bsmp_balloons ||= {}
+    current = event.balloon_id
+    if current > 0 and @bsmp_balloons[event.id] != current
+      bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::MOB_BALLOON, 0,
+        "#{$game_map.map_id};#{event.id};#{current}"))
+    end
+    @bsmp_balloons[event.id] = current
   end
 
   def bsmp_guest_on_this_map?
