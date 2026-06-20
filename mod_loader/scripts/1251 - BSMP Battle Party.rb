@@ -165,8 +165,9 @@ module BSMP
     # ivars directly (no add_state/hp= side effects); @hp must NOT go through hp= (its
     # refresh would re-derive the death state from hp and fight the host's @states).
     # states_dot is "id" or "id:turns" dot-joined (turns absent -> 0). tp may be nil
-    # (BATTLE_PARTY_SYNC omits it) -> left untouched.
-    def self.apply_state(battler, hp, mp, tp, ap, states_dot)
+    # (BATTLE_PARTY_SYNC omits it) -> left untouched. buffs_dot is "param:level" dot-joined
+    # for non-zero param buffs (nil -> untouched, e.g. the initial snapshot).
+    def self.apply_state(battler, hp, mp, tp, ap, states_dot, buffs_dot = nil)
       ids = []
       turns = {}
       states_dot.to_s.split('.').each do |spec|
@@ -182,6 +183,20 @@ module BSMP
       battler.instance_variable_set(:@mp, mp.to_i)
       battler.instance_variable_set(:@tp, tp.to_i) unless tp.nil?
       battler.instance_variable_set(:@ap, ap.to_i)
+      unless buffs_dot.nil?
+        buffs  = Array.new(8, 0)
+        bturns = {}
+        buffs_dot.to_s.split('.').each do |spec|
+          pid, lvl, t = spec.split(':')
+          next if pid.nil? or pid.empty?
+          pi = pid.to_i
+          next unless pi >= 0 and pi < 8
+          buffs[pi]  = lvl.to_i
+          bturns[pi] = t.to_i # @buff_turns entry per non-zero buff (icon-turn display reads it)
+        end
+        battler.instance_variable_set(:@buffs, buffs)
+        battler.instance_variable_set(:@buff_turns, bturns)
+      end
     end
 
     # --- roster: broadcast OUR own actors so peers proxy them ----------------
@@ -221,7 +236,15 @@ module BSMP
         owner = a.is_a?(Game_BSMPProxyActor) ? a.bsmp_owner : host_id
         turns = a.instance_variable_get(:@state_turns) || {}
         st = a.states.map { |s| "#{s.id}:#{turns[s.id] || 0}" }.join('.')
-        parts << "#{owner}.#{a.id},#{a.hp},#{a.mp},#{a.ap},#{st}"
+        # @buffs are param up/down (ATK/DEF…), stored apart from @states — the guest's
+        # status icons miss them unless streamed too. Carry the turn count too (@buff_turns):
+        # BS2's icon-turn display reads @buff_turns[i].truncate for every non-zero buff, so a
+        # missing entry crashes (script 183). Non-zero param levels only, "param:level:turns".
+        buffs  = a.instance_variable_get(:@buffs) || []
+        bturns = a.instance_variable_get(:@buff_turns) || {}
+        bf = []
+        buffs.each_with_index { |lvl, i| bf << "#{i}:#{lvl}:#{bturns[i] || 0}" if lvl and lvl != 0 }
+        parts << "#{owner}.#{a.id},#{a.hp},#{a.mp},#{a.ap},#{st},#{bf.join('.')}"
       end
       return if parts.empty?
       bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::BATTLE_PARTY_SYNC, 0, parts.join(';')))
@@ -239,7 +262,7 @@ module BSMP
         next if owner_s.nil? or aid_s.nil?
         owner = owner_s.to_i
         actor_id = aid_s.to_i
-        hp, mp, ap, st = rest.split(',')
+        hp, mp, ap, st, bf = rest.split(',')
         target = $bsmp_battle_proxies.find { |a| a.bsmp_owner == owner and a.id == actor_id }
         if target.nil?
           next if $bsmp_players and $bsmp_players[owner] # other player, proxy pending
@@ -248,8 +271,25 @@ module BSMP
           end
         end
         next if target.nil?
-        apply_state(target, hp, mp, nil, ap, st)
+        # bf.to_s (never nil) so party sync is authoritative for buffs too: an empty field
+        # means "no buffs" and clears stale icons, vs the snapshot which omits buffs (nil).
+        apply_state(target, hp, mp, nil, ap, st, bf.to_s)
       end
+    end
+
+    # Guest: resolve a wire ally spec "owner.actor_id" to the local battler — a proxy of
+    # another player, or (no matching proxy and owner not a known other player) our OWN
+    # real actor. Same identity scheme as the party-state stream; used by ally-targeted
+    # animations / damage pop-ups (the attack animation carries the per-hit flash).
+    def self.resolve_ally(spec)
+      dot = spec.to_s.rindex('.')
+      return nil if dot.nil?
+      owner    = spec[0...dot].to_i
+      actor_id = spec[dot + 1..-1].to_i
+      proxy = $bsmp_battle_proxies.find { |a| a.bsmp_owner == owner and a.id == actor_id }
+      return proxy if proxy
+      return nil if $bsmp_players and $bsmp_players[owner] # other player, proxy pending
+      $game_party.battle_members.find { |a| (not a.is_a?(Game_BSMPProxyActor)) and a.id == actor_id }
     end
 
     def self.clear
@@ -275,11 +315,7 @@ module BSMP
       return if not BSMP.guest?
       return if not BSMP::Battle.client_session?
       BSMP::BattleParty.apply_party_state(packet.data)
-      scene = SceneManager.scene
-      if scene.is_a?(Scene_Battle)
-        scene.refresh_status if scene.respond_to?(:refresh_status)
-        scene.refresh_ap     if scene.respond_to?(:refresh_ap)
-      end
+      BSMP::Battle.mark_status_dirty # coalesced redraw (mute Scene_Battle#update)
     end
 
     HANDLERS[BATTLE_ACTOR]      = method(:on_battle_actor)

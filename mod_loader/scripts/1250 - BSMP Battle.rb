@@ -67,6 +67,21 @@ module BSMP
         @active = true
         @ending = false
         @starve = 0
+        @status_dirty = false
+      end
+
+      # Coalesce battle-status redraws. Every BATTLE_SYNC (enemies) and BATTLE_PARTY_SYNC
+      # (allies) used to call refresh_status/refresh_ap itself — two full redraws per sync
+      # window, each regenerating AP-gauge bitmaps while AP charges, which tanked the FPS.
+      # Instead mark dirty here and redraw at most ONCE per frame (mute Scene_Battle#update).
+      def mark_status_dirty
+        @status_dirty = true
+      end
+
+      def consume_status_dirty
+        d = @status_dirty
+        @status_dirty = false
+        d
       end
 
       # Heartbeat watchdog. note_sync resets the starvation counter on every received
@@ -147,13 +162,27 @@ module BSMP
       # mute guest plays the same (setting battler.animation_id, like the map balloon).
       # Enemy targets only (actor side is the guest's own party until 6.3). animation_id
       # is already resolved here (weapon anim for normal attacks); <= 0 means no anim.
+      # Owner id of a party battler for the wire: a proxy carries its owner, our own
+      # actors carry the host's id. Lets a guest map ally targets back by identity
+      # (battle_members order differs per peer, so a raw index would be wrong).
+      def bsmp_owner_of(battler)
+        return battler.bsmp_owner if battler.is_a?(Game_BSMPProxyActor)
+        $bsmp_server ? $bsmp_server.server_user_id : 0
+      end
+
+      # Host: push an action animation. Enemy targets ride a troop index; ALLY targets
+      # ride (owner.actor_id) so the guest plays it on the right party member — this is
+      # also how the per-hit red flash baked into an attack animation reaches the guest
+      # (it plays on the target sprite, not Game_Screen). data =
+      # "anim_id;mirror;enemy_idx,..;owner.aid,..".
       def host_broadcast_anim(targets, animation_id, mirror)
         return if not bsmp_network_running?
         return if animation_id.nil? or animation_id <= 0
-        idxs = targets.select { |t| t.enemy? }.map { |t| t.index }
-        return if idxs.empty?
+        enemies = targets.select { |t| t.enemy? }.map { |t| t.index }
+        actors  = targets.select { |t| t.actor? }.map { |t| "#{bsmp_owner_of(t)}.#{t.id}" }
+        return if enemies.empty? and actors.empty?
         bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::BATTLE_ANIM, 0,
-          "#{animation_id};#{mirror ? 1 : 0};#{idxs.join(',')}"))
+          "#{animation_id};#{mirror ? 1 : 0};#{enemies.join(',')};#{actors.join(',')}"))
       end
 
       # Host: an action just resolved against one target — push the result so the mute
@@ -162,11 +191,17 @@ module BSMP
       # pop-up number); the absolute HP still arrives via BATTLE_SYNC.
       def host_broadcast_result(target)
         return if not bsmp_network_running?
-        return if not target.enemy?
+        if target.enemy?
+          tgt = "e:#{target.index}"
+        elsif target.actor?
+          tgt = "f:#{bsmp_owner_of(target)}.#{target.id}" # ally pop-up, keyed by identity
+        else
+          return
+        end
         r = target.result
         flags = (r.missed ? 1 : 0) | (r.evaded ? 2 : 0) | (r.critical ? 4 : 0)
         bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::BATTLE_RESULT, 0,
-          "#{target.index};#{r.hp_damage};#{r.mp_damage};#{r.tp_damage};#{flags}"))
+          "#{tgt};#{r.hp_damage};#{r.mp_damage};#{r.tp_damage};#{flags}"))
       end
     end
   end
@@ -242,17 +277,10 @@ module BSMP
         # the sprite). Catches every death source, synced to when the guest sees it die.
         e.perform_collapse_effect if was_alive and e.dead?
       end
-      # BS2's enemy gauges (177: HP/MP/TP and the AP bar) are bitmap-drawn ON DEMAND
-      # via refresh_status / refresh_ap, not per frame — normally the host's ATB charge
-      # loop calls them. The mute scene runs no such loop, so the AP gauge never redrew
-      # (invisible). Redraw from the mirrored values. Guarded: these exist only with the
-      # enemy-gauge script. draw_gauge? passes on the mute client (enemy alive, in_turn?
-      # is false since we never advance past :init).
-      scene = SceneManager.scene
-      if scene.is_a?(Scene_Battle)
-        scene.refresh_status if scene.respond_to?(:refresh_status)
-        scene.refresh_ap     if scene.respond_to?(:refresh_ap)
-      end
+      # BS2's enemy gauges (177: HP/MP/TP and the AP bar) are bitmap-drawn ON DEMAND via
+      # refresh_status / refresh_ap, not per frame. Mark the status dirty; the mute scene
+      # redraws once next frame (coalesced — see mark_status_dirty).
+      BSMP::Battle.mark_status_dirty
     end
 
     # Host pushed an action animation: play it on our copies of the enemy targets by
@@ -260,15 +288,27 @@ module BSMP
     def self.on_battle_anim(packet)
       return if not BSMP.guest?
       return if not BSMP::Battle.client_session?
-      return if $game_troop.nil?
-      anim_id, mirror, idxs = packet.data.split(';')
-      anim_id = anim_id.to_i
-      mir = (mirror.to_i == 1)
-      idxs.to_s.split(',').each do |s|
-        e = $game_troop.members[s.to_i]
-        next if e.nil?
-        e.animation_id = anim_id
-        e.animation_mirror = mir
+      f = packet.data.split(';')
+      anim_id = f[0].to_i
+      mir = (f[1].to_i == 1)
+      # Enemy targets (troop index).
+      if $game_troop
+        (f[2] || "").split(',').each do |s|
+          next if s.empty?
+          e = $game_troop.members[s.to_i]
+          next if e.nil?
+          e.animation_id = anim_id
+          e.animation_mirror = mir
+        end
+      end
+      # Ally targets (owner.actor_id) — plays the attack animation (and its baked flash)
+      # on the right party member.
+      (f[3] || "").split(',').each do |spec|
+        next if spec.empty?
+        b = BSMP::BattleParty.resolve_ally(spec)
+        next if b.nil?
+        b.animation_id = anim_id
+        b.animation_mirror = mir
       end
     end
 
@@ -279,9 +319,12 @@ module BSMP
     def self.on_battle_result(packet)
       return if not BSMP.guest?
       return if not BSMP::Battle.client_session?
-      return if $game_troop.nil?
-      idx, hp, mp, tp, flags = packet.data.split(';')
-      e = $game_troop.members[idx.to_i]
+      tgt, hp, mp, tp, flags = packet.data.split(';')
+      if tgt.to_s.start_with?('e:')
+        e = $game_troop ? $game_troop.members[tgt[2..-1].to_i] : nil
+      elsif tgt.to_s.start_with?('f:')
+        e = BSMP::BattleParty.resolve_ally(tgt[2..-1])
+      end
       return if e.nil?
       fl = flags.to_i
       e.result.clear
@@ -376,6 +419,11 @@ class Scene_Battle
       elsif BSMP::Battle.starved?
         BSMP::Battle.end_client_session
         SceneManager.goto(Scene_Map)
+      elsif BSMP::Battle.consume_status_dirty
+        # Coalesced status redraw: at most once per frame no matter how many sync packets
+        # (enemy + ally) arrived, instead of a full refresh per packet (the FPS sink).
+        refresh_status if respond_to?(:refresh_status)
+        refresh_ap     if respond_to?(:refresh_ap)
       end
     else
       bsmp_battle_scene_update
@@ -391,6 +439,10 @@ class Scene_Battle
   alias bsmp_battle_scene_update_for_wait update_for_wait
   def update_for_wait
     bsmp_battle_scene_update_for_wait
+    # Read incoming packets here too: a blocking emerge/charge wait never reaches
+    # Scene_Base#update, so without this the host ignores a joining guest's WORLD_REQUEST
+    # for the whole "Появился …" message (the guest hangs until it's dismissed).
+    bsmp_net_pump
     BSMP::Battle.host_broadcast_state if BSMP::Battle.host_session?
   end
 

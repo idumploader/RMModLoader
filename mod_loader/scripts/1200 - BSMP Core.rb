@@ -121,6 +121,12 @@ module BSMP
     # brief host window-defocus (RGSS pauses unfocused) doesn't wrongly kick the guest.
     BATTLE_STARVE_FRAMES = 300
 
+    # Remote-turn input (6.4): frames the host waits for a guest's command before
+    # auto-resolving its turn (a plain attack), so an AFK/silent guest never hangs the
+    # fight. A true disconnect is caught at once (no owner), independent of this. Doubles
+    # as the guest's on-screen turn-timer length. ~2 min @ 60fps; overridable in settings.
+    BATTLE_INPUT_TIMEOUT = 7200
+
   end
 
   # Runtime, user-changeable preferences — as opposed to Config, which is fixed
@@ -149,6 +155,9 @@ module BSMP
       # default so a host window-defocus (RGSS pauses unfocused, unless ModLoader keeps
       # the thread running) doesn't wrongly kick the guest.
       :battle_watchdog_frames => Config::BATTLE_STARVE_FRAMES,
+      # How long (frames) the host waits for a guest's battle command before auto-acting
+      # for it; also the length of the guest's on-screen turn timer (6.4).
+      :battle_input_timeout_frames => Config::BATTLE_INPUT_TIMEOUT,
     }
 
     # Typed accessors over the backing store; setters edit the working copy only
@@ -395,7 +404,9 @@ module BSMP
       # when it exists. Dropping it off-map loses a joiner's graphic until it changes.
       character_name, character_index, nickname = packet.data.force_encoding("UTF-8").split(';')
 
-      p "Player #{packet.from_id} changed sprite to #{character_name}/#{character_index}, nick to #{nickname}"
+      # Debug-only: this can arrive in bursts (e.g. a flurry of Game_Player#refresh on a
+      # battle/map transition), and console writes are slow enough to visibly stutter.
+      p "Player #{packet.from_id} changed sprite to #{character_name}/#{character_index}, nick to #{nickname}" if Config::DEBUG
       $bsmp_players.set_player_character(packet.from_id, character_name, character_index.to_i, nickname)
     end
 
@@ -493,7 +504,7 @@ module BSMP
       return if not BSMP.guest?
       return if not $game_map
       map_id, event_id = packet.data.split(';')
-      BSMP.log("recv MOB_ERASE map=#{map_id} ev=#{event_id} (mymap=#{$game_map.map_id})")
+      BSMP.log("recv MOB_ERASE map=#{map_id} ev=#{event_id} (mymap=#{$game_map.map_id})") if Config::DEBUG
       return if map_id.to_i != $game_map.map_id
       event = $game_map.events[event_id.to_i]
       event.erase if event
@@ -513,7 +524,9 @@ module BSMP
 
     def self.on_self_switch_changed(packet)
       map_id, event_id, ch, val = packet.data.split(';')
-      BSMP.log("recv self_switch [#{map_id},#{event_id},#{ch}]=#{val}")
+      # Debug-only: a world-snapshot apply / flag-heavy event sends these in bursts, and
+      # BSMP.log is file I/O — logging each visibly stalls. (Pairs with the send-side gate.)
+      BSMP.log("recv self_switch [#{map_id},#{event_id},#{ch}]=#{val}") if Config::DEBUG
       apply_fact { $game_self_switches[[map_id.to_i, event_id.to_i, ch]] = (val.to_i != 0) }
     end
 

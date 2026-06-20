@@ -63,7 +63,7 @@ class Spriteset_Map
     data = $game_map.map_id.to_s
     movers.each do |e|
       data << ";#{e.id},#{e.x},#{e.y},#{e.direction},#{e.bsmp_base_opacity},#{e.move_speed},#{e.transparent ? 1 : 0}"
-      BSMP.log("bcast mob #{e.id} base_op=#{e.bsmp_base_opacity} op=#{e.opacity} tr=#{e.transparent}") if e.bsmp_base_opacity != 255 or e.transparent
+      BSMP.log("bcast mob #{e.id} base_op=#{e.bsmp_base_opacity} op=#{e.opacity} tr=#{e.transparent}") if BSMP::Config::DEBUG and (e.bsmp_base_opacity != 255 or e.transparent)
     end
     bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::MOB_SYNC, 0, data))
   end
@@ -275,8 +275,14 @@ class Game_Player
     bsmp_orig_refresh
 
     return if not bsmp_network_running?
-    packet = BasicNetworkPacket.new(BSMP::Events::PLAYER_CHANGED_CHARACTER, 0, "#{@character_name};#{@character_index};#{self.actor.name}")
-    bsmp_send_packet(packet)
+    # Game_Player#refresh fires in bursts (party/leader changes, transfers, battle entry),
+    # almost always with the SAME graphic/nick — broadcasting each one floods peers (and
+    # their console logging) and visibly stutters on a battle transition. Send only when
+    # it actually changed.
+    sig = "#{@character_name};#{@character_index};#{self.actor ? self.actor.name : ''}"
+    return if sig == @bsmp_last_char_sig
+    @bsmp_last_char_sig = sig
+    bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::PLAYER_CHANGED_CHARACTER, 0, sig))
   end
 
   def move_straight(d, turn_ok = true)
@@ -406,7 +412,11 @@ class Game_SelfSwitches
   alias bsmp_orig_set []=
   def []=(key, value)
     bsmp_orig_set(key, value)
-    BSMP.log("set self_switch #{key.inspect}=#{value} applying=#{$bsmp_applying_fact} net=#{bsmp_network_running?}") if defined?(BSMP)
+    # Debug-only: fires on EVERY self-switch write — including the hundreds set while
+    # APPLYING a world snapshot / live deltas (the guard below only stops re-broadcast,
+    # not this log). BSMP.log is file I/O, so logging each one stalls for seconds on a
+    # snapshot apply or a flag-heavy battle event. Gate it.
+    BSMP.log("set self_switch #{key.inspect}=#{value} applying=#{$bsmp_applying_fact} net=#{bsmp_network_running?}") if defined?(BSMP) and BSMP::Config::DEBUG
     return if $bsmp_applying_fact
     return if not bsmp_network_running?
     bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::SELF_SWITCH_CHANGED, 0, "#{key[0]};#{key[1]};#{key[2]};#{value ? 1 : 0}"))
@@ -436,6 +446,17 @@ def bsmp_read_packets
     $bsmp_client.read_packets
     $bsmp_client.ensure_announced # re-announce once in-game (joined from the title)
   end
+end
+
+# Minimal network pump (Steam callbacks + incoming packets) for blocking wait loops that
+# never reach Scene_Base#update — chiefly Scene_Battle's wait_for_message ("Появился …"
+# emerge), animation/charge waits. Without this the host stops answering a guest's
+# WORLD_REQUEST (and everything else) for the whole message, stranding a joiner until the
+# message is dismissed. Read-only side; self-guarded so it's a no-op when not networked.
+def bsmp_net_pump
+  return unless defined?(SteamAPI)
+  SteamAPI.run_callbacks
+  bsmp_read_packets
 end
 
 # Our own last measured ping to the host (ms); -1 = host / not measured yet.
