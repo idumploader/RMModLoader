@@ -1,24 +1,32 @@
 #==============================================================================
-# BSMP Battle Party — combined co-op battle party (step 6.3). A guest's actor is put
-# into the host's battle as a PROXY Game_Actor so it fights for real on the host (the
-# authority). Each guest sends a snapshot of its battle actor(s); the host rebuilds
-# them as Game_BSMPProxyActor (same DB base + the guest's live params/hp/states) and
-# appends them to its battle party via member-accessor overrides — no $game_actors
-# registration (which caches by actor_id and would collide host vs guest), no
-# persistent add_actor (which would survive the battle).
+# BSMP Battle Party — combined co-op battle party (step 6.3). Every player's actor
+# joins ONE host-authoritative battle. A remote player's actor is rebuilt locally as a
+# Game_BSMPProxyActor (same DB base + that player's live params/hp/states) and appended
+# to the battle roster via member-accessor overrides — no $game_actors registration
+# (caches by actor_id and would collide host vs guest on the same save), no persistent
+# add_actor (would survive the battle).
 #
-# 6.3a (this file): host-side injection + the proxy AUTO-FIGHTS (auto_battle?), so the
-# guest's character really appears and acts in the host's battle without stalling on
-# input. Deferred: the guest rendering the combined party (6.3b) and real remote-turn
-# input replacing the auto-action (6.4).
+# 6.3a: HOST side — the host builds proxies of the guests' actors and they AUTO-FIGHT
+# (auto_battle?), so a guest's character really acts in the host's authoritative battle.
 #
-# Why proxies sit in the member accessors and not in @actors / $game_actors:
-#  * Game_Party#members = in_battle ? battle_members : all_members, and everything the
-#    ATB iterates (alive_members / movable_members / Game_Actor#index) flows from members.
-#  * In 71's ATB a battler is inputable? only when it's the current input_battler, so a
-#    proxy marked auto_battle? is never asked for input — the ATB auto-resolves its turn.
-#  * The accessors only append proxies WHILE a battle session is live (host or client),
-#    so a stale list can never leak proxies into the map/menu party.
+# 6.3b (this revision): EVERY peer renders the COMBINED party. Identity over the wire is
+# (owner_user_id, actor_id) — robust even when two players run the SAME save (same
+# actor_id). Two flows make it work WITHOUT a peer needing to know its own steam id
+# (Steam doesn't expose it to Ruby):
+#  * ROSTER (mesh via the host's relay): each peer periodically broadcasts its OWN battle
+#    actors (BATTLE_ACTOR). The host relays a guest's packet to all OTHER guests and also
+#    processes it. So each peer RECEIVES only the others' actors (never its own — the
+#    relay excludes the sender, and the host's own send never loops back) and builds a
+#    proxy for each. => everyone builds proxies of everyone-but-itself, no self-id needed.
+#  * STATE (host-authoritative): the host streams every battler's live HP/MP/ATB/states
+#    (BATTLE_PARTY_SYNC) keyed by (owner, actor_id). A guest applies each entry to its
+#    matching proxy; an entry that matches NO proxy must be the guest's OWN actor (it
+#    never built a self-proxy) — distinguished from an other-player whose proxy is merely
+#    lagging by $bsmp_players (which holds only OTHER players, never self).
+#
+# On the host the proxies are the authoritative battlers (they fight); on a guest they're
+# render-only (the mute scene runs no FSM). Same class, one code path. Real remote-turn
+# input replacing auto_battle? is 6.4; rewards routing / orphan cleanup is 6.5.
 #
 # Loads after the game's Game_Actor / Game_Party (BS2) and after BSMP core/battle
 # (1200 / 1240 / 1250).
@@ -26,12 +34,12 @@
 
 $imported ||= {}
 if not $imported["IDL-BSMP-BattleParty"]
-$imported["IDL-BSMP-BattleParty"] = "1.0"
+$imported["IDL-BSMP-BattleParty"] = "1.1"
 
 if defined?(BSMP)
 
-# Proxies currently injected into the local battle party (host: the guests' actors;
-# guest: will be the others', in 6.3b). Only ever non-empty during a battle.
+# Proxies currently injected into the local battle party — on the host the guests'
+# actors, on a guest everyone else's. Only ever non-empty during a co-op battle.
 $bsmp_battle_proxies = []
 
 #==============================================================================
@@ -49,7 +57,8 @@ class Game_BSMPProxyActor < Game_Actor
   end
 
   # 6.3a placeholder: never inputable (no command window for a remote actor), so the ATB
-  # auto-resolves its turn. 6.4 replaces this with a real remote-input request.
+  # auto-resolves its turn. 6.4 replaces this with a real remote-input request. Harmless
+  # on a guest (its mute scene asks no one for input).
   def auto_battle?
     true
   end
@@ -89,25 +98,29 @@ class Game_Party
     bsmp_party_all_members + bsmp_proxies
   end
 
-  # Reimplemented (not the alias) so the host's own front line is taken from the
-  # UNPROXIED all_members[0, max] and the proxies are appended AFTER the cap — otherwise
-  # a proxy could be both counted in the host's first N and appended (double), or capped
-  # out entirely when the host already has max actors.
+  # Reimplemented (not the alias) so OUR own front line is taken from the UNPROXIED
+  # all_members[0, max] and the proxies are appended AFTER the cap — otherwise a proxy
+  # could be both counted in our first N and appended (double), or capped out entirely
+  # when we already have max actors.
   alias bsmp_party_battle_members battle_members
   def battle_members
-    host_front = bsmp_party_all_members[0, max_battle_members].select { |a| a.exist? }
-    host_front + bsmp_proxies
+    own_front = bsmp_party_all_members[0, max_battle_members].select { |a| a.exist? }
+    own_front + bsmp_proxies
   end
 end
 
 #==============================================================================
-# ■ BSMP::BattleParty — snapshot + proxy build + the BATTLE_ACTOR handler
+# ■ BSMP::BattleParty — snapshot, proxy build, state stream, roster broadcast
 #==============================================================================
 module BSMP
   module BattleParty
 
-    # Serialize one of OUR real battle actors for the host to rebuild. Params are the
-    # final values (so equips/level/plus are baked in); states are ids; ap is the ATB.
+    # --- serialize / apply one actor's identity + entry state ---------------
+
+    # Serialize one of OUR real battle actors for peers to rebuild. Params are the final
+    # values (so equips/level/plus are baked in); states are ids; ap is the ATB. The
+    # hp/mp/tp/ap here are only the ENTRY state — once a proxy exists, the authority owns
+    # its live state (host battle / BATTLE_PARTY_SYNC), and re-sends don't reset it.
     def self.snapshot(actor)
       p = (0..7).map { |i| actor.param(i) }
       states = actor.states.map { |s| s.id }.join('.')
@@ -117,13 +130,17 @@ module BSMP
        actor.hp, actor.mp, actor.tp, actor.ap, states].join(';')
     end
 
-    # Build (or refresh) a proxy on the host from a guest snapshot and put it in the
-    # battle party. Keyed by (owner, actor_id) so a re-send updates instead of dupes.
+    # Build (or refresh) a proxy from a peer's snapshot. Keyed by (owner, actor_id) so a
+    # re-send updates instead of duplicating. Identity/appearance/params are refreshed
+    # every time (idempotent); the live HP/MP/TP/ATB/states are set ONLY when the proxy
+    # is first built — after that the authority owns them (the host's running battle, or
+    # a guest's BATTLE_PARTY_SYNC), so a periodic re-send must not clobber them.
     def self.apply_snapshot(owner_id, data)
       f = data.to_s.force_encoding("UTF-8").split(';')
       return if f.size < 19
       actor_id = f[0].to_i
       proxy = $bsmp_battle_proxies.find { |a| a.bsmp_owner == owner_id and a.id == actor_id }
+      fresh = proxy.nil?
       proxy ||= begin
         a = Game_BSMPProxyActor.new(actor_id)
         a.bsmp_owner = owner_id
@@ -133,13 +150,102 @@ module BSMP
       proxy.instance_variable_set(:@name, f[1])
       proxy.set_graphic(f[2], f[3].to_i, f[4], f[5].to_i)
       proxy.bsmp_params = f[6, 8].map { |s| s.to_i }
-      proxy.instance_variable_set(:@action_input_index, 0) # never nil (input/next_command readers)
-      proxy.on_battle_start
-      proxy.instance_variable_set(:@states, (f[18] || "").split('.').map { |s| s.to_i })
-      proxy.instance_variable_set(:@hp, f[14].to_i)
-      proxy.instance_variable_set(:@mp, f[15].to_i)
-      proxy.instance_variable_set(:@tp, f[16].to_i)
-      proxy.instance_variable_set(:@ap, f[17].to_i)
+      proxy.instance_variable_set(:@action_input_index, 0) # never nil (input/next_command)
+      if fresh
+        proxy.on_battle_start
+        apply_state(proxy, f[14], f[15], f[16], f[17], f[18])
+      end
+    end
+
+    # Mirror live HP/MP/(TP)/ATB/states onto a battler straight from the host. Set the
+    # ivars directly (no add_state/hp= side effects); @hp must NOT go through hp= (its
+    # refresh would re-derive the death state from hp and fight the host's @states).
+    # states_dot is "id" or "id:turns" dot-joined (turns absent -> 0). tp may be nil
+    # (BATTLE_PARTY_SYNC omits it) -> left untouched.
+    def self.apply_state(battler, hp, mp, tp, ap, states_dot)
+      ids = []
+      turns = {}
+      states_dot.to_s.split('.').each do |spec|
+        sid, t = spec.split(':')
+        next if sid.nil? or sid.empty?
+        sid = sid.to_i
+        ids << sid
+        turns[sid] = t.to_i
+      end
+      battler.instance_variable_set(:@states, ids)
+      battler.instance_variable_set(:@state_turns, turns)
+      battler.instance_variable_set(:@hp, hp.to_i)
+      battler.instance_variable_set(:@mp, mp.to_i)
+      battler.instance_variable_set(:@tp, tp.to_i) unless tp.nil?
+      battler.instance_variable_set(:@ap, ap.to_i)
+    end
+
+    # --- roster: broadcast OUR own actors so peers proxy them ----------------
+
+    # (Re)broadcast each of our REAL battle actors (never the proxies) as BATTLE_ACTOR.
+    # Periodic (BATTLE_ROSTER_INTERVAL) so a peer joining mid-battle catches up; force on
+    # battle entry for an immediate appearance. The host relays a guest's packet to the
+    # other guests; the host's own send reaches all guests.
+    def self.broadcast_own(force = false)
+      return if not bsmp_network_running?
+      return if $game_party.nil?
+      unless force
+        @roster_tick = (@roster_tick || 0) + 1
+        return if @roster_tick % BSMP::Config::BATTLE_ROSTER_INTERVAL != 0
+      end
+      $game_party.battle_members.each do |actor|
+        next if actor.is_a?(Game_BSMPProxyActor)
+        bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::BATTLE_ACTOR, 0, snapshot(actor)))
+      end
+    end
+
+    # --- state: host streams every party battler's live state ----------------
+
+    # Host only. Broadcast the authoritative live state of every party battler (our own
+    # actors + every proxy) so each guest's combined party tracks the fight — its render
+    # proxies of the others AND its own actor (damaged on the host's proxy of it). Keyed
+    # by (owner, actor_id). Throttled to the enemy-sync cadence. Entry:
+    # "owner.actor_id,hp,mp,ap,id:turns.id:turns".
+    def self.host_broadcast_party
+      return if not bsmp_network_running?
+      return if $game_party.nil? or $bsmp_server.nil?
+      @party_tick = (@party_tick || 0) + 1
+      return if @party_tick % BSMP::Config::BATTLE_SYNC_INTERVAL != 0
+      host_id = $bsmp_server.server_user_id
+      parts = []
+      $game_party.battle_members.each do |a|
+        owner = a.is_a?(Game_BSMPProxyActor) ? a.bsmp_owner : host_id
+        turns = a.instance_variable_get(:@state_turns) || {}
+        st = a.states.map { |s| "#{s.id}:#{turns[s.id] || 0}" }.join('.')
+        parts << "#{owner}.#{a.id},#{a.hp},#{a.mp},#{a.ap},#{st}"
+      end
+      return if parts.empty?
+      bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::BATTLE_PARTY_SYNC, 0, parts.join(';')))
+    end
+
+    # Guest: apply the host's party-state broadcast to our combined party. Match each
+    # entry to its proxy by (owner, actor_id); an entry with no proxy is OUR own actor
+    # (we never built a self-proxy) UNLESS the owner is a known other player (then its
+    # proxy is just lagging the roster — skip; the next re-send builds it).
+    def self.apply_party_state(data)
+      data.to_s.split(';').each do |entry|
+        head, rest = entry.split(',', 2)
+        next if head.nil? or rest.nil?
+        owner_s, aid_s = head.split('.')
+        next if owner_s.nil? or aid_s.nil?
+        owner = owner_s.to_i
+        actor_id = aid_s.to_i
+        hp, mp, ap, st = rest.split(',')
+        target = $bsmp_battle_proxies.find { |a| a.bsmp_owner == owner and a.id == actor_id }
+        if target.nil?
+          next if $bsmp_players and $bsmp_players[owner] # other player, proxy pending
+          target = $game_party.battle_members.find do |a|
+            not a.is_a?(Game_BSMPProxyActor) and a.id == actor_id
+          end
+        end
+        next if target.nil?
+        apply_state(target, hp, mp, nil, ap, st)
+      end
     end
 
     def self.clear
@@ -149,19 +255,36 @@ module BSMP
   end
 
   module Events
-    # A player sent one of its battle actors. Only the host builds a real proxy (it runs
-    # the authoritative battle); other peers will build render-only proxies in 6.3b.
+    # A peer sent one of its battle actors. Build/refresh a proxy whenever we're in a
+    # co-op battle — on the host the proxy is authoritative (it fights), on a guest it's
+    # render-only. We only ever receive OTHERS' actors (the host's relay excludes the
+    # sender), so this never builds a proxy of ourselves.
     def self.on_battle_actor(packet)
-      return if not BSMP.host?
+      return unless defined?(BSMP::Battle)
+      return unless BSMP::Battle.host_session? or BSMP::Battle.client_session?
       BSMP::BattleParty.apply_snapshot(packet.from_id, packet.data)
     end
 
-    HANDLERS[BATTLE_ACTOR] = method(:on_battle_actor)
+    # Host's authoritative party-state stream: mirror every battler's HP/MP/ATB/states
+    # onto our combined party, then redraw the battle status so the bars step.
+    def self.on_battle_party_sync(packet)
+      return if not BSMP.guest?
+      return if not BSMP::Battle.client_session?
+      BSMP::BattleParty.apply_party_state(packet.data)
+      scene = SceneManager.scene
+      if scene.is_a?(Scene_Battle)
+        scene.refresh_status if scene.respond_to?(:refresh_status)
+        scene.refresh_ap     if scene.respond_to?(:refresh_ap)
+      end
+    end
+
+    HANDLERS[BATTLE_ACTOR]      = method(:on_battle_actor)
+    HANDLERS[BATTLE_PARTY_SYNC] = method(:on_battle_party_sync)
   end
 end
 
 #==============================================================================
-# ■ Scene_Battle — guest sends its actors; everyone drops proxies on exit
+# ■ Scene_Battle — broadcast our actors; stream/render the combined party
 #==============================================================================
 class Scene_Battle
   # Fresh roster every battle: drop any proxies left over from a previous fight (e.g. an
@@ -172,18 +295,41 @@ class Scene_Battle
     bsmp_party_scene_start
   end
 
-  # Guest entering the host's battle: send a snapshot of each of our REAL battle actors
-  # (never the proxies themselves) so the host can put them in the fight.
+  # On battle entry, immediately broadcast our own actors so the others see us at once
+  # (the periodic re-send only fills in stragglers). Both host and guest announce — a
+  # guest so the host can put it in the fight, the host so guests render its party.
   alias bsmp_party_battle_start battle_start
   def battle_start
     bsmp_party_battle_start
-    if BSMP::Battle.client_session? and bsmp_network_running?
-      $game_party.battle_members.each do |actor|
-        next if actor.is_a?(Game_BSMPProxyActor)
-        bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::BATTLE_ACTOR, 0,
-          BSMP::BattleParty.snapshot(actor)))
-      end
+    if bsmp_network_running? and (BSMP::Battle.host_session? or BSMP::Battle.client_session?)
+      BSMP::BattleParty.broadcast_own(true)
     end
+  end
+
+  # Drive the periodic party traffic. The host re-announces its actors AND streams every
+  # battler's authoritative state; a guest only re-announces its own actors (the host
+  # owns state). Runs from both update and update_for_wait (the host spends long stretches
+  # in waits — emerge / ATB charge / action resolution — where update doesn't run).
+  def bsmp_party_pump
+    return if not bsmp_network_running?
+    if BSMP::Battle.host_session?
+      BSMP::BattleParty.broadcast_own
+      BSMP::BattleParty.host_broadcast_party
+    elsif BSMP::Battle.client_session?
+      BSMP::BattleParty.broadcast_own
+    end
+  end
+
+  alias bsmp_party_scene_update update
+  def update
+    bsmp_party_scene_update
+    bsmp_party_pump
+  end
+
+  alias bsmp_party_scene_update_for_wait update_for_wait
+  def update_for_wait
+    bsmp_party_scene_update_for_wait
+    bsmp_party_pump
   end
 
   # Drop the proxies whenever we leave a battle scene (any exit path) so the map/menu

@@ -432,6 +432,14 @@ class Scene_Battle
     if BSMP::Battle.client_session?
       $game_party.on_battle_start
       $game_troop.on_battle_start
+      # The battle status window (the combined-party HUD: rows + HP/MP/AP) is created
+      # CLOSED (openness 0) and normally opened in start_party_command_selection — which
+      # the mute client never reaches, so it stayed invisible. Open it here. refresh_status
+      # keeps redrawing it as the roster (proxies of the other players) streams in (6.3b).
+      if @status_window
+        @status_window.open
+        refresh_status if respond_to?(:refresh_status)
+      end
     else
       bsmp_battle_scene_battle_start
     end

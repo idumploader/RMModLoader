@@ -344,6 +344,7 @@ module BSMP
 
     attr_accessor :channel_id
     attr_reader :lobby_id
+    attr_reader :server_user_id   # our OWN steam id (= lobby owner); tags host actors
 
     attr_accessor :clients
 

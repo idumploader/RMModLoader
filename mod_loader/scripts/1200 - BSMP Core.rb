@@ -105,6 +105,13 @@ module BSMP
     # between hits, so this is mostly about how smoothly the ATB gauges step.
     BATTLE_SYNC_INTERVAL = 4
 
+    # Combined party (step 6.3b). Every this many frames each player re-broadcasts its
+    # OWN battle actors (BATTLE_ACTOR) so every peer can build/refresh a render proxy of
+    # everyone else — periodic so a player who joins mid-battle catches up within this
+    # window. Lower frequency than BATTLE_SYNC: identity/params barely change, the live
+    # HP/MP/ATB rides BATTLE_PARTY_SYNC instead.
+    BATTLE_ROSTER_INTERVAL = 30
+
     # Heartbeat watchdog: a mute guest that hasn't received ANY battle state from the
     # host for this many of its own frames assumes the host's battle is over / lost and
     # bails to the map. Catches a BATTLE_END missed during an F12 reset (the guest
@@ -608,6 +615,14 @@ module BSMP
     # actor; from_id = the owning player. data (see 1251 - BSMP Battle Party.rb):
     # "actor_id;name;char_name;char_idx;face_name;face_idx;mhp;mmp;atk;def;mat;mdf;agi;luk;hp;mp;tp;ap;states".
     BATTLE_ACTOR        = 32
+
+    # Combined party state (step 6.3b): the host streams the authoritative HP/MP/ATB/
+    # states of EVERY battler in the party (its own actors + every guest's proxy) so each
+    # mute guest's combined party tracks the real fight — both the proxies it renders of
+    # the others AND its own actor (whose damage is rolled on the host's proxy of it).
+    # Keyed by (owner, actor_id), not index, so it's order-independent across peers.
+    # data = "owner.actor_id,hp,mp,ap,id:turns.id:turns;...": one entry per party battler.
+    BATTLE_PARTY_SYNC   = 33
 
     HANDLERS = {
       PLAYER_JOINED            => method(:on_player_joined),
