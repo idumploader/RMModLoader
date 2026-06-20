@@ -538,6 +538,8 @@ module BSMP
       $bsmp_applying_fact = false
     end
 
+    # --- BSMP packet types (Reserved types for the core 0-2048) ---
+
     INVALID_PACKET = 0
     PLAYER_JOINED = 1
     # Format: "direction"

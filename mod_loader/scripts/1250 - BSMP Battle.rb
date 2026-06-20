@@ -203,6 +203,16 @@ module BSMP
         bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::BATTLE_RESULT, 0,
           "#{tgt};#{r.hp_damage};#{r.mp_damage};#{r.tp_damage};#{flags}"))
       end
+
+      # Client: Process battle end, e.g. from BATTLE_END from host or watchdog abort
+      def client_battle_return
+        SceneManager.return
+        # Bug: client mute interpreter, so BattleManager.battle_end won't get called.
+        # This leads to skip $game_party.on_battle_end, that clears @in_battle flag,
+        # so almost all the Game_Interpreter events are skipped
+        $game_party.on_battle_end
+        $game_troop.on_battle_end
+      end
     end
   end
 
@@ -411,14 +421,14 @@ class Scene_Battle
       # (disconnect / host quit to title). Either way return to the existing map scene.
       if BSMP::Battle.ending? or not BSMP.guest?
         BSMP::Battle.end_client_session
-        SceneManager.return
+        BSMP::Battle.client_battle_return
       # Heartbeat watchdog: the host has gone silent (its battle ended and we missed
       # the BATTLE_END — e.g. across an F12 reset that dropped us back into a battle the
       # host already left). Force out to the map; goto, not return, since an F12 reset
       # may have left no map scene on the stack to pop back to.
       elsif BSMP::Battle.starved?
         BSMP::Battle.end_client_session
-        SceneManager.goto(Scene_Map)
+        BSMP::Battle.client_battle_return
       elsif BSMP::Battle.consume_status_dirty
         # Coalesced status redraw: at most once per frame no matter how many sync packets
         # (enemy + ally) arrived, instead of a full refresh per packet (the FPS sink).

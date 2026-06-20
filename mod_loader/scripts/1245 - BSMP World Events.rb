@@ -35,7 +35,7 @@ class Game_Event < Game_Character
   # first so the host and single-player pay almost nothing here.
   def bsmp_suppress_world_event?
     return false if not BSMP.guest?
-    return false if @trigger != 3 and @trigger != 4
+    return false if @trigger != 3 and @trigger != 4 # != autorun && != parallel
     bsmp_world_owned_event?
   end
 
