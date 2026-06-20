@@ -136,6 +136,12 @@ module BSMP
       :max_players     => 10,                         # lobby capacity when hosting
       :roster_key      => ModLoader::Keyboard::TAB,   # held key (ModLoader VK) for the roster overlay
       :debug           => false,                      # runtime diagnostic logging (BSMP.log)
+      # Co-op battle heartbeat watchdog: frames (~60/s) a mute guest waits without ANY
+      # host battle state before assuming the host left its battle (missed BATTLE_END,
+      # e.g. across an F12 reset) and bailing to the map. 0 disables it. Generous by
+      # default so a host window-defocus (RGSS pauses unfocused, unless ModLoader keeps
+      # the thread running) doesn't wrongly kick the guest.
+      :battle_watchdog_frames => Config::BATTLE_STARVE_FRAMES,
     }
 
     # Typed accessors over the backing store; setters edit the working copy only

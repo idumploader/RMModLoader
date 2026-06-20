@@ -82,7 +82,9 @@ module BSMP
       end
 
       def starved?
-        @starve > BSMP::Config::BATTLE_STARVE_FRAMES
+        limit = BSMP.settings.battle_watchdog_frames.to_i
+        return false if limit <= 0 # watchdog disabled via settings
+        @starve > limit
       end
 
       def end_client_session
