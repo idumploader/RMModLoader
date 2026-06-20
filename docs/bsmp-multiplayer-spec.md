@@ -277,7 +277,7 @@ Synchronized "all-in" before a boss:
 - **[open]** edge cases: someone declines / walks away / disconnects during the
   vote → abort the challenge or proceed without them?
 
-## 9. Battle (co-op ATB) [planned]
+## 9. Battle (co-op ATB) [in progress — 6.1–6.3b done & wire-tested; 6.4 next]
 
 Biggest, riskiest epic. **Host-authoritative**, NOT lockstep.
 
@@ -367,34 +367,119 @@ single-phase, so the default fits them.
 
 ### 9.2 Build sub-steps (6.1–6.6) + status
 
-- **6.1 Session lifecycle + mute client [done — code, not yet wire-tested].**
+> Status as of 2026-06-20. 6.1–6.3b are **wire-verified on two machines** and shipped;
+> the as-built wire protocol & identity model are documented in **§9.3**. Sub-step text
+> below is the plan; where the build diverged, §9.3 is authoritative.
+
+- **6.1 Session lifecycle + mute client [done ✓ wire-tested].**
   `1250 - BSMP Battle.rb` (+ `BATTLE_START`=24 / `BATTLE_END`=25 in 1200). Host hooks
   `Scene_Battle#start` → broadcast `BATTLE_START`=`"troop_id;can_escape"` and
   `BattleManager.battle_end` → `BATTLE_END`=`result`; both guarded `BSMP.host?` so
   guests never emit. Guest: `on_battle_start` queues `BSMP::Battle.pending`,
   `Scene_Map#update` enters it (`BattleManager.setup` + `SceneManager.call(Scene_Battle)`,
-  `can_lose=true`), the transition visuals fire from Scene_Map's terminate hooks;
-  `BATTLE_END` → `request_end` → mute `Scene_Battle#update` does `SceneManager.return`.
-  Mute scene: `battle_start` only `on_battle_start`s party/troop (no emerge msgs / no
-  ATB charge / no command window), `update` = `super` (render + net pump) and nothing
-  else (no FSM, no win/lose). v1 pull-in = ALL guests join a host-initiated battle
-  regardless of map ("fight together"); guest-touched local encounters still fight
-  locally (changed in 6.6). First wire test: guest enters/exits battle in lockstep,
-  sees the same enemies (actor side is still the guest's own party until 6.3).
-- **6.2 Snapshot + authoritative state streaming [next].** Stream ATB fill, HP/MP/TP,
-  states(+turns) and action events (anim/damage/log) so the mute scene animates; full
-  join snapshot vs per-tick deltas; capture at the RNG/resolve boundary on the host.
-- **6.3 Combined party (guest actor in the fight) [planned].** Guest sends actor
-  snapshot; host rebuilds proxy `Game_Actor`(s) and merges so `$game_party.*` /
-  `battle_members` span all players. Most invasive.
-- **6.4 Remote-turn input [planned].** Host requests a guest's command when its ATB
-  fills; guest opens its command window, replies; host validates + resolves.
-- **6.5 End / rewards / death / disconnect [planned].** Authoritative win/lose;
-  personal reward grants (like loot §7); downed=spectator; disconnect-while-downed
-  cleanup so the battle never deadlocks.
-- **6.6 Scaling + guest-initiated encounters [planned].** Enemy HP×N / ATB speed
-  locked at start (§9.1); change step-4's local guest encounter into a host-auth
-  request; settle the pull-in rule (all vs same-map vs proximity).
+  `can_lose=true`); `BATTLE_END` → `request_end` → mute `Scene_Battle#update` does
+  `SceneManager.return`. Mute scene: `battle_start` only `on_battle_start`s party/troop
+  (no emerge msgs / no ATB charge / no command window), `update` = `super` (render + net
+  pump), no FSM / no win-lose. Hardened end: BS2's custom defeat bypasses
+  `battle_end`, so `Scene_Battle#terminate` is a catch-all `BATTLE_END`; guest also exits
+  on host-lost (`not guest?`) or a **heartbeat watchdog** (`BATTLE_STARVE_FRAMES`, no sync
+  for ~5s → `goto(Scene_Map)`, recovers an F12-missed end). v1 pull-in = ALL guests join
+  ("fight together"); guest-touched local encounters still fight locally (6.6).
+- **6.2 Snapshot + authoritative state streaming [done ✓ wire-tested].** Enemy side.
+  Host streams `BATTLE_SYNC`=26 every `BATTLE_SYNC_INTERVAL`=4 frames (+ in
+  `update_for_wait` so charge/anim pauses don't starve the watchdog): leading screen-tone
+  segment + per-enemy `idx,hp,mp,ap,id:turns…`; guest mirrors onto its `$game_troop` (same
+  DB+troop_id ⇒ indices align), `perform_collapse_effect` on alive→dead, `refresh_status`/
+  `refresh_ap` to redraw BS2's on-demand gauges. Action replay (slice 2): `BATTLE_ANIM`=27
+  (anim on enemy targets), `BATTLE_RESULT`=28 (per-enemy result → BS2 154 damage pop-up),
+  `BATTLE_WHITEN`=30 (pre-attack blink), `BATTLE_FLASH`=29 / `BATTLE_SHAKE`=31 (EXACT mirror
+  of `Game_Screen#start_flash/shake` on `$game_troop.screen`, never a preset). Per-hit flash
+  baked into attack animations plays on the target sprite (not Game_Screen), so it arrives
+  for free once the actor is in the fight.
+- **6.3a Combined party — host side [done ✓ wire-tested].** `1251 - BSMP Battle Party.rb`.
+  Guest sends `BATTLE_ACTOR`=32 (snapshot per real battle member); host builds
+  `Game_BSMPProxyActor < Game_Actor` (`param`→snapshot stats, `auto_battle?`→true,
+  `gain_exp`/`next_command`/`prior_command` neutered) and merges via `Game_Party#all_members`/
+  `#battle_members` overrides + `$bsmp_battle_proxies` (NOT `$game_actors` — id-collision on
+  same save; NOT `add_actor` — persists). Proxy auto-fights; cleared on `start`+`terminate`.
+- **6.3b Combined party — every peer renders it [done ✓ wire-tested].** See §9.3 for the
+  mesh-via-relay roster (no own-steam-id needed) and host-authoritative `BATTLE_PARTY_SYNC`=33.
+  Each peer now sees the full party (own actor + render proxies of all others), HP/MP/ATB/
+  death sync both ways. Required opening the mute client's battle status window (created
+  closed; normally opened in `start_party_command_selection`, unreachable on the mute scene).
+- **6.3b slice 3 — ally-targeted visuals [DEFERRED by choice].** Ally HP bars already track
+  via `BATTLE_PARTY_SYNC`; the floating damage number + hit animation on an ally don't yet
+  (`BATTLE_ANIM`/`BATTLE_RESULT` are enemy-only). Extend to actor targets keyed by
+  (owner, actor_id). Polish, not a blocker — jumped over to 6.4.
+- **6.4 Remote-turn input [NEXT].** Replace the proxy's `auto_battle?` with a real
+  request/response: when a guest's proxy reaches `input_battler`, the host sends
+  `BATTLE_INPUT_REQUEST(actor_id)` and **pauses that battler's turn**; the guest opens a
+  command window on its REAL actor in the mute scene, picks action+target, replies
+  `BATTLE_INPUT(actor_id; action-spec)`; host sets the proxy's `Game_Action`(s), resumes,
+  resolves (visuals already stream from 6.2). Hard parts: running ONLY the input phase in a
+  mute scene; target identity (enemy index / ally owner+id); action-spec serialization;
+  pause/resume + **timeout → fall back to `auto_battle`** so an AFK/DC guest never freezes
+  the fight. Slices: 6.4.1 attack-only round-trip → 6.4.2 full command window + target UI →
+  6.4.3 timeout/DC fallback.
+- **6.5 End / rewards / death / disconnect [planned].** Authoritative win/lose; personal
+  reward grants (like loot §7; proxy `gain_exp` is a no-op, so route exp/drops back to the
+  owner); downed=spectator; orphaned-proxy cleanup on disconnect (so the battle never
+  deadlocks waiting on someone who left); fix the known post-battle heal-flask that
+  currently restores a mute guest who never fought.
+- **6.6 Scaling + guest-initiated encounters [planned].** Enemy HP×N / ATB speed locked at
+  start (§9.1); change step-4's local guest encounter into a host-auth request; settle the
+  pull-in rule (all vs same-map vs proximity). Also raise the **4-actor sprite cap**
+  (`Spriteset_Battle#update_actors` = `Array.new(4)`; combined party >4 overflows).
+
+### 9.3 As-built wire protocol & identity (6.1–6.3b)
+
+The build diverged from "host broadcasts the roster" into a **mesh-via-relay** model that
+needs no peer to know its own steam id (Steam doesn't expose it to Ruby). This section is
+authoritative over §9.2's plan where they differ.
+
+**Battle packet table** (types in `1200 - BSMP Core.rb`; handlers in 1250 / 1251):
+
+| #  | Name                | Dir        | Throttle              | Data |
+|----|---------------------|------------|-----------------------|------|
+| 24 | `BATTLE_START`      | host→all   | once on scene start   | `troop_id;can_escape` |
+| 25 | `BATTLE_END`        | host→all   | once                  | `result` (0 win / 1 escape / 2 lose) |
+| 26 | `BATTLE_SYNC`       | host→all   | `BATTLE_SYNC_INTERVAL`=4 | `r.g.b.gray;idx,hp,mp,ap,id:turns.…;…` (tone + per-enemy) |
+| 27 | `BATTLE_ANIM`       | host→all   | per action            | `anim_id;mirror;idx,idx,…` (enemy targets) |
+| 28 | `BATTLE_RESULT`     | host→all   | per hit               | `idx;hp;mp;tp;flags` (flags: 1 miss, 2 evade, 4 crit) |
+| 29 | `BATTLE_FLASH`      | host→all   | per event             | `r;g;b;a;duration` (exact `Game_Screen` mirror) |
+| 30 | `BATTLE_WHITEN`     | host→all   | per action            | enemy `idx` |
+| 31 | `BATTLE_SHAKE`      | host→all   | per event             | `power;speed;duration` |
+| 32 | `BATTLE_ACTOR`      | **any→all**| `BATTLE_ROSTER_INTERVAL`=30 + on entry | `actor_id;name;char;char_idx;face;face_idx;mhp;mmp;atk;def;mat;mdf;agi;luk;hp;mp;tp;ap;states` |
+| 33 | `BATTLE_PARTY_SYNC` | host→all   | `BATTLE_SYNC_INTERVAL`=4 | `owner.actor_id,hp,mp,ap,id:turns.…;…` (one per party battler) |
+
+**Mesh roster (identity = `(owner_user_id, actor_id)`).** Transport (`1210 - BSMP Net.rb`):
+the host's `on_packet_read` stamps `packet.from_id = sender` then **relays to all-except-
+sender** (`send_packet_to_all_except`) and also processes locally; the client's
+`on_packet_read` does **not** overwrite `from_id`. So when **every** peer periodically
+broadcasts its OWN battle actors (`BATTLE_ACTOR`), each peer receives **only the others'**
+snapshots (its own never loops back) and builds a `Game_BSMPProxyActor` for each ⇒ everyone
+holds proxies of everyone-but-itself **without knowing its own steam id**. On the host these
+proxies are the authoritative battlers (they fight); on a guest they're render-only (the
+mute scene runs no FSM) — one class, one code path (`on_battle_actor` builds whenever
+`host_session?` or `client_session?`). `apply_snapshot` writes live HP/MP/TP/ATB/states
+**only on first build**; periodic re-sends refresh identity/params only, so they never
+clobber authoritative HP. Same-save collisions (two players, identical `actor_id`) are safe
+because the key includes `owner`.
+
+**Host-authoritative party state.** The host streams every battler's live HP/MP/ATB/states
+(`BATTLE_PARTY_SYNC`) keyed by `(owner, actor_id)`. A guest applies each entry to its
+matching proxy; an entry that matches **no proxy is the guest's OWN actor** (it never built
+a self-proxy) — distinguished from an other-player whose proxy is merely lagging by
+`$bsmp_players` (a `BSMP::Players`, **not** a Hash — use `[]`, which holds only the *other*
+players, never self). The guest's own actor is thus host-authoritative in battle (its damage
+is rolled on the host's proxy of it). `Server#server_user_id` is exposed so the host can tag
+its own actors' `owner`.
+
+**Render seam.** BS2's `Window_BattleStatus` is created **closed** (`openness=0`) and opened
+in `start_party_command_selection`, which the mute client never reaches — so the mute
+`Scene_Battle#battle_start` opens it explicitly + `refresh_status`. Battle is side-view, so
+proxy actor sprites render too (cap: `Spriteset_Battle#update_actors` only makes 4 actor
+sprites — overflow handling is 6.6).
 
 ### 9.1 Balance scaling by player count
 
