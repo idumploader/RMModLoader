@@ -130,13 +130,16 @@ module BSMP
         return if $game_troop.nil?
         @sync_tick += 1
         return if @sync_tick % BSMP::Config::BATTLE_SYNC_INTERVAL != 0
-        parts = []
+        # Leading segment: the battle screen tone (r.g.b.gray). Battle-start tints come
+        # from troop events, which guests don't run, so mirror the tone continuously —
+        # this also catches a guest that joined after the tint was applied.
+        t = $game_troop.screen.tone
+        parts = ["#{t.red.to_i}.#{t.green.to_i}.#{t.blue.to_i}.#{t.gray.to_i}"]
         $game_troop.members.each_with_index do |e, i|
           turns = e.instance_variable_get(:@state_turns) || {}
           st = e.states.map { |s| "#{s.id}:#{turns[s.id] || 0}" }.join('.')
           parts << "#{i},#{e.hp},#{e.mp},#{e.ap},#{st}"
         end
-        return if parts.empty?
         bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::BATTLE_SYNC, 0, parts.join(';')))
       end
 
@@ -200,7 +203,18 @@ module BSMP
       return if not BSMP::Battle.client_session?
       BSMP::Battle.note_sync # heartbeat: the host is still streaming this battle
       return if $game_troop.nil?
-      packet.data.split(';').each do |entry|
+      entries = packet.data.split(';')
+      # Leading segment = the host's battle screen tone; snap to it when it differs (so
+      # a battle-start gray tint shows even though we never ran the troop tint event).
+      tone_seg = entries.shift
+      if tone_seg and $game_troop.screen
+        tr, tg, tb, tgr = tone_seg.split('.').map { |s| s.to_i }
+        c = $game_troop.screen.tone
+        if c.red.to_i != tr or c.green.to_i != tg or c.blue.to_i != tb or c.gray.to_i != tgr
+          $game_troop.screen.start_tone_change(Tone.new(tr, tg, tb, tgr), 0)
+        end
+      end
+      entries.each do |entry|
         f = entry.split(',')
         next if f.size < 4
         e = $game_troop.members[f[0].to_i]
