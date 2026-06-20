@@ -602,6 +602,12 @@ module BSMP
     # sprite_effect_type :whiten) -> play it on our copy. data = "idx".
     BATTLE_WHITEN       = 30
 
+    # Combined party (step 6.3): a player sends a snapshot of one of its battle actors
+    # so the host can build a proxy Game_Actor and put it in the fight. One packet per
+    # actor; from_id = the owning player. data (see 1251 - BSMP Battle Party.rb):
+    # "actor_id;name;char_name;char_idx;face_name;face_idx;mhp;mmp;atk;def;mat;mdf;agi;luk;hp;mp;tp;ap;states".
+    BATTLE_ACTOR        = 32
+
     HANDLERS = {
       PLAYER_JOINED            => method(:on_player_joined),
       PLAYER_MOVED             => method(:on_player_moved),
