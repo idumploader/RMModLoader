@@ -208,6 +208,10 @@ module BSMP
         Graphics.update     # paint the overlay and pace the loop to the frame rate
         guard += 1
       end
+      # Exiting on the local guard (timeout: host never answered, e.g. joined mid-load
+      # before the handshake settled) leaves @awaiting_world set, so syncing? stays true
+      # and the overlay never disposes. Give up cleanly so the overlay always clears.
+      @awaiting_world = false
       BSMP::UI.update_sync_overlay # dispose the overlay once we're done / timed out
     end
 
