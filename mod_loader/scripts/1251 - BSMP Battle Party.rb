@@ -58,6 +58,18 @@ class Game_BSMPProxyActor < Game_Actor
   # so it never levels up / spams level-up messages on the host.
   def gain_exp(exp)
   end
+
+  # The proxy is never manually commanded, so the input-cursor methods are no-ops. This
+  # also guards BattleManager.next_command, which scans EVERY party member calling
+  # next_command on it — a proxy that joined mid-turn (after make_actions ran) has an
+  # uninitialised @action_input_index and would crash on `>=` (Game_Actor line 680).
+  def next_command
+    false
+  end
+
+  def prior_command
+    false
+  end
 end
 
 #==============================================================================
@@ -111,7 +123,7 @@ module BSMP
       f = data.to_s.force_encoding("UTF-8").split(';')
       return if f.size < 19
       actor_id = f[0].to_i
-      proxy = $bsmp_battle_proxies.find { |a| a.bsmp_owner == owner_id and a.actor_id == actor_id }
+      proxy = $bsmp_battle_proxies.find { |a| a.bsmp_owner == owner_id and a.id == actor_id }
       proxy ||= begin
         a = Game_BSMPProxyActor.new(actor_id)
         a.bsmp_owner = owner_id
@@ -121,6 +133,7 @@ module BSMP
       proxy.instance_variable_set(:@name, f[1])
       proxy.set_graphic(f[2], f[3].to_i, f[4], f[5].to_i)
       proxy.bsmp_params = f[6, 8].map { |s| s.to_i }
+      proxy.instance_variable_set(:@action_input_index, 0) # never nil (input/next_command readers)
       proxy.on_battle_start
       proxy.instance_variable_set(:@states, (f[18] || "").split('.').map { |s| s.to_i })
       proxy.instance_variable_set(:@hp, f[14].to_i)
@@ -151,6 +164,14 @@ end
 # ■ Scene_Battle — guest sends its actors; everyone drops proxies on exit
 #==============================================================================
 class Scene_Battle
+  # Fresh roster every battle: drop any proxies left over from a previous fight (e.g. an
+  # F12 reset that skipped terminate), so a stale/dead clone can't leak into a new battle.
+  alias bsmp_party_scene_start start
+  def start
+    BSMP::BattleParty.clear
+    bsmp_party_scene_start
+  end
+
   # Guest entering the host's battle: send a snapshot of each of our REAL battle actors
   # (never the proxies themselves) so the host can put them in the fight.
   alias bsmp_party_battle_start battle_start
