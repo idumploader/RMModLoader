@@ -99,6 +99,21 @@ module BSMP
     # (teleport, map seam, first sync). Mirrors the remote-player SNAP_DISTANCE.
     MOB_SNAP_DISTANCE = 3
 
+    # --- co-op battle (step 6) ---
+    # The host re-broadcasts its troop's battler state (HP/MP/ATB) every this many
+    # frames so a guest's mute battle scene mirrors it. Enemy HP barely changes
+    # between hits, so this is mostly about how smoothly the ATB gauges step.
+    BATTLE_SYNC_INTERVAL = 4
+
+    # Heartbeat watchdog: a mute guest that hasn't received ANY battle state from the
+    # host for this many of its own frames assumes the host's battle is over / lost and
+    # bails to the map. Catches a BATTLE_END missed during an F12 reset (the guest
+    # re-enters a battle the host already left) or any desync. The host streams during
+    # waits too (update_for_wait), so normal emerge / charge / animation pauses never
+    # starve the guest — only the host genuinely leaving its battle does. Generous so a
+    # brief host window-defocus (RGSS pauses unfocused) doesn't wrongly kick the guest.
+    BATTLE_STARVE_FRAMES = 300
+
   end
 
   # Runtime, user-changeable preferences — as opposed to Config, which is fixed
@@ -554,6 +569,10 @@ module BSMP
     # ATB / HP / state facts, input request/response).
     BATTLE_START        = 24
     BATTLE_END          = 25
+
+    # Host's periodic battler-state broadcast during a co-op battle, so a guest's
+    # mute scene mirrors enemy HP/MP/ATB. data = "idx,hp,mp,ap;idx,hp,mp,ap;...".
+    BATTLE_SYNC         = 26
 
     HANDLERS = {
       PLAYER_JOINED            => method(:on_player_joined),
