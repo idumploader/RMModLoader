@@ -624,6 +624,16 @@ module BSMP
     # data = "owner.actor_id,hp,mp,ap,id:turns.id:turns;...": one entry per party battler.
     BATTLE_PARTY_SYNC   = 33
 
+    # Remote-turn input (step 6.4). When a guest's proxy reaches its ATB turn on the
+    # host, the host asks the owning guest for its command instead of auto-resolving.
+    # BATTLE_INPUT_REQUEST host->owner (point-to-point): data = "actor_id" (which of the
+    # guest's actors). BATTLE_INPUT owner->host (reply): data = "actor_id;kind;obj_id;
+    # target_index" — kind a=attack g=guard s=skill i=item, obj_id = skill/item id (0 for
+    # attack/guard), target_index = index into $game_troop.members (opponent) or
+    # $game_party.battle_members (friend), resolved by the action's scope on the host.
+    BATTLE_INPUT_REQUEST = 34
+    BATTLE_INPUT         = 35
+
     HANDLERS = {
       PLAYER_JOINED            => method(:on_player_joined),
       PLAYER_MOVED             => method(:on_player_moved),

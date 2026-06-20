@@ -56,11 +56,12 @@ class Game_BSMPProxyActor < Game_Actor
     @bsmp_params ? @bsmp_params[param_id].to_i : super
   end
 
-  # 6.3a placeholder: never inputable (no command window for a remote actor), so the ATB
-  # auto-resolves its turn. 6.4 replaces this with a real remote-input request. Harmless
-  # on a guest (its mute scene asks no one for input).
+  # 6.4: the proxy IS inputable on the host so the ATB enters its command phase — but
+  # instead of opening a local window, the host requests the command from the owning
+  # guest (see 1252). NOT auto_battle? (that would make the host auto-pick its action and
+  # never ask). Irrelevant on a guest (its mute scene asks no one for input).
   def auto_battle?
-    true
+    false
   end
 
   # Rewards belong to the owning guest (routed back in 6.5), not this throwaway proxy —
@@ -68,16 +69,19 @@ class Game_BSMPProxyActor < Game_Actor
   def gain_exp(exp)
   end
 
-  # The proxy is never manually commanded, so the input-cursor methods are no-ops. This
-  # also guards BattleManager.next_command, which scans EVERY party member calling
-  # next_command on it — a proxy that joined mid-turn (after make_actions ran) has an
-  # uninitialised @action_input_index and would crash on `>=` (Game_Actor line 680).
+  # Real input-cursor behaviour (needed now the proxy is inputable: BattleManager.
+  # next_command advances PAST an actor whose next_command returns false, so a hard
+  # `false` here would skip the proxy's turn). Guard the index against nil first — a
+  # proxy built mid-turn can reach BattleManager's member scan before its index is set,
+  # which used to crash on `>=` (Game_Actor line 680).
   def next_command
-    false
+    @action_input_index ||= 0
+    super
   end
 
   def prior_command
-    false
+    @action_input_index ||= 0
+    super
   end
 end
 
