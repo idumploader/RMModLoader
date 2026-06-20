@@ -577,8 +577,30 @@ module BSMP
     BATTLE_END          = 25
 
     # Host's periodic battler-state broadcast during a co-op battle, so a guest's
-    # mute scene mirrors enemy HP/MP/ATB. data = "idx,hp,mp,ap;idx,hp,mp,ap;...".
+    # mute scene mirrors enemy HP/MP/ATB/states. One entry per enemy:
+    # data = "idx,hp,mp,ap,s1.s2.s3;...", the s* being state ids (dot-joined, empty = none).
     BATTLE_SYNC         = 26
+
+    # Action replay (step 6.2 slice 2): host pushes the VISUALS of a resolved action
+    # so the mute guest plays them without re-rolling. Enemy targets only for now
+    # (the actor side is each guest's own party until the combined party, 6.3).
+    # BATTLE_ANIM   = play an animation on enemy targets. data = "anim_id;mirror;idx,idx,...".
+    # BATTLE_RESULT = per-enemy action result -> damage pop-up. data = "idx;hp;mp;tp;flags"
+    #                 (flags bit0 missed, bit1 evaded, bit2 critical).
+    BATTLE_ANIM         = 27
+    BATTLE_RESULT       = 28
+
+    # The host's BATTLE screen flashed / shook (Game_Screen#start_flash / start_shake on
+    # $game_troop.screen) -> mirror it EXACTLY (variable per attack; never a fixed
+    # preset). data: BATTLE_FLASH "r;g;b;a;duration", BATTLE_SHAKE "power;speed;duration".
+    # The attack-animation's own flash/shake live in the animation shown on the actor
+    # (not a Game_Screen call), so they arrive for free in 6.3 when it replays there.
+    BATTLE_FLASH        = 29
+    BATTLE_SHAKE        = 31
+
+    # The host's enemy subject is about to act (the pre-attack white blink,
+    # sprite_effect_type :whiten) -> play it on our copy. data = "idx".
+    BATTLE_WHITEN       = 30
 
     HANDLERS = {
       PLAYER_JOINED            => method(:on_player_joined),

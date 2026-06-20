@@ -132,10 +132,36 @@ module BSMP
         return if @sync_tick % BSMP::Config::BATTLE_SYNC_INTERVAL != 0
         parts = []
         $game_troop.members.each_with_index do |e, i|
-          parts << "#{i},#{e.hp},#{e.mp},#{e.ap}"
+          parts << "#{i},#{e.hp},#{e.mp},#{e.ap},#{e.states.map { |s| s.id }.join('.')}"
         end
         return if parts.empty?
         bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::BATTLE_SYNC, 0, parts.join(';')))
+      end
+
+      # Host: an action is about to play an animation on its targets — push it so the
+      # mute guest plays the same (setting battler.animation_id, like the map balloon).
+      # Enemy targets only (actor side is the guest's own party until 6.3). animation_id
+      # is already resolved here (weapon anim for normal attacks); <= 0 means no anim.
+      def host_broadcast_anim(targets, animation_id, mirror)
+        return if not bsmp_network_running?
+        return if animation_id.nil? or animation_id <= 0
+        idxs = targets.select { |t| t.enemy? }.map { |t| t.index }
+        return if idxs.empty?
+        bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::BATTLE_ANIM, 0,
+          "#{animation_id};#{mirror ? 1 : 0};#{idxs.join(',')}"))
+      end
+
+      # Host: an action just resolved against one target — push the result so the mute
+      # guest shows the same damage pop-up (BS2's script 154 reads battler.result +
+      # battler.damage=). Enemy targets only. HP/MP/TP are the per-hit deltas (the
+      # pop-up number); the absolute HP still arrives via BATTLE_SYNC.
+      def host_broadcast_result(target)
+        return if not bsmp_network_running?
+        return if not target.enemy?
+        r = target.result
+        flags = (r.missed ? 1 : 0) | (r.evaded ? 2 : 0) | (r.critical ? 4 : 0)
+        bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::BATTLE_RESULT, 0,
+          "#{target.index};#{r.hp_damage};#{r.mp_damage};#{r.tp_damage};#{flags}"))
       end
     end
   end
@@ -177,9 +203,22 @@ module BSMP
         next if f.size < 4
         e = $game_troop.members[f[0].to_i]
         next if e.nil?
-        e.hp = f[1].to_i
+        was_alive = e.alive?
+        # States straight from the host (icons + dead?). Set the ivars directly: this is
+        # a pure visual mirror, so we don't want add_state/remove_state side effects, and
+        # @hp must NOT go through hp= (its refresh would re-derive the death state from hp
+        # and fight the host's authoritative @states). @state_turns kept in step so any
+        # turn lookups stay valid.
+        ids = (f[4] || "").split('.').map { |s| s.to_i }
+        old_turns = e.instance_variable_get(:@state_turns) || {}
+        e.instance_variable_set(:@state_turns, Hash[ids.map { |id| [id, old_turns[id] || 1] }])
+        e.instance_variable_set(:@states, ids)
+        e.instance_variable_set(:@hp, f[1].to_i)
         e.mp = f[2].to_i
         e.ap = f[3].to_i
+        # Mirror the death fade when the enemy crosses into dead (states alone don't fade
+        # the sprite). Catches every death source, synced to when the guest sees it die.
+        e.perform_collapse_effect if was_alive and e.dead?
       end
       # BS2's enemy gauges (177: HP/MP/TP and the AP bar) are bitmap-drawn ON DEMAND
       # via refresh_status / refresh_ap, not per frame — normally the host's ATB charge
@@ -194,9 +233,83 @@ module BSMP
       end
     end
 
-    HANDLERS[BATTLE_START] = method(:on_battle_start)
-    HANDLERS[BATTLE_END]   = method(:on_battle_end)
-    HANDLERS[BATTLE_SYNC]  = method(:on_battle_sync)
+    # Host pushed an action animation: play it on our copies of the enemy targets by
+    # setting animation_id (Sprite_Battler picks it up next frame, like the map balloon).
+    def self.on_battle_anim(packet)
+      return if not BSMP.guest?
+      return if not BSMP::Battle.client_session?
+      return if $game_troop.nil?
+      anim_id, mirror, idxs = packet.data.split(';')
+      anim_id = anim_id.to_i
+      mir = (mirror.to_i == 1)
+      idxs.to_s.split(',').each do |s|
+        e = $game_troop.members[s.to_i]
+        next if e.nil?
+        e.animation_id = anim_id
+        e.animation_mirror = mir
+      end
+    end
+
+    # Host pushed a per-enemy action result: reproduce the damage pop-up. We feed the
+    # host's values into the target's result and trigger BS2's pop-up (script 154's
+    # battler.damage=), which reads result.hp/mp/tp + critical/missed/evaded. The
+    # collapse and the absolute HP are handled by on_battle_sync.
+    def self.on_battle_result(packet)
+      return if not BSMP.guest?
+      return if not BSMP::Battle.client_session?
+      return if $game_troop.nil?
+      idx, hp, mp, tp, flags = packet.data.split(';')
+      e = $game_troop.members[idx.to_i]
+      return if e.nil?
+      fl = flags.to_i
+      e.result.clear
+      e.result.used      = true
+      e.result.missed    = (fl & 1) != 0
+      e.result.evaded    = (fl & 2) != 0
+      e.result.critical  = (fl & 4) != 0
+      e.result.hp_damage = hp.to_i
+      e.result.mp_damage = mp.to_i
+      e.result.tp_damage = tp.to_i
+      e.damage = "damage" # BS2 script 154: build + flag the pop-up from result
+    end
+
+    # Host's battle screen flashed: reproduce it with the host's exact color + duration
+    # ($game_troop.screen drives Spriteset_Battle's flash, no actor needed).
+    def self.on_battle_flash(packet)
+      return if not BSMP.guest?
+      return if not BSMP::Battle.client_session?
+      return if $game_troop.nil? or $game_troop.screen.nil?
+      r, g, b, a, dur = packet.data.split(';').map { |s| s.to_i }
+      $game_troop.screen.start_flash(Color.new(r, g, b, a), dur)
+    end
+
+    # Host's battle screen shook: reproduce it with the host's exact power/speed/duration
+    # (the variable per-hit shake the host shows). No actor needed.
+    def self.on_battle_shake(packet)
+      return if not BSMP.guest?
+      return if not BSMP::Battle.client_session?
+      return if $game_troop.nil? or $game_troop.screen.nil?
+      power, speed, dur = packet.data.split(';').map { |s| s.to_i }
+      $game_troop.screen.start_shake(power, speed, dur)
+    end
+
+    # Host's enemy is about to act: play the pre-attack white blink on our copy.
+    def self.on_battle_whiten(packet)
+      return if not BSMP.guest?
+      return if not BSMP::Battle.client_session?
+      return if $game_troop.nil?
+      e = $game_troop.members[packet.data.to_i]
+      e.sprite_effect_type = :whiten if e
+    end
+
+    HANDLERS[BATTLE_START]  = method(:on_battle_start)
+    HANDLERS[BATTLE_END]    = method(:on_battle_end)
+    HANDLERS[BATTLE_SYNC]   = method(:on_battle_sync)
+    HANDLERS[BATTLE_ANIM]   = method(:on_battle_anim)
+    HANDLERS[BATTLE_RESULT] = method(:on_battle_result)
+    HANDLERS[BATTLE_FLASH]  = method(:on_battle_flash)
+    HANDLERS[BATTLE_SHAKE]  = method(:on_battle_shake)
+    HANDLERS[BATTLE_WHITEN] = method(:on_battle_whiten)
   end
 
 end # module BSMP
@@ -259,6 +372,36 @@ class Scene_Battle
     BSMP::Battle.host_broadcast_state if BSMP::Battle.host_session?
   end
 
+  # Host action replay (step 6.2 slice 2). The host plays the real visuals locally and
+  # broadcasts them so the mute guests play the same — animation and damage pop-up —
+  # without re-rolling. Both fire only while we're hosting a co-op battle; a guest's
+  # mute scene never calls these, and a non-co-op battle has no host session.
+
+  # The concrete animation about to show on the targets (show_attack_animation has
+  # already resolved a normal attack to its weapon animation by the time it calls this).
+  alias bsmp_battle_scene_show_normal_animation show_normal_animation
+  def show_normal_animation(targets, animation_id, mirror = false)
+    bsmp_battle_scene_show_normal_animation(targets, animation_id, mirror)
+    BSMP::Battle.host_broadcast_anim(targets, animation_id, mirror) if BSMP::Battle.host_session?
+  end
+
+  # One target's resolved result (after item_apply, so target.result is populated).
+  alias bsmp_battle_scene_apply_item_effects apply_item_effects
+  def apply_item_effects(target, item)
+    bsmp_battle_scene_apply_item_effects(target, item)
+    BSMP::Battle.host_broadcast_result(target) if BSMP::Battle.host_session?
+  end
+
+  # The acting subject blinks white just before it acts (execute_action sets :whiten).
+  # Mirror it for enemy subjects so the guest sees the same pre-attack tell.
+  alias bsmp_battle_scene_execute_action execute_action
+  def execute_action
+    if BSMP::Battle.host_session? and @subject and @subject.enemy?
+      bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::BATTLE_WHITEN, 0, @subject.index.to_s))
+    end
+    bsmp_battle_scene_execute_action
+  end
+
   # Mute client: skip the emerge messages / ATB charge loop / command selection that
   # the real battle_start runs. Just initialise the battlers so the troop renders;
   # the host drives everything else.
@@ -304,6 +447,34 @@ module BattleManager
       end
       BSMP::Battle.end_host_session # stop streaming troop state
       bsmp_battle_end(result)
+    end
+  end
+end
+
+#==============================================================================
+# ■ Game_Screen — mirror the host's genuine battle screen flash / shake
+#==============================================================================
+# Only effects the host drives through Game_Screen on $game_troop.screen (e.g. a skill
+# that flashes/shakes the screen). The per-hit flash baked into an attack animation does
+# NOT come through here — it plays on the actor target's sprite, so it arrives naturally
+# in 6.3 when the guest's actor is in the fight. We never fabricate a preset; we mirror
+# exactly or show nothing, matching the host (normal hits correctly do nothing).
+class Game_Screen
+  alias bsmp_battle_start_flash start_flash
+  def start_flash(color, duration)
+    bsmp_battle_start_flash(color, duration)
+    if BSMP::Battle.host_session? and $game_troop and equal?($game_troop.screen)
+      bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::BATTLE_FLASH, 0,
+        "#{color.red.to_i};#{color.green.to_i};#{color.blue.to_i};#{color.alpha.to_i};#{duration}"))
+    end
+  end
+
+  alias bsmp_battle_start_shake start_shake
+  def start_shake(power, speed, duration)
+    bsmp_battle_start_shake(power, speed, duration)
+    if BSMP::Battle.host_session? and $game_troop and equal?($game_troop.screen)
+      bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::BATTLE_SHAKE, 0,
+        "#{power};#{speed};#{duration}"))
     end
   end
 end
