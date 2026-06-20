@@ -322,7 +322,7 @@ module BSMP
       when Events::WORLD_SNAPSHOT
         return handle_world_snapshot(packet) # binary blob — don't log its data
       end
-      p "Client got packet from #{packet.from_id}, type=#{packet.type}, data=#{packet.data}" if Config::DEBUG
+      p "Client got packet from #{packet.from_id}, type=#{packet.type}, data=#{packet.data}" if BSMP.settings.debug
       Events.on_packet(packet)
     end
 
@@ -547,7 +547,7 @@ module BSMP
         send_world_snapshot(user_id) if find_client(user_id)
         return
       end
-      p "Got packet from #{user_id}, type=#{packet.type}, data=#{packet.data}" if Config::DEBUG
+      p "Got packet from #{user_id}, type=#{packet.type}, data=#{packet.data}" if BSMP.settings.debug
       # Relay carries the plaintext data; send_packet_to re-frames per hop.
       client = find_client(user_id)
       if client

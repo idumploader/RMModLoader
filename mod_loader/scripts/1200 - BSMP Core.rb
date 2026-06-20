@@ -406,7 +406,7 @@ module BSMP
 
       # Debug-only: this can arrive in bursts (e.g. a flurry of Game_Player#refresh on a
       # battle/map transition), and console writes are slow enough to visibly stutter.
-      p "Player #{packet.from_id} changed sprite to #{character_name}/#{character_index}, nick to #{nickname}" if Config::DEBUG
+      p "Player #{packet.from_id} changed sprite to #{character_name}/#{character_index}, nick to #{nickname}" if BSMP.settings.debug
       $bsmp_players.set_player_character(packet.from_id, character_name, character_index.to_i, nickname)
     end
 
@@ -504,7 +504,7 @@ module BSMP
       return if not BSMP.guest?
       return if not $game_map
       map_id, event_id = packet.data.split(';')
-      BSMP.log("recv MOB_ERASE map=#{map_id} ev=#{event_id} (mymap=#{$game_map.map_id})") if Config::DEBUG
+      BSMP.log("recv MOB_ERASE map=#{map_id} ev=#{event_id} (mymap=#{$game_map.map_id})") if BSMP.settings.debug
       return if map_id.to_i != $game_map.map_id
       event = $game_map.events[event_id.to_i]
       event.erase if event
@@ -526,7 +526,7 @@ module BSMP
       map_id, event_id, ch, val = packet.data.split(';')
       # Debug-only: a world-snapshot apply / flag-heavy event sends these in bursts, and
       # BSMP.log is file I/O — logging each visibly stalls. (Pairs with the send-side gate.)
-      BSMP.log("recv self_switch [#{map_id},#{event_id},#{ch}]=#{val}") if Config::DEBUG
+      BSMP.log("recv self_switch [#{map_id},#{event_id},#{ch}]=#{val}") if BSMP.settings.debug
       apply_fact { $game_self_switches[[map_id.to_i, event_id.to_i, ch]] = (val.to_i != 0) }
     end
 
@@ -540,15 +540,22 @@ module BSMP
 
     INVALID_PACKET = 0
     PLAYER_JOINED = 1
+    # Format: "direction"
     PLAYER_MOVED = 2
+    # Format: "x;y"
     PLAYER_CHANGED_POS = 3
     PLAYER_CHANGED_NICK = 4
+    # Format: "speed"
     PLAYER_CHANGED_SPEED = 5
+    # Format: "sprite_name;sprite_index;nickname"
     PLAYER_CHANGED_CHARACTER = 6
+    # Format: "map_id;location_name"
     PLAYER_CHANGED_MAP = 7
+    # Format: "horz_direction;vert_direction"
     PLAYER_MOVED_DIAG = 8
     PLAYER_LEAVED = 9
 
+    # Unused
     SAVE_CONTENTS_PART = 10
 
     # Handshake / world-transfer control messages. Point-to-point host<->guest,

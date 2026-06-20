@@ -63,7 +63,7 @@ class Spriteset_Map
     data = $game_map.map_id.to_s
     movers.each do |e|
       data << ";#{e.id},#{e.x},#{e.y},#{e.direction},#{e.bsmp_base_opacity},#{e.move_speed},#{e.transparent ? 1 : 0}"
-      BSMP.log("bcast mob #{e.id} base_op=#{e.bsmp_base_opacity} op=#{e.opacity} tr=#{e.transparent}") if BSMP::Config::DEBUG and (e.bsmp_base_opacity != 255 or e.transparent)
+      BSMP.log("bcast mob #{e.id} base_op=#{e.bsmp_base_opacity} op=#{e.opacity} tr=#{e.transparent}") if BSMP.settings.debug and (e.bsmp_base_opacity != 255 or e.transparent)
     end
     bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::MOB_SYNC, 0, data))
   end
@@ -416,7 +416,7 @@ class Game_SelfSwitches
     # APPLYING a world snapshot / live deltas (the guard below only stops re-broadcast,
     # not this log). BSMP.log is file I/O, so logging each one stalls for seconds on a
     # snapshot apply or a flag-heavy battle event. Gate it.
-    BSMP.log("set self_switch #{key.inspect}=#{value} applying=#{$bsmp_applying_fact} net=#{bsmp_network_running?}") if defined?(BSMP) and BSMP::Config::DEBUG
+    BSMP.log("set self_switch #{key.inspect}=#{value} applying=#{$bsmp_applying_fact} net=#{bsmp_network_running?}") if defined?(BSMP) and BSMP.settings.debug
     return if $bsmp_applying_fact
     return if not bsmp_network_running?
     bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::SELF_SWITCH_CHANGED, 0, "#{key[0]};#{key[1]};#{key[2]};#{value ? 1 : 0}"))

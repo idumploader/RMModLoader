@@ -190,7 +190,7 @@ module BSMP
     end
 
     def self.variable_count
-      $data_system.variables.size - 1
+      $data_system.variables.size - 1 # index 0 is unused
     end
 
     def self.self_switch_data
