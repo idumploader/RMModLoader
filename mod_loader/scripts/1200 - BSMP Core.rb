@@ -578,7 +578,8 @@ module BSMP
 
     # Host's periodic battler-state broadcast during a co-op battle, so a guest's
     # mute scene mirrors enemy HP/MP/ATB/states. One entry per enemy:
-    # data = "idx,hp,mp,ap,s1.s2.s3;...", the s* being state ids (dot-joined, empty = none).
+    # data = "idx,hp,mp,ap,id:turns.id:turns;...", the trailing field being the enemy's
+    # states as id:remaining-turns (dot-joined, empty = none).
     BATTLE_SYNC         = 26
 
     # Action replay (step 6.2 slice 2): host pushes the VISUALS of a resolved action

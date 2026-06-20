@@ -132,7 +132,9 @@ module BSMP
         return if @sync_tick % BSMP::Config::BATTLE_SYNC_INTERVAL != 0
         parts = []
         $game_troop.members.each_with_index do |e, i|
-          parts << "#{i},#{e.hp},#{e.mp},#{e.ap},#{e.states.map { |s| s.id }.join('.')}"
+          turns = e.instance_variable_get(:@state_turns) || {}
+          st = e.states.map { |s| "#{s.id}:#{turns[s.id] || 0}" }.join('.')
+          parts << "#{i},#{e.hp},#{e.mp},#{e.ap},#{st}"
         end
         return if parts.empty?
         bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::BATTLE_SYNC, 0, parts.join(';')))
@@ -209,9 +211,15 @@ module BSMP
         # @hp must NOT go through hp= (its refresh would re-derive the death state from hp
         # and fight the host's authoritative @states). @state_turns kept in step so any
         # turn lookups stay valid.
-        ids = (f[4] || "").split('.').map { |s| s.to_i }
-        old_turns = e.instance_variable_get(:@state_turns) || {}
-        e.instance_variable_set(:@state_turns, Hash[ids.map { |id| [id, old_turns[id] || 1] }])
+        ids = []
+        turns = {}
+        (f[4] || "").split('.').each do |spec|
+          sid, t = spec.split(':')
+          sid = sid.to_i
+          ids << sid
+          turns[sid] = t.to_i
+        end
+        e.instance_variable_set(:@state_turns, turns)
         e.instance_variable_set(:@states, ids)
         e.instance_variable_set(:@hp, f[1].to_i)
         e.mp = f[2].to_i
