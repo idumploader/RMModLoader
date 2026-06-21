@@ -683,6 +683,19 @@ class Scene_Base
   end
 end
 
+
+#==============================================================================
+# ■ Game_Interpreter - mute client battle command
+#==============================================================================
+class Game_Interpreter
+  # command_301 - "Battle start"
+  alias bsmp_battle_command_301 command_301
+  def command_301
+    return bsmp_battle_command_301 if BSMP.host? # call orig for host
+    # ignore for other
+  end
+end
+
 end # if defined?(BSMP)
 
 end # not $imported["IDL-BSMP-Battle"]

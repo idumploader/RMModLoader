@@ -200,6 +200,29 @@ class Game_Event < Game_Character
     end
   end
 
+  # Mute mobs events for client
+  alias bsmp_orig_trigger_in? trigger_in?
+  def trigger_in?(triggers)
+    return bsmp_orig_trigger_in?(triggers) if not BSMP.guest? or not bsmp_mover?
+    false
+  end
+end
+
+class Game_Player
+  
+  # Run client checks
+  alias bsmp_orig_update_nonmoving update_nonmoving
+  def update_nonmoving(last_moving)
+    bsmp_orig_update_nonmoving(last_moving)
+    bsmp_check_touch_event if BSMP.host?
+  end
+
+  # Check if some client touched trigger=2 event (usually mob)
+  def bsmp_check_touch_event
+    $bsmp_players.bsmp_players.each_value do |pl|
+      check_event_trigger_touch(pl.x, pl.y)
+    end
+  end
 end
 
 # Balloon icons (the enemy "!" notice, "?", "..." etc.) are NOT shown via a single
