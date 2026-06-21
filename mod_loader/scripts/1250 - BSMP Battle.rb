@@ -238,6 +238,15 @@ module BSMP
         $game_party.on_battle_end
         $game_troop.on_battle_end
       end
+
+      # Host: send battle start to all clients
+      def host_ensure_battle(troop_id, can_escape)
+        return if not BSMP.host? # Only host can initiate battle
+        return if host_session?  # Already initialized
+        data = "#{troop_id};#{can_escape ? 1 : 0}"
+        bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::BATTLE_START, 0, data))
+        BSMP::Battle.begin_host_session # start streaming troop state to guests
+      end
     end
   end
 
@@ -428,9 +437,7 @@ class Scene_Battle
   def start
     bsmp_battle_scene_start
     if BSMP.host? and bsmp_network_running?
-      data = "#{$game_troop.troop.id};#{BattleManager.can_escape? ? 1 : 0}"
-      bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::BATTLE_START, 0, data))
-      BSMP::Battle.begin_host_session # start streaming troop state to guests
+      BSMP::Battle.host_ensure_battle($game_troop.troop.id, BattleManager.can_escape?)
     end
   end
 
@@ -562,10 +569,21 @@ module BattleManager
     alias bsmp_battle_end battle_end
     def battle_end(result)
       if BSMP.host? and bsmp_network_running?
+        BSMP::Battle.result = result
         bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::BATTLE_END, 0, result.to_s))
       end
       BSMP::Battle.end_host_session # stop streaming troop state
       bsmp_battle_end(result)
+    end
+
+
+    # Catch battle early
+    alias bsmp_battle_setup setup
+    def setup(*args)
+      bsmp_battle_setup(*args)
+      if BSMP.host? and bsmp_network_running?
+        BSMP::Battle.host_ensure_battle($game_troop.troop.id, BattleManager.can_escape?)
+      end
     end
   end
 end
@@ -661,31 +679,6 @@ class Scene_Base
     bsmp_battle_base_update
     if (BSMP::Battle.client_session? or BSMP::Battle.host_session?) and not is_a?(Scene_Battle)
       BSMP::Battle.abort_sessions
-    end
-  end
-end
-
-#==============================================================================
-# ■ BattleManager - catch battle events
-#==============================================================================
-module BattleManager
-  class << self
-    alias bsmp_battle_process_victory process_victory
-    def process_victory
-      BSMP::Battle.result = 0
-      bsmp_battle_process_victory
-    end
-
-    alias bsmp_battle_process_abort process_abort
-    def process_abort
-      BSMP::Battle.result = 1
-      bsmp_battle_process_abort
-    end
-
-    alias bsmp_battle_process_defeat process_defeat
-    def process_defeat
-      BSMP::Battle.result = 2
-      bsmp_battle_process_defeat
     end
   end
 end
