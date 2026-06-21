@@ -603,7 +603,7 @@ module BSMP
     # into HANDLERS there). 26-39 reserved for the rest of the battle epic (snapshot,
     # ATB / HP / state facts, input request/response).
     BATTLE_START        = 24
-    BATTLE_END          = 25
+    BATTLE_END          = 25 # Format: "result"
 
     # Host's periodic battler-state broadcast during a co-op battle, so a guest's mute
     # scene mirrors the screen tone + enemy HP/MP/ATB/states. data =

@@ -63,11 +63,16 @@ module BSMP
       # Scene_Map#update so the transition happens cleanly between frames.
       attr_accessor :pending
 
+      # Battle result. Set when battle ended
+      # -1 - unknown battle result
+      attr_accessor :result
+
       def begin_client_session
         @active = true
         @ending = false
         @starve = 0
         @status_dirty = false
+        @result = nil
       end
 
       # Coalesce battle-status redraws. Every BATTLE_SYNC (enemies) and BATTLE_PARTY_SYNC
@@ -82,6 +87,12 @@ module BSMP
         d = @status_dirty
         @status_dirty = false
         d
+      end
+
+      def consume_battle_result
+        r = @result
+        @result = nil
+        r
       end
 
       # Heartbeat watchdog. note_sync resets the starvation counter on every received
@@ -106,6 +117,12 @@ module BSMP
         @active  = false
         @ending  = false
         @pending = nil
+        # Don't reset result, instead do it in on_map_end_client_session
+      end
+
+      # Called in map, when the battle just ended
+      def on_map_end_client_session
+        @result = nil
       end
 
       def begin_host_session
@@ -128,8 +145,9 @@ module BSMP
 
       # Mark that the host ended the battle; the mute Scene_Battle#update returns to
       # the map on its next tick (doing it there keeps the scene change between frames).
-      def request_end
+      def request_end(result)
         @ending = true
+        @result = result
       end
 
       def ending?
@@ -206,6 +224,13 @@ module BSMP
 
       # Client: Process battle end, e.g. from BATTLE_END from host or watchdog abort
       def client_battle_return
+        # Call methods like game, when result is known
+        if not @result.nil?
+            return BattleManager.process_victory if @result == 0
+            return BattleManager.process_abort   if @result == 1
+            return BattleManager.process_defeat  if @result == 2
+        end
+        # Emergency abort the battle if result unset (host disconnected / watchdog abort)
         SceneManager.return
         # Bug: client mute interpreter, so BattleManager.battle_end won't get called.
         # This leads to skip $game_party.on_battle_end, that clears @in_battle flag,
@@ -229,13 +254,14 @@ module BSMP
       BSMP::Battle.pending = { :troop_id => troop_id.to_i, :can_escape => (can_escape.to_i != 0) }
     end
 
-    # Host's battle ended (result 0 win / 1 escape / 2 lose). Leave the mute battle
-    # scene and return to the map. If we never finished entering (a fast
+    # Host's battle ended (result 0 win / 1 escape (abort) / 2 lose). Leave the mute
+    # battle scene and return to the map. If we never finished entering (a fast
     # start->end race), just drop the queued start.
     def self.on_battle_end(packet)
       return if not BSMP.guest?
+      result = packet.data.to_i
       BSMP::Battle.pending = nil
-      BSMP::Battle.request_end if BSMP::Battle.client_session?
+      BSMP::Battle.request_end(result) if BSMP::Battle.client_session?
     end
 
     # Host's troop-state broadcast: mirror enemy HP/MP/ATB onto our copies so the
@@ -516,7 +542,8 @@ class Scene_Battle
   alias bsmp_battle_scene_terminate terminate
   def terminate
     if BSMP.host? and BSMP::Battle.host_session? and bsmp_network_running?
-      bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::BATTLE_END, 0, "2"))
+      result = BSMP::Battle.result || -1
+      bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::BATTLE_END, 0, result.to_s))
       BSMP::Battle.end_host_session
     end
     bsmp_battle_scene_terminate
@@ -580,6 +607,7 @@ class Scene_Map
   def update
     bsmp_battle_map_update
     bsmp_consume_battle_start
+    bsmp_check_battle_result
   end
 
   # Enter a queued co-op BATTLE_START as a mute client. Driven from the map's own
@@ -596,6 +624,22 @@ class Scene_Map
     BSMP::Battle.begin_client_session
     BattleManager.setup(start[:troop_id], start[:can_escape], true)
     SceneManager.call(Scene_Battle)
+  end
+
+  def bsmp_check_battle_result
+    return if not BSMP.guest?          # host already runs its own interpreter, so ignore
+    return if BSMP::Battle.result.nil? # already cleared or emergency exited
+    result = BSMP::Battle.consume_battle_result
+
+    if result == 0 # victory
+      
+    elsif result == 1 # abort
+
+    elsif result == 2 # defeat
+        # TODO: maybe sync host's interpreter after battle?
+        # For now just call "death" common event
+        $game_map.interpreter.setup($data_common_events[12].list) if $game_map.interpreter
+    end
   end
 
 end
@@ -617,6 +661,31 @@ class Scene_Base
     bsmp_battle_base_update
     if (BSMP::Battle.client_session? or BSMP::Battle.host_session?) and not is_a?(Scene_Battle)
       BSMP::Battle.abort_sessions
+    end
+  end
+end
+
+#==============================================================================
+# ■ BattleManager - catch battle events
+#==============================================================================
+module BattleManager
+  class << self
+    alias bsmp_battle_process_victory process_victory
+    def process_victory
+      BSMP::Battle.result = 0
+      bsmp_battle_process_victory
+    end
+
+    alias bsmp_battle_process_abort process_abort
+    def process_abort
+      BSMP::Battle.result = 1
+      bsmp_battle_process_abort
+    end
+
+    alias bsmp_battle_process_defeat process_defeat
+    def process_defeat
+      BSMP::Battle.result = 2
+      bsmp_battle_process_defeat
     end
   end
 end
