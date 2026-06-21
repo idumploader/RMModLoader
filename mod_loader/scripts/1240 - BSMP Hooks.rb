@@ -43,12 +43,12 @@ class Spriteset_Map
     update_bsmp_status
   end
 
-  # Host only: every MOB_SYNC_INTERVAL frames, broadcast the positions of all moving
-  # events on this map so guests here glide their copies to match. Skipped when no
-  # remote player shares our map (no one to render them), so a host wandering alone
-  # spends nothing. "Only movers" + zlib keep the packet small.
+  # Map owner only: every MOB_SYNC_INTERVAL frames, broadcast the positions of all
+  # moving events on this map so non-owners glide their copies to match. Skipped when
+  # no remote player shares our map (no one to render them), so an owner wandering
+  # alone spends nothing. "Only movers" + zlib keep the packet small.
   def bsmp_broadcast_mobs
-    return if not BSMP.host?
+    return if not BSMP::World.map_owner_here?
     return if not $game_map
     @bsmp_mob_tick = (@bsmp_mob_tick || 0) + 1
     return if @bsmp_mob_tick < BSMP::Config::MOB_SYNC_INTERVAL
@@ -62,7 +62,8 @@ class Spriteset_Map
     return if movers.empty?
     data = $game_map.map_id.to_s
     movers.each do |e|
-      data << ";#{e.id},#{e.x},#{e.y},#{e.direction},#{e.bsmp_base_opacity},#{e.move_speed},#{e.transparent ? 1 : 0}"
+      forming = e.instance_variable_get(:@forming) ? 1 : 0 rescue 0
+      data << ";#{e.id},#{e.x},#{e.y},#{e.direction},#{e.bsmp_base_opacity},#{e.move_speed},#{e.transparent ? 1 : 0},#{forming}"
       BSMP.log("bcast mob #{e.id} base_op=#{e.bsmp_base_opacity} op=#{e.opacity} tr=#{e.transparent}") if BSMP.settings.debug and (e.bsmp_base_opacity != 255 or e.transparent)
     end
     bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::MOB_SYNC, 0, data))
@@ -340,6 +341,15 @@ class Scene_Base
     bsmp_read_packets
     bsmp_update_ping
     BSMP::UI.update_sync_overlay
+    # Polling fallback for map-ownership setup. Our Game_Map#setup alias above is
+    # the primary hook, but some BS2 mods redefine Game_Map#setup without preserving
+    # earlier aliases, blowing the hook away. Catching the map change here (one
+    # integer compare per frame, every scene) is independent of the alias chain —
+    # on_map_setup is idempotent on the same map_id, so the polling is a no-op once
+    # owned_map_id matches the current map.
+    if $game_map and BSMP::World.owned_map_id != $game_map.map_id
+      BSMP::World.on_map_setup($game_map.map_id)
+    end
   end
 
 end
@@ -350,6 +360,10 @@ class Game_Map
 
   def setup(map_id)
     bsmp_orig_setup(map_id)
+    # Note: ownership re-evaluation lives in the Scene_Base#update polling path
+    # (one level up), not here. Some BS2 mods redefine Game_Map#setup without
+    # preserving aliases, which would blow this hook away; the polling fallback is
+    # independent and idempotent on the same map_id, so it covers every case.
     return if not bsmp_network_running?
     bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::PLAYER_CHANGED_MAP, 0, BSMP.current_map_payload))
   end

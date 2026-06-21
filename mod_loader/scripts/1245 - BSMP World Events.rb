@@ -31,10 +31,14 @@ class Game_Event < Game_Character
     @bsmp_world_owned = !@event.nil? && @event.pages.any? { |pg| BSMP.world_owned_condition?(pg.condition) }
   end
 
-  # A guest skips running host-owned autorun/parallel pages. guest? is checked
-  # first so the host and single-player pay almost nothing here.
+  # A non-owner guest skips running the map-owner's autorun/parallel pages. The map
+  # owner (host or guest who was granted the map) keeps them running — that's how a
+  # guest-owner's BS2 mob respawn page (parallel, gated on a synced self-switch)
+  # ticks down its 600-frame timer and reapplies the world fact when it elapses,
+  # instead of getting stuck "dead forever" until the host drops by.
   def bsmp_suppress_world_event?
     return false if not BSMP.guest?
+    return false if BSMP::World.map_owner_here?  # map owner runs its world events
     return false if @trigger != 3 and @trigger != 4 # != autorun && != parallel
     bsmp_world_owned_event?
   end

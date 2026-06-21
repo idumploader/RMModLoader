@@ -30,6 +30,219 @@ module BSMP
 
     SELF_SWITCH_CHARS = "ABCD"
 
+    # --- map ownership (per-map authority) ------------------------------------
+    # True on the peer that the lobby host has authorised to own the CURRENT map. The
+    # owner simulates mobs, streams MOB_SYNC, runs command_301 on touch, and acts as
+    # the battle host for encounters on this map. Everyone else on the same map (incl.
+    # the lobby host when not the owner) puppets and joins battles as mute clients.
+    # Optimistic on map entry (set true before the reply arrives) so the owner starts
+    # simulating immediately; flipped to false on a denied reply, self-healing via the
+    # owner's MOB_SYNC.
+    @map_owner_here = false
+    @owned_map_id   = nil
+
+    # Server-side registrar state. Lives on the lobby host only; on guests these stay
+    # empty (the host is the single source of truth for who owns what). Kept here, not
+    # on BSMP::Server, so all world logic (ownership rules + relay policy) lives in one
+    # place — Net stays a thin transport.
+    @server_map_owners    = {}  # {map_id => user_id}
+    @server_map_mob_cache = {}  # {map_id => {event_id => {x,y,dir,op,speed,trans,forming}}}
+
+    class << self
+      attr_accessor :map_owner_here, :owned_map_id
+      attr_reader   :server_map_owners, :server_map_mob_cache
+    end
+
+    def self.map_owner_here?
+      @map_owner_here
+    end
+
+    # True only on the lobby host (where the registrar runs).
+    def self.registrar?
+      BSMP.host?
+    end
+
+    # Called from Game_Map#setup on every map change: release the previous map's
+    # ownership (if we held it) and request the new one. Host claims locally; guests
+    # ask the registrar. Optimistically assumes grant; the reply corrects if not.
+    def self.on_map_setup(map_id)
+      release_owned_map if @owned_map_id and @owned_map_id != map_id
+      @owned_map_id = map_id
+      @map_owner_here = true
+      if BSMP.host?
+        @map_owner_here = host_claim_map(map_id)
+      elsif BSMP.guest?
+        bsmp_send_packet(BasicNetworkPacket.new(Events::MAP_OWNERSHIP_REQUEST, 0, map_id.to_s))
+      else
+        @map_owner_here = true  # single-player / offline: always owner
+      end
+    end
+
+    def self.release_owned_map
+      return if @owned_map_id.nil?
+      if BSMP.host?
+        handle_ownership_release($bsmp_server.server_user_id, @owned_map_id)
+      elsif BSMP.guest?
+        bsmp_send_packet(BasicNetworkPacket.new(Events::MAP_OWNERSHIP_RELEASE, 0, @owned_map_id.to_s))
+      end
+      @map_owner_here = false
+    end
+
+    # Host granted (1) or denied (0) our request. On grant with a snapshot segment,
+    # apply it to our local mobs so a handoff doesn't reset them mid-chase. On deny we
+    # drop into puppet mode; the owner's MOB_SYNC will resync us.
+    def self.on_map_ownership_reply(packet)
+      parts = packet.data.split(';')
+      map_id = parts[0].to_i
+      granted = parts[1] == '1'
+      snapshot = parts[2..-1]
+      if granted
+        @map_owner_here = true
+        @owned_map_id = map_id
+        apply_mob_snapshot(snapshot) unless snapshot.empty?
+      else
+        @map_owner_here = false
+      end
+    end
+
+    # --- registrar entry-points (host-side; called from Net's on_packet_read) --
+    # The host is the single authority on who owns which map; guests send it
+    # MAP_OWNERSHIP_REQUEST / RELEASE and get back MAP_OWNERSHIP_REPLY. These three
+    # methods are the only registrar mutation points; everything else is internal.
+
+    # A peer asked to own this map. First-come-first-served: grant only if no one else
+    # owns it. The reply carries the cached mob snapshot on a grant (so a handoff
+    # resumes mid-state). Idempotent: same user re-asking for its own map re-grants.
+    def self.handle_ownership_request(user_id, map_id)
+      return unless registrar?
+      granted = claim_map(map_id, user_id)
+      send_ownership_reply(user_id, map_id, granted)
+    end
+
+    # The owner left the map (or this is the host's own setup-time release for its
+    # previous map). Free the slot and try to hand it to another peer still standing
+    # on it, sending them the snapshot we've cached from the previous owner's stream.
+    def self.handle_ownership_release(user_id, map_id)
+      return unless registrar?
+      return if @server_map_owners[map_id] != user_id
+      @server_map_owners.delete(map_id)
+      reassign_map_ownership(map_id)
+    end
+
+    # A peer disconnected (lobby leave / drop). Free every map they owned and try to
+    # reassign each to a remaining peer on it.
+    def self.handle_player_leaved(user_id)
+      return unless registrar?
+      @server_map_owners.dup.each do |map_id, owner|
+        next if owner != user_id
+        @server_map_owners.delete(map_id)
+        reassign_map_ownership(map_id)
+      end
+    end
+
+    # The relay path calls this for every MOB_SYNC the host forwards, so the host
+    # always has a fresh snapshot per map — used as the initial state when ownership
+    # is reassigned. Host's own broadcasts don't pass through here (no relay to self),
+    # which is fine: nothing reassigns the host's map to the host mid-sim.
+    def self.cache_mob_snapshot_from_packet(packet)
+      return unless registrar?
+      return if packet.data.nil? or packet.data.empty?
+      parts = packet.data.split(';')
+      map_id = parts.shift.to_i
+      snap = (@server_map_mob_cache[map_id] ||= {})
+      parts.each do |entry|
+        f = entry.split(',')
+        next if f.size < 7
+        id = f[0].to_i
+        snap[id] = {
+          :x       => f[1].to_i,
+          :y       => f[2].to_i,
+          :dir     => f[3].to_i,
+          :op      => f[4].to_i,
+          :speed   => f[5].to_i,
+          :trans   => f[6].to_i,
+          :forming => (f[7] ? f[7].to_i == 1 : false)
+        }
+      end
+    end
+
+    # --- registrar internals ---------------------------------------------------
+
+    # First-come-first-served claim. The host itself goes through the same path
+    # (host_claim_map), so being the lobby host doesn't auto-grant the current map —
+    # only being first does. Returns true on grant.
+    def self.claim_map(map_id, user_id)
+      return false if @server_map_owners.key?(map_id) and @server_map_owners[map_id] != user_id
+      @server_map_owners[map_id] = user_id
+      true
+    end
+
+    # Host's local claim shortcut (used by on_map_setup on the host).
+    def self.host_claim_map(map_id)
+      return false unless registrar? and $bsmp_server
+      claim_map(map_id, $bsmp_server.server_user_id)
+    end
+
+    # Free a map (owner left or disconnected) and reassign to any other peer still on
+    # it. Reassign picks the lowest user_id present on the map (deterministic across
+    # peers) so there's no race; the cached MOB_SYNC snapshot is appended to the grant
+    # so the new owner resumes mid-state. The host itself only auto-reclaims when it's
+    # standing on the freed map.
+    def self.reassign_map_ownership(map_id)
+      return unless registrar?
+      return if @server_map_owners.key?(map_id)
+      candidates = []
+      # The lobby host is a candidate when it's standing on this map (it's not tracked
+      # in $bsmp_players — that holds REMOTE peers — so we add it explicitly).
+      candidates << $bsmp_server.server_user_id if $game_map and $game_map.map_id == map_id
+      if $bsmp_players
+        $bsmp_players.bsmp_players.each do |uid, pl|
+          candidates << uid if pl.map_id == map_id
+        end
+      end
+      return if candidates.empty?
+      new_owner = candidates.min
+      @server_map_owners[map_id] = new_owner
+      send_ownership_reply(new_owner, map_id, true)
+    end
+
+    # Build and send a MAP_OWNERSHIP_REPLY to a single peer. data =
+    # "map_id;1|0[;id,x,y,dir,op,speed,trans,forming;...]". The snapshot segment is
+    # appended only on a grant and only if the host has cached state for this map.
+    def self.send_ownership_reply(target_user_id, map_id, granted)
+      return unless registrar? and $bsmp_server
+      snap = granted ? (@server_map_mob_cache[map_id] || {}) : {}
+      snap_str = snap.map { |id, s| "#{id},#{s[:x]},#{s[:y]},#{s[:dir]},#{s[:op]},#{s[:speed]},#{s[:trans]},#{s[:forming] ? 1 : 0}" }.join(';')
+      data = "#{map_id};#{granted ? 1 : 0}"
+      data << ";#{snap_str}" unless snap_str.empty?
+      packet = BasicNetworkPacket.new(Events::MAP_OWNERSHIP_REPLY, $bsmp_server.server_user_id, data)
+      if target_user_id == $bsmp_server.server_user_id
+        # We're granting to ourselves (the host); deliver locally, no network hop.
+        on_map_ownership_reply(packet)
+      else
+        client = $bsmp_server.find_client(target_user_id)
+        $bsmp_server.send_packet_to(client, packet) if client
+      end
+    end
+
+    # --- snapshot apply (client-side, on grant) -------------------------------
+
+    # Apply a serialised mob snapshot ("id,x,y,dir,op,speed,trans,forming;...") to the
+    # local events. Used on ownership grant to resume a previous owner's state without
+    # resetting the chase. Mirrors Game_Event#bsmp_apply_sync but for the full roster.
+    def self.apply_mob_snapshot(entries)
+      return if $game_map.nil?
+      entries.each do |entry|
+        f = entry.split(',')
+        next if f.size < 7
+        ev = $game_map.events[f[0].to_i]
+        next if ev.nil?
+        ev.bsmp_apply_sync(f[1].to_i, f[2].to_i, f[3].to_i, f[4].to_i, f[5].to_i, f[6].to_i)
+        # forming flag isn't a public ivar; reflectively set it for the symbol AI
+        ev.instance_variable_set(:@forming, f[7].to_i == 1) if ev.instance_variable_defined?(:@forming)
+      end
+    end
+
     # True once a game is actually loaded (the $game_* objects exist). Handshake
     # must not dump/apply from the title screen.
     def self.ready?
@@ -263,6 +476,53 @@ module BSMP
   end
 
 end # module BSMP
+
+#==============================================================================
+# ▼ Scene_Base / SceneManager — co-op suppression of the stock game-over
+#------------------------------------------------------------------------------
+# A non-owner (a peer whose current map is owned by someone else) ignores the
+# default all_dead? -> Scene_Gameover trigger, regardless of which code path
+# raises it. BS2 reaches Scene_Gameover from several places: Scene_Base's
+# per-frame check_gameover, Game_Interpreter#command_311 (Change HP) when the
+# change drops the party to 0, and command_353 (explicit Game Over event). All
+# of them funnel through SceneManager.goto(Scene_Gameover), so a single guard
+# there covers every path.
+#
+# Why: after a lost co-op battle, the owner's authoritative revive / respawn
+# (death common event) lands a few frames late on non-owners via
+# BATTLE_PARTY_SYNC. Without the guard, a transient all_dead? on a non-owner
+# trips the stock game-over first — symptom: "walks around fine on solo maps,
+# dies the moment they step onto a map with another player" (that's the
+# moment they become non-owner and party_sync catches up). The map owner keeps
+# the stock check — it owns the post-battle interpreter and the loss.
+#==============================================================================
+if defined?(BSMP) and BSMP::World.respond_to?(:map_owner_here?)
+class Scene_Base
+  if method_defined?(:check_gameover)
+    alias bsmp_world_check_gameover check_gameover
+    def check_gameover
+      return if bsmp_network_running? and not BSMP::World.map_owner_here?
+      bsmp_world_check_gameover
+    end
+  end
+end
+
+module SceneManager
+  class << self
+    alias bsmp_world_goto goto
+    def goto(scene_class)
+      # Suppress every transition into Scene_Gameover for a co-op non-owner. The
+      # owner's defeat path (death common event / process_defeat on the owner's
+      # BattleManager) is the authoritative outcome; a non-owner's local all_dead?
+      # is a sync echo and must not strand it in the stock game-over screen.
+      if scene_class == Scene_Gameover and bsmp_network_running? and not BSMP::World.map_owner_here?
+        return
+      end
+      bsmp_world_goto(scene_class)
+    end
+  end
+end
+end
 
 end # if defined?(BSMP)
 

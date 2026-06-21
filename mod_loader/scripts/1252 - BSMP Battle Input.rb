@@ -264,11 +264,12 @@ module BSMP
   end
 
   module Events
-    # Guest: the host wants this actor's command. Open the real command UI on our actor
-    # (6.4.1). Point-to-point, so receiving it means it's for one of our actors. Ignore a
-    # request that arrives while we're already choosing (single command at a time).
+    # Non-owner: the battle owner wants this actor's command. Open the real command UI
+    # on our actor (6.4.1). Point-to-point, so receiving it means it's for one of our
+    # actors. Ignore a request that arrives while we're already choosing (single
+    # command at a time).
     def self.on_battle_input_request(packet)
-      return if not BSMP.guest?
+      return if BSMP::Battle.host_session?  # the battle host doesn't get requests
       return if not BSMP::Battle.client_session?
       return if BSMP::BattleInput.guest_active?
       actor_id = packet.data.to_i
@@ -281,7 +282,10 @@ module BSMP
       scene.bsmp_guest_start_input(actor)
     end
 
-    # Host: a guest replied with its command — hand it to BattleInput to inject + resume.
+    # Owner-of-battle: a guest replied with its command — hand it to BattleInput to
+    # inject + resume. (Battle owner = map owner; we keep the same host?/map_owner
+    # semantics, but the guard is explicit so it stays correct when the lobby host is
+    # itself a mute client on a guest-owned map.)
     def self.on_battle_input(packet)
       return if not BSMP.host?
       BSMP::BattleInput.on_reply(packet.from_id, packet.data)

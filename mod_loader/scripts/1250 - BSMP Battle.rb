@@ -239,11 +239,13 @@ module BSMP
         $game_troop.on_battle_end
       end
 
-      # Host: send battle start to all clients
+      # Host: send battle start to all clients. Only the lobby host starts co-op
+      # battles — guests that touch a hostile send BATTLE_REQUEST and the host runs
+      # the actual battle here. (Map-owner authority is for MOB simulation only.)
       def host_ensure_battle(troop_id, can_escape)
-        return if not BSMP.host? # Only host can initiate battle
+        return if not BSMP.host?
         return if host_session?  # Already initialized
-        data = "#{troop_id};#{can_escape ? 1 : 0}"
+        data = "#{$game_map.map_id};#{troop_id};#{can_escape ? 1 : 0}"
         bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::BATTLE_START, 0, data))
         BSMP::Battle.begin_host_session # start streaming troop state to guests
       end
@@ -253,21 +255,24 @@ module BSMP
   module Events
     # --- co-op battle lifecycle (step 6.1) ---
 
-    # Host entered a battle: join it as a mute client. We're on the map, so just
-    # queue it — Scene_Map#update performs the actual transition (mirroring how an
-    # encounter enters battle: BattleManager.setup + SceneManager.call).
+    # Map owner entered a battle: ALL non-battle-hosts join as mute clients, no
+    # matter which map they're standing on — co-op battles are global ("fight
+    # together"). data still carries map_id first (context for the troop's origin,
+    # not used as a filter). Guard is host_session? (true only on the peer that
+    # started the battle), NOT map_owner_here? — that would block the lobby host
+    # from joining a guest-owned map's battle.
     def self.on_battle_start(packet)
-      return if not BSMP.guest?
+      return if BSMP::Battle.host_session?  # we're the one who started this battle
       return if BSMP::Battle.client_session? # already in the host's battle
-      troop_id, can_escape = packet.data.split(';')
+      _, troop_id, can_escape = packet.data.split(';')
       BSMP::Battle.pending = { :troop_id => troop_id.to_i, :can_escape => (can_escape.to_i != 0) }
     end
 
-    # Host's battle ended (result 0 win / 1 escape (abort) / 2 lose). Leave the mute
-    # battle scene and return to the map. If we never finished entering (a fast
-    # start->end race), just drop the queued start.
+    # Battle owner's battle ended (result 0 win / 1 escape (abort) / 2 lose). Leave
+    # the mute battle scene and return to the map. If we never finished entering (a
+    # fast start->end race), just drop the queued start.
     def self.on_battle_end(packet)
-      return if not BSMP.guest?
+      return if BSMP::Battle.host_session?  # the owner's own end already ran locally
       result = packet.data.to_i
       BSMP::Battle.pending = nil
       BSMP::Battle.request_end(result) if BSMP::Battle.client_session?
@@ -279,7 +284,7 @@ module BSMP
     # state etc.); the enemy sprites/HP bars read these each frame, so no explicit
     # redraw is needed. Actor side is untouched here (combined party = 6.3).
     def self.on_battle_sync(packet)
-      return if not BSMP.guest?
+      return if BSMP::Battle.host_session?  # we're streaming this; ignore our own echo
       return if not BSMP::Battle.client_session?
       BSMP::Battle.note_sync # heartbeat: the host is still streaming this battle
       return if $game_troop.nil?
@@ -331,7 +336,7 @@ module BSMP
     # Host pushed an action animation: play it on our copies of the enemy targets by
     # setting animation_id (Sprite_Battler picks it up next frame, like the map balloon).
     def self.on_battle_anim(packet)
-      return if not BSMP.guest?
+      return if BSMP::Battle.host_session?  # we're streaming this; ignore our own echo
       return if not BSMP::Battle.client_session?
       f = packet.data.split(';')
       anim_id = f[0].to_i
@@ -362,7 +367,7 @@ module BSMP
     # battler.damage=), which reads result.hp/mp/tp + critical/missed/evaded. The
     # collapse and the absolute HP are handled by on_battle_sync.
     def self.on_battle_result(packet)
-      return if not BSMP.guest?
+      return if BSMP::Battle.host_session?  # we're streaming this; ignore our own echo
       return if not BSMP::Battle.client_session?
       tgt, hp, mp, tp, flags = packet.data.split(';')
       if tgt.to_s.start_with?('e:')
@@ -386,7 +391,7 @@ module BSMP
     # Host's battle screen flashed: reproduce it with the host's exact color + duration
     # ($game_troop.screen drives Spriteset_Battle's flash, no actor needed).
     def self.on_battle_flash(packet)
-      return if not BSMP.guest?
+      return if BSMP::Battle.host_session?  # we're streaming this; ignore our own echo
       return if not BSMP::Battle.client_session?
       return if $game_troop.nil? or $game_troop.screen.nil?
       r, g, b, a, dur = packet.data.split(';').map { |s| s.to_i }
@@ -396,7 +401,7 @@ module BSMP
     # Host's battle screen shook: reproduce it with the host's exact power/speed/duration
     # (the variable per-hit shake the host shows). No actor needed.
     def self.on_battle_shake(packet)
-      return if not BSMP.guest?
+      return if BSMP::Battle.host_session?  # we're streaming this; ignore our own echo
       return if not BSMP::Battle.client_session?
       return if $game_troop.nil? or $game_troop.screen.nil?
       power, speed, dur = packet.data.split(';').map { |s| s.to_i }
@@ -405,7 +410,7 @@ module BSMP
 
     # Host's enemy is about to act: play the pre-attack white blink on our copy.
     def self.on_battle_whiten(packet)
-      return if not BSMP.guest?
+      return if BSMP::Battle.host_session?  # we're streaming this; ignore our own echo
       return if not BSMP::Battle.client_session?
       return if $game_troop.nil?
       e = $game_troop.members[packet.data.to_i]
@@ -420,6 +425,24 @@ module BSMP
     HANDLERS[BATTLE_FLASH]  = method(:on_battle_flash)
     HANDLERS[BATTLE_SHAKE]  = method(:on_battle_shake)
     HANDLERS[BATTLE_WHITEN] = method(:on_battle_whiten)
+
+    # Non-host peer asked us (the lobby host) to start a co-op battle for them —
+    # they touched a hostile on a map we may not be standing on. We start the real
+    # Scene_Battle; the existing BattleManager.setup / Scene_Battle#start hooks will
+    # broadcast BATTLE_START so everyone (the requester + any other guests) join as
+    # mute clients. We don't set event_proc on our side: the requester's interpreter
+    # owns the post-battle branches (IfWin / IfLose run there via @branch).
+    def self.on_battle_request(packet)
+      return unless BSMP.host?
+      return unless bsmp_network_running?
+      return if $game_party.in_battle  # already in one
+      troop_id, can_escape, can_lose = packet.data.split(';').map { |s| s.to_i }
+      return unless $data_troops[troop_id]
+      BattleManager.setup(troop_id, can_escape != 0, can_lose != 0)
+      $game_player.make_encounter_count
+      SceneManager.call(Scene_Battle)
+    end
+    HANDLERS[BATTLE_REQUEST] = method(:on_battle_request)
   end
 
 end # module BSMP
@@ -450,15 +473,19 @@ class Scene_Battle
     if BSMP::Battle.client_session?
       super
       BSMP::Battle.client_tick
-      # Leave on the host's BATTLE_END, or as a fallback if we lost the host entirely
-      # (disconnect / host quit to title). Either way return to the existing map scene.
-      if BSMP::Battle.ending? or not BSMP.guest?
+      # Leave on the owner's BATTLE_END, or as a fallback if we lost the network
+      # entirely (disconnect). The "not BSMP.guest?" guard used to be the fallback,
+      # but with map-owner semantics the lobby host can ALSO be a mute client (when
+      # a guest owns the map and started the battle); "not guest?" would trip on the
+      # host and yank it out of the battle on the first frame. Use the network running
+      # flag instead — true even for the host-as-mute-client.
+      if BSMP::Battle.ending? or not bsmp_network_running?
         BSMP::Battle.end_client_session
         BSMP::Battle.client_battle_return
-      # Heartbeat watchdog: the host has gone silent (its battle ended and we missed
-      # the BATTLE_END — e.g. across an F12 reset that dropped us back into a battle the
-      # host already left). Force out to the map; goto, not return, since an F12 reset
-      # may have left no map scene on the stack to pop back to.
+      # Heartbeat watchdog: the owner has gone silent (its battle ended and we missed
+      # the BATTLE_END — e.g. across an F12 reset that dropped us back into a battle
+      # the owner already left). Force out to the map; goto, not return, since an F12
+      # reset may have left no map scene on the stack to pop back to.
       elsif BSMP::Battle.starved?
         BSMP::Battle.end_client_session
         BSMP::Battle.client_battle_return
@@ -645,7 +672,7 @@ class Scene_Map
   end
 
   def bsmp_check_battle_result
-    return if not BSMP.guest?          # host already runs its own interpreter, so ignore
+    return if BSMP::Battle.host_session? # battle owner already runs its own interpreter, so ignore
     return if BSMP::Battle.result.nil? # already cleared or emergency exited
     result = BSMP::Battle.consume_battle_result
 
@@ -685,14 +712,57 @@ end
 
 
 #==============================================================================
-# ■ Game_Interpreter - mute client battle command
+# ■ Game_Interpreter — non-host: request the host to run the battle, then resume
+# the page's IfWin / IfEscape / IfLose branches when the result comes back.
 #==============================================================================
 class Game_Interpreter
-  # command_301 - "Battle start"
+  # command_301 - "Battle start". The host runs it stock. A non-host (regardless of
+  # whether it's the map owner — co-op battles are global, host is the single
+  # battle authority) never runs the battle locally; instead it asks the host to
+  # start it. While waiting it parks its Fiber (yields), so the page doesn't run
+  # past command_301 until BATTLE_END has set @branch[@indent] = result.
   alias bsmp_battle_command_301 command_301
   def command_301
-    return bsmp_battle_command_301 if BSMP.host? # call orig for host
-    # ignore for other
+    return bsmp_battle_command_301 if not bsmp_network_running?
+    return bsmp_battle_command_301 if BSMP.host?
+    return if $game_party.in_battle
+    bsmp_battle_request_remote
+  end
+
+  def bsmp_battle_request_remote
+    # Resolve troop_id the same way the stock command_301 does (direct / variable /
+    # map-encounter). Map-encounter (params[0] == 2) is dropped — it would need
+    # simulating the host's encounter table here, not worth it for a rare case.
+    case @params[0]
+    when 0 then troop_id = @params[1]
+    when 1 then troop_id = $game_variables[@params[1]]
+    else return  # map encounter: skip
+    end
+    return unless $data_troops[troop_id]
+    can_escape = @params[2] ? 1 : 0
+    can_lose   = @params[3] ? 1 : 0
+    # Ask the host. The host runs the real Scene_Battle; its BattleManager.setup /
+    # Scene_Battle#start hooks broadcast BATTLE_START so we (and everyone else) join
+    # as mute clients.
+    bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::BATTLE_REQUEST, 0, "#{troop_id};#{can_escape};#{can_lose}"))
+    # Wait for the host's BATTLE_START to arrive. The host may take a frame or two
+    # (the packet is read on the next Scene_Base#update), so yield until pending.
+    BSMP::Battle.pending = nil
+    while BSMP::Battle.pending.nil? and bsmp_network_running?
+      Fiber.yield
+    end
+    return unless bsmp_network_running?  # we lost the host — bail, leave the event
+    start = BSMP::Battle.pending
+    BSMP::Battle.pending = nil
+    BSMP::Battle.begin_client_session
+    # Mirror the stock command_301's setup: can_lose forced to true so a mute client
+    # never trips Scene_Gameover locally; event_proc bridges the host's eventual
+    # result back into our @branch so the IfWin/IfEscape/IfLose branches run here.
+    BattleManager.setup(start[:troop_id], start[:can_escape], true)
+    BattleManager.event_proc = Proc.new { |n| @branch[@indent] = n }
+    $game_player.make_encounter_count
+    SceneManager.call(Scene_Battle)
+    Fiber.yield
   end
 end
 

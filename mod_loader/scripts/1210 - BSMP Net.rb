@@ -282,6 +282,10 @@ module BSMP
       # Announce now if we're already in-game; otherwise ensure_announced retries
       # each frame until we load in (joined from the title).
       @handshake_state = :ready if update_player_data
+      # Now that we're an acknowledged guest, (re)claim our current map's ownership.
+      # Covers the load-game-then-join path where Game_Map.setup ran offline and so
+      # didn't send a request, and the in-game-then-join path where we never re-setup.
+      BSMP::World.on_map_setup($game_map.map_id) if $game_map and not BSMP::World.owned_map_id
     end
 
     def handle_world_snapshot(packet)
@@ -512,6 +516,13 @@ module BSMP
       @lobby_id = lobby_id
       @server_user_id = SteamAPI.get_lobby_owner(lobby_id)
       @running = true
+      # We may already be in-game (host started playing before opening the lobby); in
+      # that case Game_Map.setup ran while offline and the ownership table never got
+      # our own claim. Re-claim the current map so its mobs/battles stream to guests.
+      # (World logic — this is just the trigger from the network layer.)
+      if $game_map and BSMP::World.owned_map_id.nil?
+        BSMP::World.on_map_setup($game_map.map_id)
+      end
     end
 
     def on_lobby_chat_update(lobby_id, update_enum, user_id, failure)
@@ -547,7 +558,26 @@ module BSMP
         send_world_snapshot(user_id) if find_client(user_id)
         return
       end
+      # Map-ownership registrar: point-to-point with the host, never relayed. The
+      # world logic (claim rules, reassign, snapshot cache) lives in BSMP::World.
+      if packet.type == Events::MAP_OWNERSHIP_REQUEST
+        BSMP::World.handle_ownership_request(user_id, packet.data.to_i)
+        return
+      end
+      if packet.type == Events::MAP_OWNERSHIP_RELEASE
+        BSMP::World.handle_ownership_release(user_id, packet.data.to_i)
+        return
+      end
+      # Battle request: point-to-point to the host (host is the single battle
+      # authority). Never relayed — only the host runs the real Scene_Battle.
+      if packet.type == Events::BATTLE_REQUEST
+        Events.on_packet(packet)
+        return
+      end
       p "Got packet from #{user_id}, type=#{packet.type}, data=#{packet.data}" if BSMP.settings.debug
+      # Cache the latest mob snapshot from the map owner before relaying — used as the
+      # initial state when ownership is reassigned (release / disconnect).
+      BSMP::World.cache_mob_snapshot_from_packet(packet) if packet.type == Events::MOB_SYNC
       # Relay carries the plaintext data; send_packet_to re-frames per hop.
       client = find_client(user_id)
       if client

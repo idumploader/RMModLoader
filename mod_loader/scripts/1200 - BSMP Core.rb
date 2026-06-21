@@ -369,6 +369,13 @@ module BSMP
       handler.call(packet) if handler
     end
 
+    # Map ownership registrar reply (handled by BSMP::World, which holds the local
+    # owner flag + snapshot apply). Plain delegation so the Events/HANDLERS table can
+    # reference it the same way as the other on_* handlers.
+    def self.on_map_ownership_reply(packet)
+      BSMP::World.on_map_ownership_reply(packet)
+    end
+
     def self.on_player_joined(packet)
       p "Player #{packet.from_id} joined"
       $bsmp_players.add(packet.from_id, packet.data)
@@ -377,6 +384,9 @@ module BSMP
     def self.on_player_leaved(packet)
       p "Player #{packet.from_id} leaved"
       $bsmp_players.delete(packet.from_id)
+      # The host's registrar drops the leaver's map ownership (releasing the map for
+      # reassignment). World owns this logic; Net just hands us the leaver id.
+      BSMP::World.handle_player_leaved(packet.from_id)
     end
 
     def self.on_player_moved(packet)
@@ -462,17 +472,17 @@ module BSMP
       end
     end
 
-    # Host-driven mobs: apply the host's positions to our copies of the moving
-    # events, but only while we're a guest on the host's current map (otherwise the
-    # mobs are ours to simulate). Each entry is "id,x,y,dir"; the event glides or
-    # snaps to it (see Game_Event#bsmp_apply_sync). Unknown ids are skipped.
+    # Owner-driven mobs: apply the owner's positions to our copies of the moving
+    # events, but only while we're NOT the owner of this map (otherwise the mobs are
+    # ours to simulate). Each entry is "id,x,y,dir[,op,speed,trans,forming]"; the event
+    # glides or snaps to it (see Game_Event#bsmp_apply_sync). Unknown ids are skipped.
     def self.on_mob_sync(packet)
-      return if not BSMP.guest?
+      return if BSMP::World.map_owner_here?  # we're the source of this; ignore our echo
       return if not $game_map
       parts = packet.data.split(';')
       return if parts.empty?
       map_id = parts.shift.to_i
-      return if map_id != $game_map.map_id # host is on another map than us
+      return if map_id != $game_map.map_id # owner is on another map than us
       parts.each do |entry|
         f = entry.split(',')
         next if f.size < 4
@@ -482,14 +492,20 @@ module BSMP
         speed   = f[5] ? f[5].to_i : nil
         transp  = f[6] ? f[6].to_i : nil
         event.bsmp_apply_sync(f[1].to_i, f[2].to_i, f[3].to_i, opacity, speed, transp)
+        # Mirror the chase "!" state from the owner across the handoff boundary so the
+        # mob doesn't visibly "calm down" between owners. @forming only exists on
+        # symbol-encounter mobs; the rescue covers events without it.
+        if f.size >= 8 and event.instance_variable_defined?(:@forming)
+          event.instance_variable_set(:@forming, f[7].to_i == 1)
+        end
       end
     end
 
-    # Host showed a balloon icon on an event (the enemy "!" notice and friends);
+    # Owner showed a balloon icon on an event (the enemy "!" notice and friends);
     # mirror it onto our copy. Setting balloon_id is read by Sprite_Character, so the
-    # animation plays just as locally. Only while a guest on the host's map.
+    # animation plays just as locally. Only applies to non-owners on the same map.
     def self.on_mob_balloon(packet)
-      return if not BSMP.guest?
+      return if BSMP::World.map_owner_here?  # we're the source; ignore echo
       return if not $game_map
       map_id, event_id, balloon = packet.data.split(';')
       return if map_id.to_i != $game_map.map_id
@@ -497,11 +513,11 @@ module BSMP
       event.balloon_id = balloon.to_i if event
     end
 
-    # Host erased an event (e.g. a defeated enemy removed itself after battle); erase
-    # our copy too so it disappears in lockstep. erase() on a guest doesn't re-emit
-    # (the hook only broadcasts on the host).
+    # Owner erased an event (e.g. a defeated enemy removed itself after battle); erase
+    # our copy too so it disappears in lockstep. erase() on a non-owner doesn't re-emit
+    # (the hook only broadcasts on the owner).
     def self.on_mob_erase(packet)
-      return if not BSMP.guest?
+      return if BSMP::World.map_owner_here?  # we're the source; ignore echo
       return if not $game_map
       map_id, event_id = packet.data.split(';')
       BSMP.log("recv MOB_ERASE map=#{map_id} ev=#{event_id} (mymap=#{$game_map.map_id})") if BSMP.settings.debug
@@ -597,9 +613,11 @@ module BSMP
     MOB_ERASE           = 23
 
     # --- co-op battle (step 6) ---
-    # Battle lifecycle. The host announces its battle so guests join as mute clients
-    # (BATTLE_START = troop id + escape flag) and the authoritative end so they leave
-    # (BATTLE_END = result 0/1/2). Handlers live in 1250 - BSMP Battle.rb (registered
+    # Battle lifecycle. The map owner announces its battle so non-owners on the SAME
+    # map join as mute clients (BATTLE_START = "map_id;troop_id;escape") and the
+    # authoritative end so they leave (BATTLE_END = "result"). The leading map_id in
+    # BATTLE_START lets peers on OTHER maps (e.g. the lobby host on its own map) ignore
+    # a battle they aren't part of. Handlers live in 1250 - BSMP Battle.rb (registered
     # into HANDLERS there). 26-39 reserved for the rest of the battle epic (snapshot,
     # ATB / HP / state facts, input request/response).
     BATTLE_START        = 24
@@ -656,6 +674,36 @@ module BSMP
     BATTLE_INPUT_REQUEST = 34
     BATTLE_INPUT         = 35
 
+    # --- map ownership (per-map authority registrar) ---------------------------
+    # Per-map mob authority is handed out by the lobby host on a first-come-first-served
+    # basis. Whoever claims a map becomes its "owner": it simulates the mobs locally,
+    # streams MOB_SYNC, runs command_301 (battle start) on touch, and broadcasts the
+    # outcome (SELF_SWITCH_CHANGED / MOB_ERASE / BATTLE_*). Everyone else on that map
+    # (including the lobby host, if it's not the owner) puppets and acts as a mute client
+    # for any battle. Lets two guests on a map without the host still play co-op (the
+    # owner's battle rejoins the others), without loading every map onto the host.
+    #
+    # MAP_OWNERSHIP_REQUEST  peer->host  data = "map_id"  — "may I own this map?"
+    # MAP_OWNERSHIP_REPLY    host->peer  data = "map_id;1|0[;snapshot]" — yes/no, with a
+    #   cached mob snapshot appended on grant so the new owner resumes mid-state instead
+    #   of resetting (forming flag included so the chase "!" persists across handoff).
+    # MAP_OWNERSHIP_RELEASE  owner->host data = "map_id"  — "I left, reassign if anyone
+    #   else is here". The host keeps the last relayed MOB_SYNC per map for exactly this.
+    MAP_OWNERSHIP_REQUEST = 40
+    MAP_OWNERSHIP_REPLY   = 41
+    MAP_OWNERSHIP_RELEASE = 42
+
+    # A non-host peer touched a hostile on its map and wants the host to start the
+    # co-op battle for everyone. data = "troop_id;can_escape;can_lose". The host
+    # runs the real Scene_Battle; the requester (and everyone else) joins as a mute
+    # client via the normal BATTLE_START. After BATTLE_END, the requester's
+    # Game_Interpreter#command_301 Fiber resumes with @branch[@indent] set, so the
+    # event page's IfWin / IfEscape / IfLose branches run on the requester's side
+    # (set_self_switch / common event) and propagate via the world-sync. This keeps
+    # the host as the single battle authority even for battles triggered on a map
+    # the host isn't standing on.
+    BATTLE_REQUEST        = 43
+
     HANDLERS = {
       PLAYER_JOINED            => method(:on_player_joined),
       PLAYER_MOVED             => method(:on_player_moved),
@@ -674,6 +722,7 @@ module BSMP
       MOB_SYNC                 => method(:on_mob_sync),
       MOB_BALLOON              => method(:on_mob_balloon),
       MOB_ERASE                => method(:on_mob_erase),
+      MAP_OWNERSHIP_REPLY      => method(:on_map_ownership_reply),
     }
 
     NAMES = {

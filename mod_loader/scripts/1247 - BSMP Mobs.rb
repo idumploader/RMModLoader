@@ -45,11 +45,12 @@ class Game_Event < Game_Character
     (!@move_type.nil? && @move_type != 0) || @symbol_encount || @bsmp_is_mob
   end
 
-  # True when this mob's movement is currently the host's to drive: we're a guest
-  # and the host is on our map. BSMP.host_here? short-circuits on guest? so the host
-  # and single-player pay almost nothing.
+  # True when this mob's movement is currently the map owner's to drive: we're not
+  # the owner (someone else — the lobby host or another guest — was granted this map).
+  # The owner simulates; we puppet. Offline / single-player map_owner_here? is true,
+  # so it pays nothing.
   def bsmp_puppet?
-    BSMP.host_here? && bsmp_mover?
+    not BSMP::World.map_owner_here? and bsmp_mover?
   end
 
   # Suppress local autonomous movement while the host drives this mob; its position
@@ -126,8 +127,8 @@ class Game_Event < Game_Character
   alias_method :bsmp_orig_erase, :erase
   def erase
     bsmp_orig_erase
-    BSMP.log("erase ev=#{@id} map=#{$game_map ? $game_map.map_id : '?'} host=#{BSMP.host?} guest=#{BSMP.guest?}")
-    return if not BSMP.host?
+    BSMP.log("erase ev=#{@id} map=#{$game_map ? $game_map.map_id : '?'} owner=#{BSMP::World.map_owner_here?}")
+    return if not BSMP::World.map_owner_here?
     return if not bsmp_network_running?
     return if not $game_map
     bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::MOB_ERASE, 0, "#{$game_map.map_id};#{@id}"))
@@ -190,7 +191,7 @@ class Game_Event < Game_Character
     alias_method :bsmp_orig_near_the_screen?, :near_the_screen?
     def near_the_screen?(dx = 12, dy = 8)
       return true if bsmp_orig_near_the_screen?(dx, dy)
-      return false if not BSMP.host?
+      return false if not BSMP::World.map_owner_here?
       return false if not $bsmp_players
       $bsmp_players.bsmp_players.each_value do |pl|
         next if pl.map_id != $game_map.map_id
@@ -200,26 +201,29 @@ class Game_Event < Game_Character
     end
   end
 
-  # Mute mobs events for client
+  # Mute mobs events for non-owner (the owner runs battles, others join via BATTLE_START)
   alias bsmp_orig_trigger_in? trigger_in?
   def trigger_in?(triggers)
-    return bsmp_orig_trigger_in?(triggers) if not BSMP.guest? or not bsmp_mover?
+    return bsmp_orig_trigger_in?(triggers) if BSMP::World.map_owner_here? or not bsmp_mover?
     false
   end
 end
 
 class Game_Player
   
-  # Run client checks
+  # Owner checks for remote players touching this map's mobs (hostiles trigger=2).
+  # The owner runs the real battle; remote peers on this map rely on the owner's
+  # check, so they don't start a parallel local battle.
   alias bsmp_orig_update_nonmoving update_nonmoving
   def update_nonmoving(last_moving)
     bsmp_orig_update_nonmoving(last_moving)
-    bsmp_check_touch_event if BSMP.host?
+    bsmp_check_touch_event if BSMP::World.map_owner_here?
   end
 
   # Check if some client touched trigger=2 event (usually mob)
   def bsmp_check_touch_event
     $bsmp_players.bsmp_players.each_value do |pl|
+      next if pl.map_id != $game_map.map_id
       check_event_trigger_touch(pl.x, pl.y)
     end
   end
