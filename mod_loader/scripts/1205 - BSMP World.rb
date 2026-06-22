@@ -30,6 +30,34 @@ module BSMP
 
     SELF_SWITCH_CHARS = "ABCD"
 
+    # --- shared world-state classification (live sync) ------------------------
+    # Which switches/variables are part of the shared world (vs peer-local), and
+    # whether an event page is host-owned world progression. Kept here next to the
+    # snapshot dump/load, which walks the same Config shared-id sets. self-switches
+    # are always shared, so they have no predicate.
+
+    def self.shared_switch?(id)
+      Config::SHARED_SWITCH_IDS.include?(id) or
+        Config::SHARED_SWITCH_RANGES.any? { |r| r.include?(id) }
+    end
+
+    def self.shared_variable?(id)
+      Config::SHARED_VARIABLE_IDS.include?(id) or
+        Config::SHARED_VARIABLE_RANGES.any? { |r| r.include?(id) }
+    end
+
+    # An event page is "host-owned world progression" (a guest must not run its
+    # autorun/parallel) when its activating condition hinges on a synced flag: any
+    # self-switch (all shared), or a shared switch/variable. Takes a page condition
+    # (RPG::Event::Page::Condition) so it's pure and unit-testable.
+    def self.world_owned_condition?(c)
+      return true if c.self_switch_valid
+      return true if c.switch1_valid and shared_switch?(c.switch1_id)
+      return true if c.switch2_valid and shared_switch?(c.switch2_id)
+      return true if c.variable_valid and shared_variable?(c.variable_id)
+      false
+    end
+
     # --- map ownership (per-map authority) ------------------------------------
     # True on the peer that the lobby host has authorised to own the CURRENT map. The
     # owner simulates mobs, streams MOB_SYNC, runs command_301 on touch, and acts as

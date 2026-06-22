@@ -57,7 +57,7 @@ module BSMP
         return [false, "minor #{peer[:minor]} not mutually accepted (ours #{Config::MINOR_VERSION})"]
       end
       if peer[:major] != Config::MAJOR_VERSION || peer[:minor] != Config::MINOR_VERSION
-        p "BSMP handshake: minor differs (peer #{peer[:major]}.#{peer[:minor]}, us #{Config::MAJOR_VERSION}.#{Config::MINOR_VERSION}) but mutually accepted"
+        BSMP.debug_log { "BSMP handshake: minor differs (peer #{peer[:major]}.#{peer[:minor]}, us #{Config::MAJOR_VERSION}.#{Config::MINOR_VERSION}) but mutually accepted" }
       end
       if BSMP.settings.check_game and peer[:game_title] != game_title
         return [false, "different game (peer '#{peer[:game_title]}' vs '#{game_title}')"]
@@ -248,7 +248,7 @@ module BSMP
         return
       end
       applied = World.load(@pending_world)
-      p "World snapshot #{applied ? 'applied' : 'skipped'} (#{@pending_world.bytesize} B)"
+      BSMP.debug_log { "World snapshot #{applied ? 'applied' : 'skipped'} (#{@pending_world.bytesize} B)" }
       @pending_world = nil
       @awaiting_world = false
     end
@@ -262,7 +262,7 @@ module BSMP
         return
       end
 
-      p "Entered lobby, result: #{result}, id: #{lobby_id}"
+      BSMP.debug_log { "Entered lobby, result: #{result}, id: #{lobby_id}" }
       @lobby_id = lobby_id
       @server_user_id = SteamAPI.get_lobby_owner(lobby_id)
 
@@ -278,7 +278,7 @@ module BSMP
 
     def handle_welcome(packet)
       @handshake_state = :accepted
-      p "Handshake accepted by host"
+      BSMP.debug_log { "Handshake accepted by host" }
       # Announce now if we're already in-game; otherwise ensure_announced retries
       # each frame until we load in (joined from the title).
       @handshake_state = :ready if update_player_data
@@ -312,7 +312,7 @@ module BSMP
 
     def on_lobby_join_requested(lobby_id, requestor_id, failure)
       return if failure
-      p "User #{requestor_id} requested to join to #{lobby_id}"
+      BSMP.debug_log { "User #{requestor_id} requested to join to #{lobby_id}" }
       join_lobby(lobby_id)
     end
 
@@ -326,7 +326,7 @@ module BSMP
       when Events::WORLD_SNAPSHOT
         return handle_world_snapshot(packet) # binary blob — don't log its data
       end
-      p "Client got packet from #{packet.from_id}, type=#{packet.type}, data=#{packet.data}" if BSMP.settings.debug
+      BSMP.debug_packet_log { "Client got packet from #{packet.from_id}, type=#{packet.type}, data=#{packet.data}" }
       Events.on_packet(packet)
     end
 
@@ -436,12 +436,12 @@ module BSMP
       peer = Handshake.parse(packet.data)
       ok, reason = Handshake.validate(peer)
       if not ok
-        p "Rejecting #{user_id}: #{reason}"
+        BSMP.debug_log { "Rejecting #{user_id}: #{reason}" }
         send_control(user_id, Events::HANDSHAKE_REJECT, reason)
         return
       end
       return if find_client(user_id) # duplicate HELLO, already onboarded
-      p "Accepting #{user_id}"
+      BSMP.debug_log { "Accepting #{user_id}" }
       send_control(user_id, Events::HANDSHAKE_WELCOME, "")
       send_world_snapshot(user_id)
       # Admit last: registers the client, announces the join to everyone and pushes
@@ -461,7 +461,7 @@ module BSMP
       blob = World.dump
       target = ServerClient.new(user_id, @channel_id)
       send_packet_to(target, BasicNetworkPacket.new(Events::WORLD_SNAPSHOT, @server_user_id, blob))
-      p "Sent world snapshot to #{user_id} (#{blob.bytesize} B raw)"
+      BSMP.debug_log { "Sent world snapshot to #{user_id} (#{blob.bytesize} B raw)" }
     end
 
     def send_joined_data_to_client(client)
@@ -512,7 +512,7 @@ module BSMP
 
     def on_lobby_created(result, lobby_id, failure)
       return p "Failed to create lobby" if failure
-      p "Created lobby, result: #{result}, id: #{lobby_id}"
+      BSMP.debug_log { "Created lobby, result: #{result}, id: #{lobby_id}" }
       @lobby_id = lobby_id
       @server_user_id = SteamAPI.get_lobby_owner(lobby_id)
       @running = true
@@ -527,13 +527,13 @@ module BSMP
 
     def on_lobby_chat_update(lobby_id, update_enum, user_id, failure)
       return if failure or not running?
-      p "User #{user_id} changed lobby #{lobby_id}: #{update_enum}"
+      BSMP.debug_log { "User #{user_id} changed lobby #{lobby_id}: #{update_enum}" }
 
       return if update_enum == 0
       if update_enum == Config::LOBBY_CHAT_UPDATE_JOINED
         # Admission is deferred to the handshake: the client is added only after a
         # valid HELLO (see handle_hello). Here we just note the lobby join.
-        p "User #{user_id} entered the lobby; awaiting handshake"
+        BSMP.debug_log { "User #{user_id} entered the lobby; awaiting handshake" }
       else
         client = find_client(user_id)
         return if not client
@@ -543,7 +543,7 @@ module BSMP
 
     def on_lobby_join_requested(lobby_id, requestor_id, failure)
       return if failure or not running?
-      p "User #{requestor_id} requested to join to #{lobby_id}. Closing lobby..."
+      BSMP.debug_log { "User #{requestor_id} requested to join to #{lobby_id}. Closing lobby..." }
       leave_lobby
     end
 
@@ -574,7 +574,7 @@ module BSMP
         Events.on_packet(packet)
         return
       end
-      p "Got packet from #{user_id}, type=#{packet.type}, data=#{packet.data}" if BSMP.settings.debug
+      BSMP.debug_packet_log { "Got packet from #{user_id}, type=#{packet.type}, data=#{packet.data}" }
       # Cache the latest mob snapshot from the map owner before relaying — used as the
       # initial state when ownership is reassigned (release / disconnect).
       BSMP::World.cache_mob_snapshot_from_packet(packet) if packet.type == Events::MOB_SYNC

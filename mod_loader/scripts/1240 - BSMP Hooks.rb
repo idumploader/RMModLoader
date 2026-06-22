@@ -64,7 +64,7 @@ class Spriteset_Map
     movers.each do |e|
       forming = e.instance_variable_get(:@forming) ? 1 : 0 rescue 0
       data << ";#{e.id},#{e.x},#{e.y},#{e.direction},#{e.bsmp_base_opacity},#{e.move_speed},#{e.transparent ? 1 : 0},#{forming}"
-      BSMP.log("bcast mob #{e.id} base_op=#{e.bsmp_base_opacity} op=#{e.opacity} tr=#{e.transparent}") if BSMP.settings.debug and (e.bsmp_base_opacity != 255 or e.transparent)
+      BSMP.debug_log { "bcast mob #{e.id} base_op=#{e.bsmp_base_opacity} op=#{e.opacity} tr=#{e.transparent}" } if e.bsmp_base_opacity != 255 or e.transparent
     end
     bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::MOB_SYNC, 0, data))
   end
@@ -404,7 +404,7 @@ class Game_Switches
     bsmp_orig_set(switch_id, value)
     return if $bsmp_applying_fact
     return if not bsmp_network_running?
-    return if not BSMP.shared_switch?(switch_id)
+    return if not BSMP::World.shared_switch?(switch_id)
     bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::SWITCH_CHANGED, 0, "#{switch_id};#{value ? 1 : 0}"))
   end
 end
@@ -415,7 +415,7 @@ class Game_Variables
     bsmp_orig_set(variable_id, value)
     return if $bsmp_applying_fact
     return if not bsmp_network_running?
-    return if not BSMP.shared_variable?(variable_id)
+    return if not BSMP::World.shared_variable?(variable_id)
     # Shared variables are assumed integer (story counters); extend with the World
     # value codec later if a shared var ever holds something else.
     bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::VARIABLE_CHANGED, 0, "#{variable_id};#{value.to_i}"))
@@ -428,9 +428,10 @@ class Game_SelfSwitches
     bsmp_orig_set(key, value)
     # Debug-only: fires on EVERY self-switch write — including the hundreds set while
     # APPLYING a world snapshot / live deltas (the guard below only stops re-broadcast,
-    # not this log). BSMP.log is file I/O, so logging each one stalls for seconds on a
-    # snapshot apply or a flag-heavy battle event. Gate it.
-    BSMP.log("set self_switch #{key.inspect}=#{value} applying=#{$bsmp_applying_fact} net=#{bsmp_network_running?}") if defined?(BSMP) and BSMP.settings.debug
+    # not this log). debug_log's block form keeps the message unbuilt unless debug is
+    # on, so a snapshot apply / flag-heavy battle event pays nothing here when off.
+    # defined?(BSMP) because this is a reopened core class that can fire pre-BSMP.
+    BSMP.debug_log { "set self_switch #{key.inspect}=#{value} applying=#{$bsmp_applying_fact} net=#{bsmp_network_running?}" } if defined?(BSMP)
     return if $bsmp_applying_fact
     return if not bsmp_network_running?
     bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::SELF_SWITCH_CHANGED, 0, "#{key[0]};#{key[1]};#{key[2]};#{value ? 1 : 0}"))

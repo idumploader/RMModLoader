@@ -28,7 +28,7 @@ class Game_Event < Game_Character
   # The page set is immutable, so memoize per event (recomputed on map reload).
   def bsmp_world_owned_event?
     return @bsmp_world_owned unless @bsmp_world_owned.nil?
-    @bsmp_world_owned = !@event.nil? && @event.pages.any? { |pg| BSMP.world_owned_condition?(pg.condition) }
+    @bsmp_world_owned = !@event.nil? && @event.pages.any? { |pg| BSMP::World.world_owned_condition?(pg.condition) }
   end
 
   # A non-owner guest skips running the map-owner's autorun/parallel pages. The map

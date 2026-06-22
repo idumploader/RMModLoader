@@ -148,7 +148,8 @@ module BSMP
       :lobby_type      => Config::LOBBY_ONLY_FRIENDS, # Steam ELobbyType used when hosting
       :max_players     => 10,                         # lobby capacity when hosting
       :roster_key      => ModLoader::Keyboard::TAB,   # held key (ModLoader VK) for the roster overlay
-      :debug           => false,                      # runtime diagnostic logging (BSMP.log)
+      :debug           => false,                      # runtime diagnostic logging (BSMP.log / debug_log)
+      :debug_packets   => false,                      # per-packet wire trace firehose (independent of :debug)
       # Co-op battle heartbeat watchdog: frames (~60/s) a mute guest waits without ANY
       # host battle state before assuming the host left its battle (missed BATTLE_END,
       # e.g. across an F12 reset) and bailing to the map. 0 disables it. Generous by
@@ -233,6 +234,20 @@ module BSMP
     p "[BSMP] #{msg}" if settings.debug
   end
 
+  # Lazy variant: the block is evaluated ONLY when debug is on, so a (frequently
+  # interpolated, sometimes bursty) message string is never built in the hot path
+  # when logging is off. Prefer over `log("...#{x}...") if settings.debug` — that
+  # form still builds the string every call because Ruby evaluates args first.
+  def self.debug_log
+    p "[BSMP] #{yield}" if settings.debug
+  end
+
+  # Per-packet wire firehose, behind its own flag so plain :debug stays readable.
+  # Fires on every packet (movement spam included) — keep block-form and opt-in.
+  def self.debug_packet_log
+    p "[BSMP] #{yield}" if settings.debug_packets
+  end
+
   # Wire framing for BasicNetworkPacket.data: a 1-byte flags header followed by the
   # payload, optionally zlib-compressed. Lives entirely in Ruby — the native packet
   # treats data as an opaque binary blob — so the C++ transport stays untouched and
@@ -304,30 +319,9 @@ module BSMP
     (info and info.name and not info.name.empty?) ? info.name : "?"
   end
 
-  # --- shared world-state classification (live sync) ------------------------
-  # self-switches are always shared, so they have no predicate.
-
-  def self.shared_switch?(id)
-    Config::SHARED_SWITCH_IDS.include?(id) or
-      Config::SHARED_SWITCH_RANGES.any? { |r| r.include?(id) }
-  end
-
-  def self.shared_variable?(id)
-    Config::SHARED_VARIABLE_IDS.include?(id) or
-      Config::SHARED_VARIABLE_RANGES.any? { |r| r.include?(id) }
-  end
-
-  # An event page is "host-owned world progression" (a guest must not run its
-  # autorun/parallel) when its activating condition hinges on a synced flag: any
-  # self-switch (all shared), or a shared switch/variable. Takes a page condition
-  # (RPG::Event::Page::Condition) so it's pure and unit-testable.
-  def self.world_owned_condition?(c)
-    return true if c.self_switch_valid
-    return true if c.switch1_valid and shared_switch?(c.switch1_id)
-    return true if c.switch2_valid and shared_switch?(c.switch2_id)
-    return true if c.variable_valid and shared_variable?(c.variable_id)
-    false
-  end
+  # shared world-state classification (shared_switch? / shared_variable? /
+  # world_owned_condition?) lives in BSMP::World — it sits next to the snapshot
+  # dump/load that walks the same Config shared-id sets.
 
   # --- network role ---------------------------------------------------------
 
@@ -377,12 +371,12 @@ module BSMP
     end
 
     def self.on_player_joined(packet)
-      p "Player #{packet.from_id} joined"
+      BSMP.debug_log { "Player #{packet.from_id} joined" }
       $bsmp_players.add(packet.from_id, packet.data)
     end
 
     def self.on_player_leaved(packet)
-      p "Player #{packet.from_id} leaved"
+      BSMP.debug_log { "Player #{packet.from_id} leaved" }
       $bsmp_players.delete(packet.from_id)
       # The host's registrar drops the leaver's map ownership (releasing the map for
       # reassignment). World owns this logic; Net just hands us the leaver id.
@@ -416,7 +410,7 @@ module BSMP
 
       # Debug-only: this can arrive in bursts (e.g. a flurry of Game_Player#refresh on a
       # battle/map transition), and console writes are slow enough to visibly stutter.
-      p "Player #{packet.from_id} changed sprite to #{character_name}/#{character_index}, nick to #{nickname}" if BSMP.settings.debug
+      BSMP.debug_log { "Player #{packet.from_id} changed sprite to #{character_name}/#{character_index}, nick to #{nickname}" }
       $bsmp_players.set_player_character(packet.from_id, character_name, character_index.to_i, nickname)
     end
 
@@ -429,7 +423,7 @@ module BSMP
       map_s, loc = packet.data.force_encoding("UTF-8").split(';', 2)
       map = map_s.to_i
 
-      p "Player #{packet.from_id} moved to map #{map} (#{loc})"
+      BSMP.debug_log { "Player #{packet.from_id} moved to map #{map} (#{loc})" }
       $bsmp_players.set_player_map(packet.from_id, map)
       $bsmp_players.set_player_location(packet.from_id, loc.to_s)
     end
@@ -520,7 +514,7 @@ module BSMP
       return if BSMP::World.map_owner_here?  # we're the source; ignore echo
       return if not $game_map
       map_id, event_id = packet.data.split(';')
-      BSMP.log("recv MOB_ERASE map=#{map_id} ev=#{event_id} (mymap=#{$game_map.map_id})") if BSMP.settings.debug
+      BSMP.debug_log { "recv MOB_ERASE map=#{map_id} ev=#{event_id} (mymap=#{$game_map.map_id})" }
       return if map_id.to_i != $game_map.map_id
       event = $game_map.events[event_id.to_i]
       event.erase if event
@@ -542,7 +536,7 @@ module BSMP
       map_id, event_id, ch, val = packet.data.split(';')
       # Debug-only: a world-snapshot apply / flag-heavy event sends these in bursts, and
       # BSMP.log is file I/O — logging each visibly stalls. (Pairs with the send-side gate.)
-      BSMP.log("recv self_switch [#{map_id},#{event_id},#{ch}]=#{val}") if BSMP.settings.debug
+      BSMP.debug_log { "recv self_switch [#{map_id},#{event_id},#{ch}]=#{val}" }
       apply_fact { $game_self_switches[[map_id.to_i, event_id.to_i, ch]] = (val.to_i != 0) }
     end
 

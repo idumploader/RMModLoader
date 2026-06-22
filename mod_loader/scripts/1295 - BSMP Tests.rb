@@ -204,17 +204,17 @@ module BSMPTests
       s_ranges.clear
       s_ids << 42
       s_ranges << (100..200)
-      expect("allowlist id is shared",      BSMP.shared_switch?(42))
-      expect("range id is shared",          BSMP.shared_switch?(150))
-      expect("range bounds inclusive",      BSMP.shared_switch?(100) && BSMP.shared_switch?(200))
-      expect("unlisted id not shared",      !BSMP.shared_switch?(43))
-      expect("out-of-range id not shared",  !BSMP.shared_switch?(201))
+      expect("allowlist id is shared",      BSMP::World.shared_switch?(42))
+      expect("range id is shared",          BSMP::World.shared_switch?(150))
+      expect("range bounds inclusive",      BSMP::World.shared_switch?(100) && BSMP::World.shared_switch?(200))
+      expect("unlisted id not shared",      !BSMP::World.shared_switch?(43))
+      expect("out-of-range id not shared",  !BSMP::World.shared_switch?(201))
 
       # world-owned page classification (drives guest-side cutscene suppression)
-      expect("self-switch page is world-owned",    BSMP.world_owned_condition?(cond(:self_switch_valid => true)))
-      expect("shared switch1 page is world-owned", BSMP.world_owned_condition?(cond(:switch1_valid => true, :switch1_id => 42)))
-      expect("local switch1 page not world-owned", !BSMP.world_owned_condition?(cond(:switch1_valid => true, :switch1_id => 43)))
-      expect("unconditional page not world-owned", !BSMP.world_owned_condition?(cond))
+      expect("self-switch page is world-owned",    BSMP::World.world_owned_condition?(cond(:self_switch_valid => true)))
+      expect("shared switch1 page is world-owned", BSMP::World.world_owned_condition?(cond(:switch1_valid => true, :switch1_id => 42)))
+      expect("local switch1 page not world-owned", !BSMP::World.world_owned_condition?(cond(:switch1_valid => true, :switch1_id => 43)))
+      expect("unconditional page not world-owned", !BSMP::World.world_owned_condition?(cond))
     ensure
       s_ids.replace(saved_ids)
       s_ranges.replace(saved_ranges)
