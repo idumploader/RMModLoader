@@ -201,10 +201,15 @@ class Game_Event < Game_Character
     end
   end
 
-  # Mute mobs events for non-owner (the owner runs battles, others join via BATTLE_START)
+  # Suppress collision (trigger=2) for symbol-encounter mobs on a non-owner map:
+  # the owner's mob runs the battle via BATTLE_REQUEST; a non-owner's local touch
+  # would start a parallel battle. Other event types (animated items with a move
+  # route, NPCs, etc.) still react normally — they're interactive world objects, not
+  # hostiles, so a non-owner should be able to pick them up / talk to them.
   alias bsmp_orig_trigger_in? trigger_in?
   def trigger_in?(triggers)
-    return bsmp_orig_trigger_in?(triggers) if BSMP::World.map_owner_here? or not bsmp_mover?
+    return bsmp_orig_trigger_in?(triggers) if BSMP::World.map_owner_here?
+    return bsmp_orig_trigger_in?(triggers) unless @symbol_encount || @bsmp_is_mob
     false
   end
 end
