@@ -848,6 +848,61 @@ class Game_Interpreter
   end
 end
 
+#==============================================================================
+# ■ Co-op battle scaling (step 6.6) — enemies scale with the player count so a
+# bigger combined party doesn't trivialise the fight. All multipliers come from
+# BSMP.battle_scale (lobby-size based, identical on every peer), so host and guests
+# agree on enemy stats. Solo / offline => factor 1.0, untouched.
+#==============================================================================
+
+class Game_Enemy < Game_Battler
+  # Max HP scales with the party (secondary "longer fight" lever). Applied via
+  # param_base so it's baked in before plus/rate/buff and before initialize sets
+  # @hp = mhp — the player count is the (stable) lobby size, so the enemy spawns at
+  # full scaled HP with no init race. Other params pass through unchanged here;
+  # speed is handled on the ATB gain below, not on the agi stat (no accuracy spill).
+  alias bsmp_scale_param_base param_base
+  def param_base(param_id)
+    base = bsmp_scale_param_base(param_id)
+    return base unless param_id == 0  # 0 = MHP
+    (base * BSMP.battle_scale(BSMP::Config::BATTLE_SCALE_HP_PER_PLAYER)).to_i
+  end
+end
+
+class Game_Battler
+  # Primary lever: enemies charge their ATB faster so a larger party doesn't out-act
+  # them. Scales the AP gain directly (linear, ATB-only) rather than the agi stat,
+  # so accuracy / evasion / turn-order math is untouched. Host-authoritative in
+  # practice — a guest's mute scene doesn't tick ATB; it mirrors enemy AP via
+  # BATTLE_SYNC — but gating on enemy? keeps it correct everywhere regardless.
+  if method_defined?(:ap_gain_point)
+    alias bsmp_scale_ap_gain_point ap_gain_point
+    def ap_gain_point
+      base = bsmp_scale_ap_gain_point
+      return base unless enemy?
+      base * BSMP.battle_scale(BSMP::Config::BATTLE_SCALE_SPEED_PER_PLAYER)
+    end
+  end
+end
+
+class Spriteset_Battle
+  # The combined co-op party can exceed the stock 4 actor sprites (Array.new(4)).
+  # Those sprites are dummies BS2 uses to target hit animations / damage pop-ups at
+  # actors, so a 5th+ ally would silently show none. Grow the pool to cover the whole
+  # party. Extra sprites get a nil battler when the party is smaller (harmless).
+  alias bsmp_balance_update_actors update_actors
+  def update_actors
+    members = $game_party.members
+    while @actor_sprites.size < members.size
+      @actor_sprites.push(Sprite_Battler.new(@viewport1))
+    end
+    @actor_sprites.each_with_index do |sprite, i|
+      sprite.battler = members[i]
+      sprite.update
+    end
+  end
+end
+
 end # if defined?(BSMP)
 
 end # not $imported["IDL-BSMP-Battle"]

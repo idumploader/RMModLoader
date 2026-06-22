@@ -155,6 +155,11 @@ module BSMP
       return @bsmp_players[player_id]
     end
 
+    # Number of OTHER players currently known (self is never in here).
+    def size
+      @bsmp_players.size
+    end
+
     def move_player_real(player_id, x, y)
       return if not @bsmp_players.key?(player_id)
       @bsmp_players[player_id].move_to_real(x, y)

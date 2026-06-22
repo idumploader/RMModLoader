@@ -101,6 +101,17 @@ module BSMP
     PERSONAL_COMMON_EVENT_IDS = [2]
     SHARED_COMMON_EVENT_IDS   = [12]
 
+    # --- Co-op battle scaling (step 6.6) ---
+    # Enemies scale with the number of PLAYERS in the fight (1 = no scaling). co-op
+    # battles are global, so "players" = lobby size; the value is stable for the whole
+    # fight and identical on every peer (synced roster), so enemy stats agree.
+    # factor = 1 + (players - 1) * rate. The ATB action economy is the main axis — a
+    # bigger party simply gets more turns — so enemy SPEED (ATB charge rate) is the
+    # primary lever; HP is a secondary "longer fight" knob. Set a rate to 0 to disable
+    # that lever. Tune freely in playtest; both are pure multipliers.
+    BATTLE_SCALE_SPEED_PER_PLAYER = 0.5  # +50% enemy ATB charge per extra player
+    BATTLE_SCALE_HP_PER_PLAYER    = 0.25 # +25% enemy max HP per extra player
+
     # --- Host-driven mobs (step 4) ---
     # The host re-broadcasts the positions of all moving events on its current map
     # every this many frames; guests on that map glide their copies to match. Small
@@ -271,6 +282,22 @@ module BSMP
   # local_ce? — mirrored CEs also run loot-local on each peer. Drives MIRROR_CE.
   def self.shared_ce?(id)
     Config::SHARED_COMMON_EVENT_IDS.include?(id)
+  end
+
+  # Number of players in a co-op battle (6.6). co-op battles are global, so this is the
+  # lobby size; 1 when solo/offline (no scaling). Stable for the whole fight and equal
+  # on every peer (synced roster), so enemy scaling agrees across host and guests.
+  def self.battle_player_count
+    return 1 unless bsmp_network_running?
+    return 1 if $bsmp_players.nil?
+    1 + $bsmp_players.size
+  end
+
+  # Enemy stat multiplier: +`rate` per EXTRA player. 1.0 when solo or rate <= 0.
+  def self.battle_scale(rate)
+    n = battle_player_count
+    return 1.0 if n <= 1 or rate <= 0
+    1.0 + (n - 1) * rate
   end
 
   # Wire framing for BasicNetworkPacket.data: a 1-byte flags header followed by the
