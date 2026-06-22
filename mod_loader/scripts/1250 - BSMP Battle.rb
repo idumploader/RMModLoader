@@ -181,7 +181,10 @@ module BSMP
         $game_troop.members.each_with_index do |e, i|
           turns = e.instance_variable_get(:@state_turns) || {}
           st = e.states.map { |s| "#{s.id}:#{turns[s.id] || 0}" }.join('.')
-          parts << "#{i},#{e.hp},#{e.mp},#{e.ap},#{st}"
+          # Field 5 = live enemy_id, so a mid-battle Enemy Transform (troop command
+          # 336, phase-2 bosses) reaches the mute guest — it doesn't run troop events.
+          # st uses only '.'/':' so it never eats the comma before enemy_id.
+          parts << "#{i},#{e.hp},#{e.mp},#{e.ap},#{st},#{e.enemy_id}"
         end
         bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::BATTLE_SYNC, 0, parts.join(';')))
       end
@@ -325,6 +328,13 @@ module BSMP
         next if f.size < 4
         e = $game_troop.members[f[0].to_i]
         next if e.nil?
+        # Mid-battle Enemy Transform (phase-2 boss): the host's enemy_id changed but the
+        # troop command that did it never ran here. Mirror it so the battler graphic
+        # (Sprite_Battler#update_bitmap watches battler_name), name and mhp follow. Do it
+        # BEFORE writing hp/states below, since transform's refresh re-derives them.
+        if f[5] and f[5].to_i > 0 and e.respond_to?(:transform) and e.enemy_id != f[5].to_i
+          e.transform(f[5].to_i)
+        end
         was_alive = e.alive?
         # States straight from the host (icons + dead?). Set the ivars directly: this is
         # a pure visual mirror, so we don't want add_state/remove_state side effects, and
@@ -347,6 +357,21 @@ module BSMP
         # Mirror the death fade when the enemy crosses into dead (states alone don't fade
         # the sprite). Catches every death source, synced to when the guest sees it die.
         e.perform_collapse_effect if was_alive and e.dead?
+        # Drive the big MOG boss HP bar (script 293). It reads $game_system.boss_hp_meter[],
+        # refreshed by check_boss_hp_after — an item_apply hook that NEVER fires on the mute
+        # guest (we set @hp directly). So the bar froze at the start value. Replicate exactly
+        # what check_boss_hp_after writes, here, for the boss enemy we just synced (covers a
+        # transformed boss too: name/mhp/material id follow the new enemy_id).
+        if e.respond_to?(:boss_hp_meter) and e.boss_hp_meter and $game_system.boss_hp_meter
+          bm = $game_system.boss_hp_meter
+          bm[2]  = true
+          bm[3]  = e.name
+          bm[4]  = e.hp
+          bm[5]  = e.mhp
+          bm[7]  = (e.level rescue nil)
+          bm[9]  = e.boss_hp_number
+          bm[11] = e.boss_hp_meter_id
+        end
       end
       # BS2's enemy gauges (177: HP/MP/TP and the AP bar) are bitmap-drawn ON DEMAND via
       # refresh_status / refresh_ap, not per frame. Mark the status dirty; the mute scene
