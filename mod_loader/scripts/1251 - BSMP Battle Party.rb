@@ -56,12 +56,16 @@ class Game_BSMPProxyActor < Game_Actor
     @bsmp_params ? @bsmp_params[param_id].to_i : super
   end
 
-  # 6.4: the proxy IS inputable on the host so the ATB enters its command phase — but
-  # instead of opening a local window, the host requests the command from the owning
-  # guest (see 1252). NOT auto_battle? (that would make the host auto-pick its action and
-  # never ask). Irrelevant on a guest (its mute scene asks no one for input).
+  attr_accessor :bsmp_auto_battle  # owner's real auto_battle? (AI ally vs player actor)
+
+  # 6.4: a PLAYER's proxy is inputable on the host so the ATB enters its command phase
+  # and the host requests the command from the owning guest (see 1252). But an AI ally
+  # (auto_battle in the original game — a story companion the player never commands)
+  # must keep auto-battling: mirror the owner's real flag (from the snapshot) so the
+  # host auto-resolves its action via the AI instead of asking a player who never
+  # drives it. Irrelevant on a guest (its mute scene asks no one for input).
   def auto_battle?
-    false
+    @bsmp_auto_battle ? true : false
   end
 
   # Rewards belong to the owning guest (routed back in 6.5), not this throwaway proxy —
@@ -131,7 +135,8 @@ module BSMP
       [actor.id, actor.name, actor.character_name, actor.character_index,
        actor.face_name, actor.face_index,
        p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7],
-       actor.hp, actor.mp, actor.tp, actor.ap, states].join(';')
+       actor.hp, actor.mp, actor.tp, actor.ap, states,
+       (actor.auto_battle? ? 1 : 0)].join(';')  # field 19: AI ally vs player actor
     end
 
     # Build (or refresh) a proxy from a peer's snapshot. Keyed by (owner, actor_id) so a
@@ -140,7 +145,11 @@ module BSMP
     # is first built — after that the authority owns them (the host's running battle, or
     # a guest's BATTLE_PARTY_SYNC), so a periodic re-send must not clobber them.
     def self.apply_snapshot(owner_id, data)
-      f = data.to_s.force_encoding("UTF-8").split(';')
+      # split(';', -1): KEEP trailing empty fields. A stateless actor's snapshot ends
+      # with an empty states field ("...;ap;"); a plain split(';') drops it, leaving 18
+      # fields, so the actor (e.g. a freshly-added temp ally with no buffs) was silently
+      # dropped and never built into a proxy — the root of "the ally never appears".
+      f = data.to_s.force_encoding("UTF-8").split(';', -1)
       return if f.size < 19
       actor_id = f[0].to_i
       proxy = $bsmp_battle_proxies.find { |a| a.bsmp_owner == owner_id and a.id == actor_id }
@@ -154,6 +163,7 @@ module BSMP
       proxy.instance_variable_set(:@name, f[1])
       proxy.set_graphic(f[2], f[3].to_i, f[4], f[5].to_i)
       proxy.bsmp_params = f[6, 8].map { |s| s.to_i }
+      proxy.bsmp_auto_battle = (f[19].to_i != 0) if f[19]  # AI ally auto-acts on the host
       proxy.instance_variable_set(:@action_input_index, 0) # never nil (input/next_command)
       if fresh
         proxy.on_battle_start

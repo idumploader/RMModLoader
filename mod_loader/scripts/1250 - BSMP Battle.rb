@@ -72,6 +72,11 @@ module BSMP
       # death/loss outcome; consumed on the map by bsmp_consume_mirror_ce.
       attr_accessor :pending_mirror_ce
 
+      # Host only: [requester_id, [actor_snapshot, ...]] from a BATTLE_REQUEST — the
+      # requester's full battle party (incl event-added temp allies not in the troop),
+      # built into proxies at the host's Scene_Battle#start so they fight from turn one.
+      attr_accessor :pending_roster
+
       def begin_client_session
         @active = true
         @ending = false
@@ -456,8 +461,12 @@ module BSMP
       return if BSMP::Battle.host_session?     # a co-op battle is already starting/live
       # (e.g. several gated peers fired command_301 at once — the host's own start wins,
       #  the redundant requests are dropped; everyone joins via the one BATTLE_START)
-      troop_id, can_escape, can_lose = packet.data.split(';').map { |s| s.to_i }
+      header, *roster = packet.data.to_s.split("\n")
+      troop_id, can_escape, can_lose = header.split(';').map { |s| s.to_i }
       return unless $data_troops[troop_id]
+      # Remember the requester's full party (snapshots) so Scene_Battle#start can build
+      # proxies of its event-added temp allies — see the start hook below.
+      BSMP::Battle.pending_roster = [packet.from_id, roster]
       BattleManager.setup(troop_id, can_escape != 0, can_lose != 0)
       $game_player.make_encounter_count
       SceneManager.call(Scene_Battle)
@@ -481,6 +490,18 @@ class Scene_Battle
     bsmp_battle_scene_start
     if BSMP.host? and bsmp_network_running?
       BSMP::Battle.host_ensure_battle($game_troop.troop.id, BattleManager.can_escape?)
+      # Build the requester's party proxies now — the session is live (host_ensure_battle
+      # set it) and the start-of-battle proxy clear (1251) has run, so these survive and
+      # are in the combined party from turn one. Covers temp allies (e.g. a story
+      # companion ChangePartyMember'd in by the requester's event) the host can't learn
+      # about from the troop_id alone. apply_snapshot is keyed by (owner, actor_id), so a
+      # later live BATTLE_ACTOR just refreshes these instead of duplicating.
+      r = BSMP::Battle.pending_roster
+      if r
+        owner, snaps = r
+        snaps.each { |s| BSMP::BattleParty.apply_snapshot(owner, s) }
+        BSMP::Battle.pending_roster = nil
+      end
     end
   end
 
@@ -826,10 +847,19 @@ class Game_Interpreter
     return unless $data_troops[troop_id]
     can_escape = @params[2] ? 1 : 0
     can_lose   = @params[3] ? 1 : 0
-    # Ask the host. The host runs the real Scene_Battle; its BattleManager.setup /
-    # Scene_Battle#start hooks broadcast BATTLE_START so we (and everyone else) join
-    # as mute clients.
-    bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::BATTLE_REQUEST, 0, "#{troop_id};#{can_escape};#{can_lose}"))
+    # Ship our FULL battle party with the request so the host builds proxies of every
+    # actor — including event-added temporary allies (a story companion added via
+    # ChangePartyMember right before this battle) that are in neither the troop nor our
+    # persistent party. The host can't learn about them otherwise: it only gets the
+    # troop_id, and our live BATTLE_ACTOR re-sends don't arrive until we've already
+    # joined the running fight. Snapshots are \n-joined after the troop header (their
+    # own fields are ';'-joined). The host builds them at Scene_Battle#start (1250), so
+    # the ally fights from turn one instead of hanging as a ghost nobody drives.
+    roster = $game_party.battle_members.
+      reject { |a| a.is_a?(Game_BSMPProxyActor) }.
+      map { |a| BSMP::BattleParty.snapshot(a) }
+    data = "#{troop_id};#{can_escape};#{can_lose}\n#{roster.join("\n")}"
+    bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::BATTLE_REQUEST, 0, data))
     # Wait for the host's BATTLE_START to arrive. The host may take a frame or two
     # (the packet is read on the next Scene_Base#update), so yield until pending.
     BSMP::Battle.pending = nil
