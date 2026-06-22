@@ -729,9 +729,14 @@ class Scene_Map
     elsif result == 1 # abort
 
     elsif result == 2 # defeat
-        # TODO: maybe sync host's interpreter after battle?
-        # For now just call "death" common event
-        $game_map.interpreter.setup($data_common_events[12].list) if $game_map.interpreter
+        # TODO: replace this hardcode with the host-driven SHARED_COMMON_EVENT mirror
+        # (the host's IfLose isn't always death — see Map019/Map010). For now run the
+        # "death" common event locally. Mark it @bsmp_local_ce so its Estus refill
+        # (ChangeItems) stays on THIS peer instead of dup-broadcasting to everyone.
+        if $game_map.interpreter
+          $game_map.interpreter.setup($data_common_events[12].list)
+          $game_map.interpreter.instance_variable_set(:@bsmp_local_ce, true)
+        end
     end
   end
 

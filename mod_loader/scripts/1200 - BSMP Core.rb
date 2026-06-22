@@ -90,6 +90,17 @@ module BSMP
     SHARED_VARIABLE_RANGES = []
     SHARED_VARIABLE_IDS    = []
 
+    # --- Co-op "local" common events (step 6.5) ---
+    # Common events whose item/gold gains must NOT be instanced to other peers via
+    # the Loot broadcast (1246) — they're personal Souls-style operations (Estus
+    # refill on rest/death). Both sets run "local" (ChangeItems stays on the running
+    # peer); the difference is who runs them:
+    #   PERSONAL = only the acting peer runs it (CE 2 = bonfire rest).
+    #   SHARED   = additionally mirrored so EVERY peer runs its own (CE 12 = death).
+    # The mirror itself is wired separately; this list only governs loot locality.
+    PERSONAL_COMMON_EVENT_IDS = [2]
+    SHARED_COMMON_EVENT_IDS   = [12]
+
     # --- Host-driven mobs (step 4) ---
     # The host re-broadcasts the positions of all moving events on its current map
     # every this many frames; guests on that map glide their copies to match. Small
@@ -246,6 +257,14 @@ module BSMP
   # Fires on every packet (movement spam included) — keep block-form and opt-in.
   def self.debug_packet_log
     p "[BSMP] #{yield}" if settings.debug_packets
+  end
+
+  # A common event whose body runs "local-only": its item/gold gains must not be
+  # instanced to other peers (Souls Estus refill on bonfire rest / death). True for
+  # both the personal and shared/mirrored sets. See [[bsmp Loot]] (1246).
+  def self.local_ce?(id)
+    Config::PERSONAL_COMMON_EVENT_IDS.include?(id) or
+      Config::SHARED_COMMON_EVENT_IDS.include?(id)
   end
 
   # Wire framing for BasicNetworkPacket.data: a 1-byte flags header followed by the

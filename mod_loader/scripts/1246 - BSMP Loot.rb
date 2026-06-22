@@ -10,6 +10,12 @@
 # gains (positive amounts) are instanced, not removals. Loads after the game's
 # Game_Interpreter (and mods that reopen these commands), so aliases wrap the
 # final versions.
+#
+# Exception: some common events grant items as a PERSONAL, repeatable action that
+# happens to use these same commands — the Estus/flask refill on bonfire rest and
+# on death. Those must NOT instance to others (it dups flasks). They're tagged via
+# Config::PERSONAL/SHARED_COMMON_EVENT_IDS; the interpreter running such a CE (and
+# any CE it calls) carries @bsmp_local_ce, and bsmp_broadcast_loot skips while set.
 #==============================================================================
 
 $imported ||= {}
@@ -44,10 +50,39 @@ class Game_Interpreter
     bsmp_broadcast_loot(2, @params[0], operate_value(@params[1], @params[2], @params[3]))
   end
 
+  # A fresh command list starts non-local; command_117 (or an explicit caller)
+  # re-marks it. Clearing here stops the flag leaking onto the next event a reused
+  # interpreter (e.g. $game_map.interpreter) runs after a local CE finishes.
+  alias bsmp_orig_setup_loot setup
+  def setup(*args)
+    bsmp_orig_setup_loot(*args)
+    @bsmp_local_ce = false
+  end
+
+  # Full override of BS2's command_117 (39 - Game_Interpreter): it runs the called
+  # common event on a SYNCHRONOUS child (child.run) and keeps `child` in a local
+  # var an alias can't reach. We replicate it verbatim and tag the child
+  # @bsmp_local_ce when the CE is a "local" one (Config::*_COMMON_EVENT_IDS) or when
+  # WE already are, so nested CEs inherit it. The tag is per-interpreter (NOT a
+  # global) so it survives the CE's ShowText/wait Fiber.yields without leaking onto
+  # other interpreters. Item/gold gains inside a local CE then stay per-peer (Souls
+  # Estus refill on bonfire rest / death) instead of dup-instancing via
+  # bsmp_broadcast_loot below.
+  def command_117
+    common_event = $data_common_events[@params[0]]
+    if common_event
+      child = Game_Interpreter.new(@depth + 1)
+      child.setup(common_event.list, same_map? ? @event_id : 0)
+      child.instance_variable_set(:@bsmp_local_ce, @bsmp_local_ce || BSMP.local_ce?(@params[0]))
+      child.run
+    end
+  end
+
   # type: 0=item 1=weapon 2=armor 3=gold. Only positive (gains) are instanced; not
   # while applying a received loot fact (anti-echo) and only when networked.
   def bsmp_broadcast_loot(type, id, amount)
     return if amount <= 0
+    return if @bsmp_local_ce  # inside a personal/death CE: items stay on this peer
     return if $bsmp_applying_loot or not bsmp_network_running?
     bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::LOOT_GAIN, 0, "#{type};#{id};#{amount}"))
   end
