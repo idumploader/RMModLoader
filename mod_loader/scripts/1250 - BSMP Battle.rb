@@ -605,14 +605,15 @@ module BattleManager
 
     # Host-authoritative victory rewards. Stock gain_gold / gain_drop_items call
     # rand via $game_troop (gold_total / make_drop_items) — running that on both
-    # host and mute client would diverge. So the host applies them stock-locally AND
-    # broadcasts each as a LOOT_GAIN packet; the client's $game_troop.gold_total /
-    # make_drop_items are overridden to 0 / [] (see Game_Troop below), so the mute
-    # client's own process_victory rolls no rand and adds nothing locally — the
-    # rewards arrive via on_loot_gain (existing path, with the BS2 popup from script
-    # 134 fired for free, since on_loot_gain runs the command_12X chain).
+    # host and mute client would diverge. The host applies them stock-locally AND
+    # broadcasts each as a LOOT_GAIN packet; a non-host skips the local apply
+    # entirely (process_victory still calls these on the mute side, but client_session
+    # is already closed by then, so we can't gate on it — we gate on host? instead).
+    # Rewards reach the mute peer via on_loot_gain -> command_12X, which also fires
+    # the BS2 item popup (script 134) for free.
     alias bsmp_battle_gain_gold gain_gold
     def gain_gold
+      return unless BSMP.host? or not bsmp_network_running?
       amount = $game_troop.gold_total
       $game_party.gain_gold(amount)
       if amount > 0
@@ -625,6 +626,7 @@ module BattleManager
 
     alias bsmp_battle_gain_drop_items gain_drop_items
     def gain_drop_items
+      return unless BSMP.host? or not bsmp_network_running?
       items = $game_troop.make_drop_items
       items.each do |item|
         $game_party.gain_item(item, 1)
@@ -809,30 +811,6 @@ class Game_Interpreter
     $game_player.make_encounter_count
     SceneManager.call(Scene_Battle)
     Fiber.yield
-  end
-end
-
-#==============================================================================
-# ▼ Game_Troop — mute-client suppression of the local drop / gold roll
-#------------------------------------------------------------------------------
-# process_victory runs locally on a mute client too (via client_battle_return), and
-# stock gain_gold / gain_drop_items would rand a different set than the host. The
-# host broadcasts the authoritative rewards via LOOT_GAIN; on a mute client we
-# short-circuit the rand entirely here, so its process_victory adds nothing on its
-# own. The LOOT_GAIN packets arrive separately and apply through the existing
-# on_loot_gain -> command_12X chain (with the BS2 item popup from script 134).
-#==============================================================================
-class Game_Troop
-  alias bsmp_battle_troop_gold_total gold_total
-  def gold_total
-    return 0 if BSMP::Battle.client_session?
-    bsmp_battle_troop_gold_total
-  end
-
-  alias bsmp_battle_troop_make_drop_items make_drop_items
-  def make_drop_items
-    return [] if BSMP::Battle.client_session?
-    bsmp_battle_troop_make_drop_items
   end
 end
 
