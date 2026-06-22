@@ -452,7 +452,10 @@ module BSMP
     def self.on_battle_request(packet)
       return unless BSMP.host?
       return unless bsmp_network_running?
-      return if $game_party.in_battle  # already in one
+      return if $game_party.in_battle          # already in one
+      return if BSMP::Battle.host_session?     # a co-op battle is already starting/live
+      # (e.g. several gated peers fired command_301 at once — the host's own start wins,
+      #  the redundant requests are dropped; everyone joins via the one BATTLE_START)
       troop_id, can_escape, can_lose = packet.data.split(';').map { |s| s.to_i }
       return unless $data_troops[troop_id]
       BattleManager.setup(troop_id, can_escape != 0, can_lose != 0)

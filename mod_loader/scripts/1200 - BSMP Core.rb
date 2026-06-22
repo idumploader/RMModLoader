@@ -112,6 +112,24 @@ module BSMP
     BATTLE_SCALE_SPEED_PER_PLAYER = 0.5  # +50% enemy ATB charge per extra player
     BATTLE_SCALE_HP_PER_PLAYER    = 0.25 # +25% enemy max HP per extra player
 
+    # --- Co-op consensus gates (step 6.7) ---
+    # Map events everyone must reach & confirm before they fire (boss fog, NG+ stone),
+    # auto-wrapped WITHOUT editing the map. { map_id => [entry, ...] } where an entry is
+    # a bare event_id, OR an ARRAY of event_ids that share ONE gate (e.g. several tiles
+    # of the same fog wall — confirming any tile counts for all). Only PLAYER-TRIGGERED
+    # pages gate (action / touch); autorun & parallel pages are never gated. When all
+    # players have confirmed, every peer resumes the event body; a battle inside is run
+    # by the host (others join via BATTLE_START). NOTE the gate fires at the START of the
+    # event (on interact). For a fog with a "pass? yes/no" prompt where the gate should
+    # come AFTER "yes", hand-place `bsmp_ready_gate("id")` in that branch instead.
+    READY_GATE_EVENTS = {
+      # 123 => [4, 7],      # map 123: events 4 and 7 are separate gates
+      # 181 => [[4, 5, 6]], # map 181: events 4,5,6 are ONE fog wall -> one shared gate
+      181 => [[4, 5, 6]],   # Scarlet fog wall (3 tiles, shared gate)
+      10 => [11],           # Boss fog
+      54 => [[32, 33, 34]]  # Boss fog
+    }
+
     # --- Host-driven mobs (step 4) ---
     # The host re-broadcasts the positions of all moving events on its current map
     # every this many frames; guests on that map glide their copies to match. Small
@@ -758,6 +776,15 @@ module BSMP
     # cutscene driven by switches, not a death CE) broadcasts nothing, so a guest no
     # longer wrongly dies on it. The mirrored run is loot-local (see 1246).
     MIRROR_CE             = 44
+
+    # Consensus gate (step 6.7). A map event (boss fog, NG+ stone, ...) calls
+    # bsmp_ready_gate: the acting player parks until EVERY player has reached and
+    # confirmed the same gate. READY_GATE peer->host = "I'm ready for gate <id>";
+    # READY_GATE_CANCEL peer->host = "I backed out"; READY_GATE_SYNC host->all =
+    # "<id>;count;need;done" — the host is the single tally authority.
+    READY_GATE            = 45
+    READY_GATE_CANCEL     = 46
+    READY_GATE_SYNC       = 47
 
     HANDLERS = {
       PLAYER_JOINED            => method(:on_player_joined),
