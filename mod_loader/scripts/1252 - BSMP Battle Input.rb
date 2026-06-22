@@ -17,17 +17,20 @@
 #    funnel through Scene_Battle#next_command (116:280).
 #
 # 6.4.0: host request/park/inject/resume/timeout plumbing.
-# 6.4.1 (this revision): the guest drives the REAL command UI. On a request it opens its
-#   own actor-command window (reusing the game's attack/skill/guard/item + target windows)
-#   on its real actor; the single next_command funnel is intercepted to serialize the
-#   chosen action onto the wire instead of advancing a (non-running) local turn.
+# 6.4.1: the guest drives the REAL command UI. On a request it opens its own actor-command
+#   window (reusing the game's attack/skill/guard/item + target windows) on its real actor;
+#   the single next_command funnel is intercepted to serialize the chosen action onto the
+#   wire instead of advancing a (non-running) local turn.
+# 6.4.2 (this revision): the guest sees an on-screen turn timer (reusing BSMP::Progress_
+#   Window) counting down the host's input budget (timeout_frames). On expiry the host has
+#   already auto-resolved, so the guest just closes its command UI.
 #
 # Loads after BSMP battle (1250) and battle party (1251).
 #==============================================================================
 
 $imported ||= {}
 if not $imported["IDL-BSMP-BattleInput"]
-$imported["IDL-BSMP-BattleInput"] = "1.1"
+$imported["IDL-BSMP-BattleInput"] = "1.2"
 
 if defined?(BSMP)
 
@@ -50,6 +53,8 @@ module BSMP
         @advance          = false # host: a reply/fallback is ready; resume on the next tick
         @escape_requested = false # host: the reply was "flee" -> run command_escape, not an action
         @guest_actor      = nil   # guest: the real actor we're picking a command for
+        @guest_elapsed    = 0     # guest: frames since our turn timer started (6.4.2)
+        dispose_guest_timer       # guest: drop any leftover timer window
       end
 
       # --- host side ----------------------------------------------------------
@@ -208,11 +213,47 @@ module BSMP
       end
 
       def guest_begin(actor)
-        @guest_actor = actor
+        @guest_actor   = actor
+        @guest_elapsed = 0
       end
 
       def guest_end
         @guest_actor = nil
+        dispose_guest_timer
+      end
+
+      # On-screen turn timer (6.4.2). Advanced once per frame from the mute
+      # Scene_Battle#update while we're answering a request; the bar shows how much
+      # of the host's input budget (timeout_frames) is left. When it runs out the
+      # host has ALREADY auto-resolved our turn (its own timeout fired first, ours
+      # starts a network hop later), so we just close our command UI — no send.
+      def guest_tick(scene)
+        return unless guest_active?
+        @guest_elapsed += 1
+        total = timeout_frames
+        ensure_guest_timer
+        if @guest_elapsed % 6 == 0 or @guest_elapsed >= total  # throttle the redraw
+          left = total - @guest_elapsed
+          @guest_timer.progress = left > 0 ? left.to_f / total : 0.0
+          @guest_timer.update
+        end
+        if @guest_elapsed >= total
+          guest_end
+          scene.bsmp_guest_finish_input
+        end
+      end
+
+      def ensure_guest_timer
+        return if @guest_timer and not @guest_timer.disposed?
+        @guest_timer = BSMP::Progress_Window.new
+        @guest_timer.text     = "Your turn"
+        @guest_timer.progress = 1.0
+        @guest_timer.update
+      end
+
+      def dispose_guest_timer
+        @guest_timer.dispose if @guest_timer and not @guest_timer.disposed?
+        @guest_timer = nil
       end
 
       # Serialize the actor's chosen action (built by the reused command UI) into the wire
@@ -326,7 +367,19 @@ class Scene_Battle
   alias bsmp_input_scene_update update
   def update
     bsmp_input_scene_update
-    BSMP::BattleInput.host_tick(self) if BSMP::Battle.host_session?
+    if BSMP::Battle.host_session?
+      BSMP::BattleInput.host_tick(self)
+    elsif BSMP::BattleInput.guest_active?
+      BSMP::BattleInput.guest_tick(self)  # advance the guest's on-screen turn timer (6.4.2)
+    end
+  end
+
+  # Drop the guest turn-timer window if the battle tears down mid-input (host
+  # disconnect, F12 unwind) so it can't leak onto the map.
+  alias bsmp_input_scene_terminate terminate
+  def terminate
+    BSMP::BattleInput.dispose_guest_timer
+    bsmp_input_scene_terminate
   end
 
   # --- guest remote-input (6.4.1) -----------------------------------------
