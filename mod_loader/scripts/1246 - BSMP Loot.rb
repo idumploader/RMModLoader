@@ -74,6 +74,14 @@ class Game_Interpreter
       child = Game_Interpreter.new(@depth + 1)
       child.setup(common_event.list, same_map? ? @event_id : 0)
       child.instance_variable_set(:@bsmp_local_ce, @bsmp_local_ce || BSMP.local_ce?(@params[0]))
+      # Co-op death/loss mirror (step 6.5): when the battle authority's real IfLose
+      # calls a SHARED common event (death), tell every other peer to run the same
+      # one. Gated on !@bsmp_local_ce so a peer REPLAYING a received mirror (its run
+      # is loot-local) can't re-broadcast and loop. A non-shared loss broadcasts
+      # nothing, so guests no longer wrongly die on scripted cutscene losses.
+      if BSMP.shared_ce?(@params[0]) and not @bsmp_local_ce and bsmp_network_running?
+        bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::MIRROR_CE, 0, @params[0].to_s))
+      end
       child.run
     end
   end

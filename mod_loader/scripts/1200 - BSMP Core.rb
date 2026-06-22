@@ -267,6 +267,12 @@ module BSMP
       Config::SHARED_COMMON_EVENT_IDS.include?(id)
   end
 
+  # A common event mirrored to every peer on a co-op battle loss (death). A subset of
+  # local_ce? — mirrored CEs also run loot-local on each peer. Drives MIRROR_CE.
+  def self.shared_ce?(id)
+    Config::SHARED_COMMON_EVENT_IDS.include?(id)
+  end
+
   # Wire framing for BasicNetworkPacket.data: a 1-byte flags header followed by the
   # payload, optionally zlib-compressed. Lives entirely in Ruby — the native packet
   # treats data as an opaque binary blob — so the C++ transport stays untouched and
@@ -716,6 +722,15 @@ module BSMP
     # the host as the single battle authority even for battles triggered on a map
     # the host isn't standing on.
     BATTLE_REQUEST        = 43
+
+    # Co-op death / scripted-loss mirror (step 6.5). The battle authority runs the
+    # real event IfLose branch; when that branch calls a "shared" common event
+    # (Config::SHARED_COMMON_EVENT_IDS — e.g. CE 12 = death), it broadcasts MIRROR_CE
+    # so every other peer runs the SAME common event locally (everyone dies / sees
+    # the same outcome). data = "common_event_id". A non-shared loss (a scripted
+    # cutscene driven by switches, not a death CE) broadcasts nothing, so a guest no
+    # longer wrongly dies on it. The mirrored run is loot-local (see 1246).
+    MIRROR_CE             = 44
 
     HANDLERS = {
       PLAYER_JOINED            => method(:on_player_joined),

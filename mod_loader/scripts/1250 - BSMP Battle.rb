@@ -45,6 +45,7 @@ module BSMP
     @host_active = false  # are WE the host running a co-op battle (so we stream state)?
     @sync_tick   = 0      # frame counter for throttling the host's BATTLE_SYNC
     @starve      = 0      # guest frames since the last host state update (heartbeat watchdog)
+    @pending_mirror_ce = nil # a received MIRROR_CE id to run on the map (death/loss outcome)
 
     class << self
       # True on a guest whose current battle is the host's (so its scene is mute).
@@ -66,6 +67,10 @@ module BSMP
       # Battle result. Set when battle ended
       # -1 - unknown battle result
       attr_accessor :result
+
+      # A common-event id the battle authority mirrored to us (MIRROR_CE) for the
+      # death/loss outcome; consumed on the map by bsmp_consume_mirror_ce.
+      attr_accessor :pending_mirror_ce
 
       def begin_client_session
         @active = true
@@ -278,6 +283,17 @@ module BSMP
       BSMP::Battle.request_end(result) if BSMP::Battle.client_session?
     end
 
+    # Co-op death/loss mirror (step 6.5). The battle authority's real IfLose called a
+    # shared common event (death); run the SAME one here so the whole party shares the
+    # outcome. Deferred to the map (bsmp_consume_mirror_ce) so we don't setup the map
+    # interpreter mid scene-transition. The id is validated against the whitelist so a
+    # peer can't drive us into an arbitrary common event.
+    def self.on_mirror_ce(packet)
+      id = packet.data.to_i
+      return unless BSMP.shared_ce?(id)
+      BSMP::Battle.pending_mirror_ce = id
+    end
+
     # Host's troop-state broadcast: mirror enemy HP/MP/ATB onto our copies so the
     # mute scene's bars/gauges track the real fight. Same DB + troop_id, so indices
     # line up with our $game_troop.members. Setting hp= refreshes the battler (death
@@ -425,6 +441,7 @@ module BSMP
     HANDLERS[BATTLE_FLASH]  = method(:on_battle_flash)
     HANDLERS[BATTLE_SHAKE]  = method(:on_battle_shake)
     HANDLERS[BATTLE_WHITEN] = method(:on_battle_whiten)
+    HANDLERS[MIRROR_CE]     = method(:on_mirror_ce)
 
     # Non-host peer asked us (the lobby host) to start a co-op battle for them —
     # they touched a hostile on a map we may not be standing on. We start the real
@@ -700,7 +717,23 @@ class Scene_Map
   def update
     bsmp_battle_map_update
     bsmp_consume_battle_start
+    bsmp_consume_mirror_ce
     bsmp_check_battle_result
+  end
+
+  # Run a death/loss common event the battle authority mirrored to us (MIRROR_CE).
+  # Done from the map update (not the packet handler) so the map interpreter is set
+  # up cleanly between frames, never mid scene-transition out of the mute battle.
+  # Marked @bsmp_local_ce so the Estus refill / soul grant inside it stays per-peer
+  # (see 1246) instead of dup-instancing back to everyone.
+  def bsmp_consume_mirror_ce
+    id = BSMP::Battle.pending_mirror_ce
+    return if id.nil?
+    return if scene_changing?
+    return unless $game_map.interpreter and $data_common_events[id]
+    BSMP::Battle.pending_mirror_ce = nil
+    $game_map.interpreter.setup($data_common_events[id].list)
+    $game_map.interpreter.instance_variable_set(:@bsmp_local_ce, true)
   end
 
   # Enter a queued co-op BATTLE_START as a mute client. Driven from the map's own
@@ -729,14 +762,10 @@ class Scene_Map
     elsif result == 1 # abort
 
     elsif result == 2 # defeat
-        # TODO: replace this hardcode with the host-driven SHARED_COMMON_EVENT mirror
-        # (the host's IfLose isn't always death — see Map019/Map010). For now run the
-        # "death" common event locally. Mark it @bsmp_local_ce so its Estus refill
-        # (ChangeItems) stays on THIS peer instead of dup-broadcasting to everyone.
-        if $game_map.interpreter
-          $game_map.interpreter.setup($data_common_events[12].list)
-          $game_map.interpreter.instance_variable_set(:@bsmp_local_ce, true)
-        end
+        # Death/loss outcome is no longer assumed here. The battle authority runs the
+        # real IfLose and, IF it's a death (a shared common event), mirrors it to us
+        # via MIRROR_CE -> bsmp_consume_mirror_ce. A scripted-cutscene loss (switches,
+        # no death CE) mirrors nothing, so we correctly DON'T die on it.
     end
   end
 
