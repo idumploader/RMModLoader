@@ -107,6 +107,8 @@ module BSMP
       @server_user_id = nil
       @max_read_packets = 10
       @handshake_state = :idle # :idle -> :hello_sent -> :accepted / :rejected
+      @handshake_frames = 0    # frames since the HELLO was (re)sent; drives retry/giveup
+      @world_synced = false    # set once we've actually applied a host world snapshot
       @pending_world = nil     # host snapshot awaiting a moment when we're in-game
       @awaiting_world = false  # WORLD_REQUEST sent, snapshot not yet back (drives the sync overlay)
       @await_frames = 0        # timeout so a lost request doesn't pin the overlay forever
@@ -124,6 +126,8 @@ module BSMP
       @lobby_id = nil
       @server_user_id = nil
       @handshake_state = :idle
+      @handshake_frames = 0
+      @world_synced = false
       @pending_world = nil
       @awaiting_world = false # drop any in-flight sync state so the overlay hides
       $bsmp_players.clear # drop everyone's sprites when we leave the session
@@ -175,9 +179,39 @@ module BSMP
     # title has no actor / no world objects yet.
     def ensure_announced
       return if not connected?
+      tick_handshake
       @handshake_state = :ready if @handshake_state != :ready and update_player_data
       tick_await_timeout
+      resync_world_if_missing
       apply_pending_world
+    end
+
+    # Re-send HELLO until the host acknowledges it (WELCOME or REJECT). Our packets
+    # are reliable once the Steam P2P session exists, so the only droppable one is
+    # the very first HELLO that opens that session — if it's lost (cold session, or
+    # the host was busy in a blocking load and hadn't pumped callbacks), the
+    # handshake never completes and both peers show "1 online" until a rejoin.
+    # Retrying that one packet closes the race. Throttled, and capped so we stop
+    # pestering a host that never answers. The host treats a duplicate HELLO
+    # idempotently (re-sends WELCOME + presence), so an extra retry is harmless.
+    HELLO_RETRY_INTERVAL = 30    # ~0.5s between retries
+    HANDSHAKE_GIVEUP     = 1800  # ~30s waiting for WELCOME, then give up
+
+    def tick_handshake
+      return if @handshake_state != :hello_sent   # only until WELCOME/REJECT lands
+      @handshake_frames += 1
+      return if @handshake_frames > HANDSHAKE_GIVEUP
+      resend_hello if @handshake_frames % HELLO_RETRY_INTERVAL == 0
+    end
+
+    # If we're in-game and accepted but never actually got a world (e.g. the host
+    # was loading when we joined, so the initial snapshot was skipped and the
+    # blocking sync timed out), ask again. Self-throttling: request_world arms
+    # @awaiting_world for AWAIT_TIMEOUT, so this fires at most once per timeout.
+    def resync_world_if_missing
+      return if @world_synced or @awaiting_world or @pending_world
+      return if @handshake_state != :ready
+      request_world
     end
 
     # Ask the host for a fresh world snapshot, and arm the sync overlay until it
@@ -203,6 +237,7 @@ module BSMP
       while syncing? and guard < AWAIT_TIMEOUT
         SteamAPI.run_callbacks
         read_packets        # may set @pending_world via handle_world_snapshot
+        tick_handshake      # keep retrying HELLO if the host hasn't admitted us yet
         apply_pending_world
         BSMP::UI.update_sync_overlay
         Graphics.update     # paint the overlay and pace the loop to the frame rate
@@ -251,6 +286,8 @@ module BSMP
       BSMP.debug_log { "World snapshot #{applied ? 'applied' : 'skipped'} (#{@pending_world.bytesize} B)" }
       @pending_world = nil
       @awaiting_world = false
+      @world_synced = true   # consumed a snapshot (applied, or skipped as incompatible);
+                             # either way stop resync_world_if_missing from re-asking
     end
 
     private
@@ -273,6 +310,13 @@ module BSMP
 
     def send_hello
       @handshake_state = :hello_sent
+      @handshake_frames = 0
+      resend_hello
+    end
+
+    # Just put a HELLO on the wire (no state change) — used by the retry, which
+    # must not knock @handshake_state back to :hello_sent after WELCOME arrived.
+    def resend_hello
       send_packet(BasicNetworkPacket.new(Events::HANDSHAKE_HELLO, 0, Handshake.hello))
     end
 
@@ -440,13 +484,22 @@ module BSMP
         send_control(user_id, Events::HANDSHAKE_REJECT, reason)
         return
       end
-      return if find_client(user_id) # duplicate HELLO, already onboarded
       BSMP.debug_log { "Accepting #{user_id}" }
       send_control(user_id, Events::HANDSHAKE_WELCOME, "")
-      send_world_snapshot(user_id)
-      # Admit last: registers the client, announces the join to everyone and pushes
-      # the host's own player data to the newcomer.
-      add_client(ServerClient.new(user_id, @channel_id))
+      existing = find_client(user_id)
+      if existing
+        # Re-HELLO from an already-onboarded guest: its earlier WELCOME or our join
+        # data was lost (or arrived before it finished loading). Re-push the host's
+        # presence so it can complete — but DON'T re-announce the join to everyone
+        # or re-send the world (the guest pulls that via WORLD_REQUEST; re-applying
+        # a snapshot mid-play would stomp its live state).
+        send_joined_data_to_client(existing)
+      else
+        send_world_snapshot(user_id)
+        # Admit last: registers the client, announces the join to everyone and
+        # pushes the host's own player data to the newcomer.
+        add_client(ServerClient.new(user_id, @channel_id))
+      end
     end
 
     # Send a point-to-point control packet to a user that may not be a client yet.
@@ -465,6 +518,9 @@ module BSMP
     end
 
     def send_joined_data_to_client(client)
+      # Host not in-game yet (still loading / at the title): skip — there's no
+      # actor/position to announce. The guest's HELLO retry re-asks until we can.
+      return if not ($game_player and $game_player.actor)
       char_packet = BasicNetworkPacket.new(Events::PLAYER_JOINED, @server_user_id, $game_player.actor.name)
       send_packet_to(client, char_packet)
 
