@@ -108,7 +108,21 @@ module BSMP
     # var += 1 after paying souls. Sharing the rank var syncs the rank to everyone
     # while only the initiator pays / keeps the personal token. var 110 = Evanora's
     # covenant (Map242). Add other covenant NPCs' rank vars here as identified.
-    SHARED_VARIABLE_IDS    = [110]
+    SHARED_VARIABLE_IDS    = [
+      102,    # Covenant lvl: Umeko
+      104,    # Covenant lvl: Scarlett
+      107,    # Covenant lvl: Klein [Dorothea]
+      105,    # Covenant lvl: Nancy
+      106,    # Covenant lvl: Ain
+      108,    # Covenant lvl: Celia [Tamira, Mary, ...]
+      109,    # Covenant lvl: Vera
+      110,    # Covenant lvl: Evanora
+      112,    # Covenant lvl: Betcy
+      111,    # Covenant lvl: Nog
+      114,    # Covenant lvl: Isabella
+      115,    # Covenant lvl: Gertruda
+
+    ]
 
     # --- Co-op "local" common events (step 6.5) ---
     # Common events whose item/gold gains must NOT be instanced to other peers via
@@ -118,8 +132,12 @@ module BSMP
     #   PERSONAL = only the acting peer runs it (CE 2 = bonfire rest).
     #   SHARED   = additionally mirrored so EVERY peer runs its own (CE 12 = death).
     # The mirror itself is wired separately; this list only governs loot locality.
-    PERSONAL_COMMON_EVENT_IDS = [2]
-    SHARED_COMMON_EVENT_IDS   = [12]
+    PERSONAL_COMMON_EVENT_IDS = [
+      2
+    ]
+    SHARED_COMMON_EVENT_IDS   = [
+      12,  # Death
+    ]
 
     # --- Co-op battle scaling (step 6.6) ---
     # Enemies scale with the number of PLAYERS in the fight (1 = no scaling). co-op
@@ -145,9 +163,31 @@ module BSMP
     READY_GATE_EVENTS = {
       # 123 => [4, 7],      # map 123: events 4 and 7 are separate gates
       # 181 => [[4, 5, 6]], # map 181: events 4,5,6 are ONE fog wall -> one shared gate
-      181 => [[4, 5, 6]],   # Scarlet fog wall (3 tiles, shared gate)
-      10 => [11],           # Boss fog
-      54 => [[32, 33, 34]]  # Boss fog
+      10  => [11],           # Boss fog
+      44  => [35],           # Boss: Celia
+      54  => [[32, 33, 34]], # Boss fog: Scarecrow
+      88  => [55],           # Boss: Bok
+      93  => [
+        [43, 75, 76, 77, 78] # Boss fog wall: 
+      ], 
+      111 => [13],           # Boss: Flower
+      153 => [15],           # Boss: Klein
+      181 => [[4, 5, 6]],    # Scarlet fog wall (3 tiles, shared gate)
+      211 => [
+        63,                  # Boss fog: Erick
+        43,                  # Boss fog: Socera
+      ],       
+      214 => [49],           # Boss: Fish
+      220 => [31],           # Boss: Horse
+      221 => [25],           # Boss: Firedick
+      238 => [12],           # Boss: Skeleton
+      243 => [3],            # Train: Evanora
+      326 => [12],           # Boss: Grey
+      323 => [12],           # Encounter: Grey
+      344 => [31],           # Boss: Hydra
+      393 => [89],           # Boss: Grey (2 phase)
+      395 => [9],            # Boss: Manchkin king
+      404 => [12],           # Boss: Frog
     }
 
     # --- Host-driven mobs (step 4) ---
