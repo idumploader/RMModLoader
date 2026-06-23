@@ -294,7 +294,8 @@ module BSMP
       :check_data_hash => false,                      # strict gameplay-database fingerprint gate
       :lobby_type      => Config::LOBBY_ONLY_FRIENDS, # Steam ELobbyType used when hosting
       :max_players     => 10,                         # lobby capacity when hosting
-      :roster_key      => ModLoader::Keyboard::TAB,   # held key (ModLoader VK) for the roster overlay
+      :roster_key      => ModLoader::Keyboard::TAB,   # key (ModLoader VK) for the roster overlay
+      :roster_mode     => :hold,                       # :hold (show while held) or :toggle (press to flip)
       :debug           => false,                      # runtime diagnostic logging (BSMP.log / debug_log)
       :debug_packets   => false,                      # per-packet wire trace firehose (independent of :debug)
       # Co-op battle heartbeat watchdog: frames (~60/s) a mute guest waits without ANY
@@ -386,6 +387,12 @@ module BSMP
   def self.settings
     @settings ||= Settings.new
   end
+
+  # Roster visibility for :toggle mode — kept at module level (not on the
+  # per-map spriteset) so a press-to-show survives map transfers. Hold mode
+  # ignores it; reset when networking stops (dispose_bsmp_windows).
+  def self.roster_shown?;        @roster_shown ||= false; end
+  def self.roster_shown=(value); @roster_shown = value;   end
 
   # Runtime diagnostic log, off by default. Flip BSMP.settings.debug = true (e.g. on
   # both machines) to trace behaviour over the wire, then read the console.

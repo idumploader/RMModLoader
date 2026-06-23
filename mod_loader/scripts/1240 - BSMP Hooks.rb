@@ -130,9 +130,21 @@ class Spriteset_Map
     end
   end
 
-  # Full roster overlay while the roster key is held (scoreboard-style).
+  # Full roster overlay. :hold = scoreboard-style while the roster key is held;
+  # :toggle = press the key once to show, again to hide (state on BSMP so it
+  # survives map transfers).
   def update_bsmp_roster
-    if ModLoader.respond_to?(:input_press?) and ModLoader.input_press?(BSMP.settings.roster_key)
+    key = BSMP.settings.roster_key
+    if BSMP.settings.roster_mode == :toggle
+      if ModLoader.respond_to?(:input_trigger?) and ModLoader.input_trigger?(key)
+        BSMP.roster_shown = !BSMP.roster_shown?
+      end
+      show = BSMP.roster_shown?
+    else
+      show = ModLoader.respond_to?(:input_press?) && ModLoader.input_press?(key)
+    end
+
+    if show
       @bsmp_roster_window ||= BSMP::Roster_Window.new
       @bsmp_roster_window.update
     elsif @bsmp_roster_window
@@ -150,6 +162,7 @@ class Spriteset_Map
       @bsmp_roster_window.dispose
       @bsmp_roster_window = nil
     end
+    BSMP.roster_shown = false   # drop toggle state so the next session starts hidden
   end
 
   def add_player(player)

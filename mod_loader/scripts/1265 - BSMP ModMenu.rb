@@ -88,6 +88,13 @@ module BSMP
                :gauge => [14, 6],
                :format => proc { |f| f <= 0 ? "off" : "#{f / 60}s" }))
 
+      #--- Roster -------------------------------------------------------------
+      M.header("Roster", :category => CAT)
+      M.choice("Key mode", bind(:roster_mode).merge(
+               :category => CAT,
+               :values => [:hold, :toggle],
+               :labels => ["Hold", "Toggle"]))
+
       #--- Diagnostics --------------------------------------------------------
       M.header("Diagnostics", :category => CAT)
       M.toggle("Debug log", bind(:debug).merge(:category => CAT))
