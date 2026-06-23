@@ -64,14 +64,19 @@ module ModMenu
     def initialize(label, opts = {})
       @label = label.to_s
       @opts  = opts
+      ModMenu.register_text(@label)   # so dump_templates lists it
     end
 
     def selectable?; true;  end
 
+    # The label resolved through I18n (the literal doubles as the key; an
+    # untranslated label comes back unchanged).
+    def label_text; ModMenu.tr(@label); end
+
     # Draw one row. +window+ is the ModMenu_ListWindow, +rect+ its text rect.
     def draw(window, rect)
       window.reset_font_settings
-      window.draw_text(rect, @label, 0)
+      window.draw_text(rect, label_text, 0)
     end
 
     def on_ok(window);    end
@@ -85,7 +90,7 @@ module ModMenu
 
     def draw(window, rect)
       window.change_color(window.system_color)
-      window.draw_text(rect, @label, 1)
+      window.draw_text(rect, label_text, 1)
       window.change_color(window.normal_color)
     end
   end
@@ -128,7 +133,7 @@ module ModMenu
 
     def draw(window, rect)
       window.reset_font_settings
-      window.draw_text(rect, @label, 0)
+      window.draw_text(rect, label_text, 0)
       vrect = rect.clone
       vrect.width -= 4
       draw_value(window, vrect)
@@ -159,10 +164,16 @@ module ModMenu
     def on_right(window); flip(window); end
 
     def draw_value(window, rect)
-      window.draw_inline_options(rect, [off_text, on_text], value ? 1 : 0)
+      window.draw_inline_options(rect, [ModMenu.tr(off_text), ModMenu.tr(on_text)], value ? 1 : 0)
     end
 
     private
+
+    def initialize(label, opts)
+      super
+      ModMenu.register_text(on_text)
+      ModMenu.register_text(off_text)
+    end
 
     def flip(window); self.value = !value; end
     def on_text;  @opts[:on_text]  || "ON";  end
@@ -224,6 +235,15 @@ module ModMenu
 
     private
 
+    def initialize(label, opts)
+      super
+      list   = opts[:values] || []
+      labels = opts[:labels]
+      list.each_index do |i|
+        ModMenu.register_text(((labels && labels[i]) ? labels[i] : list[i]).to_s)
+      end
+    end
+
     def values; @opts[:values] || []; end
 
     def cycle(dir)
@@ -235,7 +255,8 @@ module ModMenu
 
     def label_at(i)
       labels = @opts[:labels]
-      (labels && labels[i]) ? labels[i].to_s : values[i].to_s
+      raw = (labels && labels[i]) ? labels[i].to_s : values[i].to_s
+      ModMenu.tr(raw)
     end
   end
 
@@ -270,6 +291,7 @@ module ModMenu
       unless @items.key?(category)
         @items[category] = []
         categories << category
+        register_text(category)   # tab name is translatable too
       end
       @items[category] << item
       item
@@ -293,6 +315,30 @@ module ModMenu
 
     def choice(label, opts = {})
       register(ChoiceItem.new(label, opts), opts[:category] || DEFAULT_CATEGORY)
+    end
+
+    # Resolve displayed text through I18n (11) when present. The text doubles as
+    # the translation key; an untranslated string comes back unchanged. Pass a
+    # +default+ to register it on first use (for the menu's own built-in strings).
+    # Safe before I18n loads (ModMenu is index 10, I18n is 11): falls back to the
+    # literal until I18n exists, which is always true by draw time.
+    def tr(text, default = nil)
+      return (default || text) unless defined?(ModLoader::I18n)
+      default ? ModLoader::I18n.t(text, default) : ModLoader::I18n[text]
+    end
+
+    # The active UI language (nil when I18n isn't loaded) - used to detect a
+    # switch and re-translate the open menu.
+    def language
+      defined?(ModLoader::I18n) ? ModLoader::I18n.language : nil
+    end
+
+    # Register a displayed string as an I18n key (default = itself), so it shows
+    # up in dump_templates for translators. No-op until I18n loads; harmless to
+    # call repeatedly (define keeps the first default).
+    def register_text(text)
+      ModLoader::I18n.define(text, text) if defined?(ModLoader::I18n)
+      text
     end
 
     # Called by the window on open/close to freeze and thaw the game.
@@ -343,11 +389,13 @@ class ModMenu_HeaderWindow < Window_Base
   def set(category, index, count)
     contents.clear
     change_color(system_color)
-    title = count > 1 ? "<<  #{category}  >>   (#{index + 1}/#{count})" : category.to_s
+    name  = ModLoader::ModMenu.tr(category.to_s)
+    title = count > 1 ? "<<  #{name}  >>   (#{index + 1}/#{count})" : name
     draw_text(0, 0, contents.width, line_height, title, 1)
     contents.font.size -= 4
-    draw_text(0, line_height, contents.width, line_height,
-              "WASD/Arrows move+adjust   Q/E tab   Enter ok   Esc close", 1)
+    hint = ModLoader::ModMenu.tr("modmenu.hint",
+             "WASD/Arrows move+adjust   Q/E tab   Enter ok   Esc close")
+    draw_text(0, line_height, contents.width, line_height, hint, 1)
     reset_font_settings
   end
 end
@@ -371,6 +419,7 @@ class ModMenu_ListWindow < Window_Command
   def initialize
     @cat_index = 0
     @closing   = false
+    @lang      = ModLoader::ModMenu.language
     super(menu_x, menu_y)        # Window_Command#initialize: builds list, activates
     self.z = 2000
     create_header
@@ -413,13 +462,17 @@ class ModMenu_ListWindow < Window_Command
   end
 
   # A gradient gauge filling the right portion of +rect+, with +text+ at the far
-  # right. +rate+ is 0.0..1.0.
+  # right. +rate+ is 0.0..1.0. Drawn manually (not via draw_gauge) so the bar sits
+  # vertically centered in the row rather than hugging its bottom edge.
   def draw_slider(rect, rate, colors, text)
     c1, c2 = colors
     tw  = contents.text_size(text).width
     gx  = rect.x + (rect.width * 0.45).to_i
-    gw  = rect.width - (gx - rect.x) - tw - 12
-    draw_gauge(gx, rect.y, [gw, 1].max, rate, c1, c2)
+    gw  = [rect.width - (gx - rect.x) - tw - 12, 1].max
+    bar_h = 6
+    by    = rect.y + (line_height - bar_h) / 2
+    contents.fill_rect(gx, by, gw, bar_h, gauge_back_color)
+    contents.gradient_fill_rect(gx, by, (gw * rate).to_i, bar_h, c1, c2)
     draw_text(rect, text, 2)
   end
 
@@ -502,12 +555,32 @@ class ModMenu_ListWindow < Window_Command
     if vk_pressed?(K::RETURN, K::SPACE)
       item.on_ok(self)
       Sound.play_ok
-      redraw_current_item unless disposed? || @closing
+      apply_change
     elsif vk_down?(K::RIGHT, K::D)
-      item.on_right(self); Sound.play_cursor; redraw_current_item
+      item.on_right(self); Sound.play_cursor; apply_change
     elsif vk_down?(K::LEFT, K::A)
-      item.on_left(self);  Sound.play_cursor; redraw_current_item
+      item.on_left(self);  Sound.play_cursor; apply_change
     end
+  end
+
+  # Redraw after an edit. A language switch (e.g. the Language entry) re-renders
+  # the whole menu + header so every translated label updates; otherwise just the
+  # touched row.
+  def apply_change
+    return if disposed? || @closing
+    if language_changed?
+      refresh
+      refresh_header
+    else
+      redraw_current_item
+    end
+  end
+
+  def language_changed?
+    now = ModLoader::ModMenu.language
+    changed = now != @lang
+    @lang = now
+    changed
   end
 
   def switch_category(dir)

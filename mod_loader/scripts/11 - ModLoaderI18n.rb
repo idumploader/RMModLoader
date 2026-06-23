@@ -95,17 +95,21 @@ module I18n
 
     # Write (merging) a template holding every registered key for +lang+, so a
     # translator gets all keys with the source text to overwrite. Existing
-    # translations in the file are preserved. Returns the path.
+    # translations are preserved, and still-untranslated keys (value equal to the
+    # source default, or absent) are grouped under a TODO section up top so what's
+    # left to do is obvious at a glance. Returns the path.
     def dump_template(lang)
       ensure_dir
       lang     = lang.to_sym
       existing = load_table(lang)
+      todo, done = defaults.keys.sort.partition do |k|
+        !existing.key?(k) || existing[k] == defaults[k]
+      end
       File.open(file_for(lang), "w:UTF-8") do |f|
         f.puts "# translations/#{lang}.rb - edit the values, keep the keys"
         f.puts "{"
-        defaults.keys.sort.each do |k|
-          f.puts "  #{quote(k)} => #{quote(existing[k] || defaults[k])},"
-        end
+        write_section(f, "TODO - untranslated (#{todo.size})", todo, existing)
+        write_section(f, "translated (#{done.size})",          done, existing)
         f.puts "}"
       end
       @tables.delete(lang) if @tables
@@ -121,6 +125,14 @@ module I18n
     end
 
     private
+
+    # Write one "# --- title ---" comment block of key => value lines (skips an
+    # empty group). Untranslated lines fall back to the source default.
+    def write_section(file, title, keys, existing)
+      return if keys.empty?
+      file.puts "  # --- #{title} ---"
+      keys.each { |k| file.puts "  #{quote(k)} => #{quote(existing[k] || defaults[k])}," }
+    end
 
     def defaults
       @defaults ||= {}

@@ -18,10 +18,31 @@ module ModMenuExample
   def self.setup_demo_strings
     T.define("example.greet", "Hello, traveler")
 
+    # The menu labels/tabs auto-register as keys (default = the English text), so
+    # translating the menu is just adding those keys to a language file. These
+    # demo files show the whole Settings/Test UI translated to Russian.
     dir = ModLoader::I18n::DIR
     Dir.mkdir(dir) unless Dir.exist?(dir)
-    write_lang(dir, "ru", '{ "example.greet" => "Привет, странник" }')
-    write_lang(dir, "jp", '{ "example.greet" => "Konnichiwa, tabibito" }')
+    write_lang(dir, "ru", <<-'RU')
+{
+  "example.greet"                   => "Привет, странник",
+  "modmenu.hint"                    => "WASD/Стрелки  Q/E вкладки  Enter выбор  Esc выход",
+  "Settings"                        => "Настройки",
+  "Test"                            => "Тест",
+  "Cheats"                          => "Читы",
+  "Display"                         => "Экран",
+  "I18n"                            => "Локализация",
+  "Fullscreen flag"                 => "Полноэкранный режим",
+  "UI scale"                        => "Масштаб интерфейса",
+  "Language"                        => "Язык",
+  "Run I18n self-test"              => "Запустить самотест",
+  "Show greeting (current lang)"    => "Показать приветствие",
+  "Dump translation templates"     => "Выгрузить шаблоны перевода",
+  "ON"                              => "ВКЛ",
+  "OFF"                             => "ВЫКЛ",
+}
+    RU
+    write_lang(dir, "jp", '{ "example.greet" => "Konnichiwa, tabibito", "Language" => "Gengo" }')
     T.reload
   end
 
@@ -80,7 +101,8 @@ end
 
 ModMenuExample.setup_demo_strings
 
-#--- Settings tab: persisted values + live language switch --------------------
+#--- Settings tab: persisted values -------------------------------------------
+# (the Language selector lives in 12 - ModMenuDefaults, shared by every mod)
 M.header("Display",  :category => "Settings")
 M.toggle("Fullscreen flag", :category => "Settings",
          :key => "example.fullscreen", :default => false)
@@ -88,10 +110,6 @@ M.slider("UI scale", :category => "Settings",
          :key => "example.ui_scale", :default => 100, :min => 50, :max => 200, :step => 10,
          :format => proc { |v| "#{v}%" },
          :gauge => [18, 10])   # palette indices -> green gradient (like HP)
-M.choice("Language", :category => "Settings",
-         :values => [:en, :ru, :jp], :labels => ["English", "Russian", "Japanese"],
-         :get => proc { ModLoader::I18n.language },
-         :set => proc { |v| ModLoader::I18n.language = v })
 
 #--- Test tab: exercise the I18n store + a live translated greeting -----------
 M.header("I18n", :category => "Test")
