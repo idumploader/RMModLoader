@@ -23,6 +23,22 @@ if not Object.const_defined?(:SteamAPI)
   p "Multiplayer isn't available"
 else
 
+# BasicNetworkPacket is native: its #data getter rebuilds a FRESH ASCII-8BIT Ruby string
+# from the C++ byte buffer on every call, and #data= doesn't preserve a string's encoding
+# tag. So tagging a packet's data UTF-8 anywhere never sticks — the next getter hands back
+# ASCII-8BIT again, and a multibyte name/face later blows up (Encoding::UndefinedConversion
+# at a string concat). Fix it once at the source: re-tag UTF-8 on every read. The wire is
+# UTF-8, and force_encoding only changes the tag of the throwaway copy the getter returns,
+# so the native bytes are untouched and Marshal-based handlers (Wire.unpack, world snapshot)
+# stay byte-correct — Wire.unpack re-forces ASCII-8BIT internally before it slices framing.
+class BasicNetworkPacket
+  alias bsmp_raw_data data
+  def data
+    d = bsmp_raw_data
+    d.is_a?(String) ? d.force_encoding("UTF-8") : d
+  end
+end
+
 module BSMP
 
   class Callback
@@ -345,9 +361,12 @@ module BSMP
     # framed binary string -> original payload (binary). Tolerates empty input.
     def self.unpack(data)
       return "" if data.nil? or data.bytesize == 0
+      # Treat the frame as raw bytes: the packet getter now hands us a UTF-8-tagged string,
+      # and [] would then slice by CHARACTERS — wrong for binary framing. Force ASCII-8BIT
+      # first so getbyte/[] index by bytes.
+      data = data.dup.force_encoding("ASCII-8BIT")
       flags = data.getbyte(0)
       body = data[1, data.bytesize - 1] || ""
-      body.force_encoding("ASCII-8BIT")
       (flags & FLAG_COMPRESSED) != 0 ? Zlib::Inflate.inflate(body) : body
     end
 
@@ -429,6 +448,8 @@ module BSMP
   module Events
 
     def self.on_packet(packet)
+      # packet.data is UTF-8 for free now — BasicNetworkPacket#data re-tags on every read
+      # (see the reopen at the top of this file), so handlers never need force_encoding.
       handler = HANDLERS[packet.type]
       handler.call(packet) if handler
     end
@@ -785,6 +806,24 @@ module BSMP
     READY_GATE            = 45
     READY_GATE_CANCEL     = 46
     READY_GATE_SYNC       = 47
+
+    # In-battle dialogue sync + all-confirm barrier (step 6.8). Troop-event ShowText
+    # runs only on the host (guests are mute, no troop events), so the host mirrors
+    # each battle dialogue: BATTLE_MSG_SHOW host->all = "seq<US>face<US>idx<US>bg<US>
+    # pos<US>line<US>line..." populates the guest's $game_message. The barrier lives in
+    # Window_Message#input_pause: each peer that dismisses a dialogue sends
+    # BATTLE_MSG_ACK peer->host = "seq"; the host tallies and, at all-confirmed, sends
+    # BATTLE_MSG_CLOSE host->all = "seq" so everyone un-pauses together. Keyed by the
+    # host-assigned seq (identical on every peer), so no fragile per-page counter.
+    BATTLE_MSG_SHOW       = 48
+    BATTLE_MSG_ACK        = 49
+    BATTLE_MSG_CLOSE      = 50
+
+    # Battle-log line mirror (step 6.8). The host's Window_BattleLog ("X strikes!",
+    # "Y takes 120 damage", ...) is built by actions that only run on the host; the mute
+    # guest's log stayed empty. The host mirrors each log mutation: BATTLE_LOG host->all =
+    # "op<US>arg" where op is a=add_text r=replace_text c=clear b=back_to 1=back_one.
+    BATTLE_LOG            = 51
 
     HANDLERS = {
       PLAYER_JOINED            => method(:on_player_joined),
