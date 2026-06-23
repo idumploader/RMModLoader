@@ -112,6 +112,14 @@ module I18n
       file_for(lang)
     end
 
+    # Refresh templates for the given languages, or for every language that
+    # already has a file when none are named. Each merges new keys in without
+    # clobbering existing translations. Returns the written paths.
+    def dump_templates(*langs)
+      langs = available if langs.empty?
+      langs.map { |lang| dump_template(lang) }
+    end
+
     private
 
     def defaults
