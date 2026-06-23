@@ -550,14 +550,10 @@ end
 
 def show_test_window
   $bwnd = BSMP::Progress_Window.new()
-  $bwnd.text = defined?(MLLocalizedStrings) ? MLLocalizedStrings["BSMP_SAVE_TRANSFER"] : "Transferring save..."
+  $bwnd.text = BSMP.t("bsmp.save_transfer")
   $bwnd.progress = 0.3
   $game_temp.streffect.push($bwnd)
 end
-
-# Optional: the loader's localization module isn't present in every bundle, so
-# don't hard-require it (degrade gracefully when absent).
-MLLocalizedStrings.add_required("bsmp") if defined?(MLLocalizedStrings)
 
 end # if defined?(BSMP)
 

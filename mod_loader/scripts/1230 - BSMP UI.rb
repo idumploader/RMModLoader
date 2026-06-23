@@ -179,7 +179,8 @@ module BSMP
     def refresh
       self.contents.fill_rect(0, 0, contents.width, contents.height, BACK_COLOR)
       self.contents.font.color = host? ? HOST_COLOR : CLIENT_COLOR
-      header = "BSMP  #{host? ? 'HOST' : 'CLIENT'}  -  #{online_count} online"
+      role   = BSMP.t(host? ? "bsmp.role_host" : "bsmp.role_client")
+      header = BSMP.t("bsmp.status_header") % [role, online_count]
       # Full contents height as the rect → vertically centered, symmetric.
       draw_text(MARGIN_X, 0, contents.width - MARGIN_X * 2, contents.height, header)
     end
@@ -245,17 +246,17 @@ module BSMP
 
     def self_name
       member = $game_party && $game_party.battle_members[0]
-      member ? member.name : "You"
+      member ? member.name : BSMP.t("bsmp.name_self")
     end
 
     def remote_name(pl)
       n = pl.nickname.to_s
-      n.empty? ? "Player" : n
+      n.empty? ? BSMP.t("bsmp.name_player") : n
     end
 
     def self_location
       name = BSMP.current_location_name
-      name.empty? ? "?" : name
+      name.empty? ? BSMP.t("bsmp.location_unknown") : name
     end
 
     # The name the peer broadcast; fall back to a local lookup by map id.
@@ -309,13 +310,13 @@ module BSMP
       ping_x = MARGIN_X + w - PING_W
 
       self.contents.font.color = HEAD_COLOR
-      draw_text(MARGIN_X, 0, w, row_height, "Players (#{list.size})")
+      draw_text(MARGIN_X, 0, w, row_height, BSMP.t("bsmp.roster_title") % list.size)
 
       y = row_height
       list.each do |name, loc, ping, is_host, is_self|
         label = name.dup
-        label << "  [HOST]" if is_host
-        label << "  (you)" if is_self
+        label << BSMP.t("bsmp.roster_host_tag") if is_host
+        label << BSMP.t("bsmp.roster_you_tag") if is_self
         self.contents.font.color = is_host ? HOST_COLOR : TEXT_COLOR
         draw_text(MARGIN_X, y, name_w, row_height, label)
         self.contents.font.color = LOC_COLOR
@@ -332,7 +333,6 @@ module BSMP
   # but blocking) World.load apply on a lobby join. Static — no per-frame redraw.
   class Sync_Window < Window
     TEXT_COLOR = Color.new(255, 255, 255, 255)
-    CAPTION    = "Syncing game, please wait..."
 
     def initialize
       super
@@ -361,7 +361,7 @@ module BSMP
     def refresh
       self.contents.fill_rect(0, 0, contents.width, contents.height, BACK_COLOR)
       self.contents.font.color = TEXT_COLOR
-      draw_text(0, 0, contents.width, contents.height, CAPTION, 1)
+      draw_text(0, 0, contents.width, contents.height, BSMP.t("bsmp.sync_caption"), 1)
     end
 
     def update

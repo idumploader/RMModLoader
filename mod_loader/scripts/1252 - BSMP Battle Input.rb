@@ -246,7 +246,7 @@ module BSMP
       def ensure_guest_timer
         return if @guest_timer and not @guest_timer.disposed?
         @guest_timer = BSMP::Progress_Window.new
-        @guest_timer.text     = "Your turn"
+        @guest_timer.text     = BSMP.t("bsmp.your_turn")
         @guest_timer.progress = 1.0
         @guest_timer.update
       end

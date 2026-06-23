@@ -113,7 +113,7 @@ module BSMP
       def text(gate_id)
         p = @progress[gate_id] || { :count => 0, :need => 0 }
         n = [p[:count], p[:need]].min  # ghost ids can't show more than "all"
-        "Waiting for party  #{n}/#{p[:need]}"
+        BSMP.t("bsmp.ready_gate_wait") % [n, p[:need]]
       end
 
       def ratio(gate_id)

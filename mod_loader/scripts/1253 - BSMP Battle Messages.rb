@@ -131,7 +131,7 @@ module BSMP
             break unless gated?            # lost the session mid-wait -> just proceed
             if win.nil?
               win = BSMP::Progress_Window.new
-              win.text = "Waiting for other players..."
+              win.text = BSMP.t("bsmp.battle_wait_others")
               win.progress = 1.0           # indeterminate; we don't tally per-peer here
               win.z = 300                   # above the message window (z 200)
             end
