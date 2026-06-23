@@ -159,10 +159,7 @@ module ModMenu
     def on_right(window); flip(window); end
 
     def draw_value(window, rect)
-      on = !!value
-      window.change_color(window.normal_color, on)   # engine dims when disabled
-      window.draw_text(rect, on ? on_text : off_text, 2)
-      window.change_color(window.normal_color)
+      window.draw_inline_options(rect, [off_text, on_text], value ? 1 : 0)
     end
 
     private
@@ -172,13 +169,14 @@ module ModMenu
     def off_text; @opts[:off_text] || "OFF"; end
   end
 
-  # Integer in [min, max], stepped by Left/Right.
+  # Integer in [min, max], stepped by Left/Right. Drawn as a gradient gauge plus
+  # the value text. Colour pair via :gauge => [c1, c2] (palette index or Color).
   class SliderItem < ValueItem
     def on_left(window);  step(-1); end
     def on_right(window); step(+1); end
 
     def draw_value(window, rect)
-      window.draw_text(rect, formatted, 2)
+      window.draw_slider(rect, rate, gauge_colors(window), formatted)
     end
 
     private
@@ -191,6 +189,22 @@ module ModMenu
     def min; @opts[:min] || 0;   end
     def max; @opts[:max] || 100; end
 
+    def rate
+      lo, hi = min, max
+      return 0.0 if hi == lo
+      r = (value - lo).to_f / (hi - lo)
+      r < 0 ? 0.0 : (r > 1 ? 1.0 : r)
+    end
+
+    def gauge_colors(window)
+      g = @opts[:gauge]
+      if g.is_a?(Array) && g.size == 2
+        [window.menu_color(g[0]), window.menu_color(g[1])]
+      else
+        [window.mp_gauge_color1, window.mp_gauge_color2]   # blue by default
+      end
+    end
+
     def formatted
       @opts[:format] ? @opts[:format].call(value) : value.to_s
     end
@@ -202,7 +216,10 @@ module ModMenu
     def on_right(window); cycle(+1); end
 
     def draw_value(window, rect)
-      window.draw_text(rect, current_label, 2)
+      list = values
+      return if list.empty?
+      cur = list.index(value) || 0
+      window.draw_inline_options(rect, (0...list.size).map { |i| label_at(i) }, cur)
     end
 
     private
@@ -216,11 +233,9 @@ module ModMenu
       self.value = list[(i + dir) % list.size]
     end
 
-    def current_label
-      list = values
-      i = list.index(value) || 0
+    def label_at(i)
       labels = @opts[:labels]
-      (labels && labels[i]) ? labels[i].to_s : value.to_s
+      (labels && labels[i]) ? labels[i].to_s : values[i].to_s
     end
   end
 
@@ -384,6 +399,48 @@ class ModMenu_ListWindow < Window_Command
   def draw_item(index)
     item = @list[index][:ext]
     item.draw(self, item_rect_for_text(index)) if item
+  end
+
+  #--------------------------------------------------------------------------
+  # Shared value renderers (called by entries, only on (re)draw - never per
+  # frame). draw_gauge / gradient_fill_rect are native Window_Base.
+  #--------------------------------------------------------------------------
+  INLINE_GAP = 16   # px between inline option labels
+
+  # Accept a palette index (Integer) or a Color; return a Color.
+  def menu_color(c)
+    c.is_a?(Integer) ? text_color(c) : c
+  end
+
+  # A gradient gauge filling the right portion of +rect+, with +text+ at the far
+  # right. +rate+ is 0.0..1.0.
+  def draw_slider(rect, rate, colors, text)
+    c1, c2 = colors
+    tw  = contents.text_size(text).width
+    gx  = rect.x + (rect.width * 0.45).to_i
+    gw  = rect.width - (gx - rect.x) - tw - 12
+    draw_gauge(gx, rect.y, [gw, 1].max, rate, c1, c2)
+    draw_text(rect, text, 2)
+  end
+
+  # All options on one line, right-aligned as a block: the current one is bright,
+  # the rest dimmed. Falls back to "<  current  >" when the block won't fit.
+  def draw_inline_options(rect, labels, current)
+    total = labels.inject(0) { |w, s| w + contents.text_size(s).width }
+    total += (labels.size - 1) * INLINE_GAP
+    if total <= rect.width * 0.6
+      x = rect.x + rect.width - total
+      labels.each_with_index do |s, i|
+        change_color(normal_color, i == current)
+        w = contents.text_size(s).width
+        draw_text(x, rect.y, w + 2, rect.height, s, 0)
+        x += w + INLINE_GAP
+      end
+      change_color(normal_color)
+    else
+      change_color(normal_color)
+      draw_text(rect, "<  #{labels[current]}  >", 2)
+    end
   end
 
   def create_header
