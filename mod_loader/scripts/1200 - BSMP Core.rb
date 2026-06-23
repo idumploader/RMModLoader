@@ -102,13 +102,36 @@ module BSMP
     # facts. self-switches are ALWAYS shared (no list). Start empty and grow as the
     # real flags are identified. Ranges are inclusive Ruby Ranges.
     SHARED_SWITCH_RANGES   = []
+    # Permanent NPC-removal world facts. BS2 gives each killable covenant NPC a named
+    # switch block (System/Switches.txt 501-576): 誓约 (covenant) / 誓约解放 (covenant
+    # release, transient) / 监禁 (imprisoned, "rape" route) / 杀害 (killed, "kill" route).
+    # The 监禁/杀害 (and Gautier's 自杀 suicide) switches are set ON for good when the NPC is
+    # removed and GATE whether the NPC still appears — verified manually: Evanora's presence
+    # follows 杀害 534, NOT the covenant gate 531 (which does nothing to her presence). Sync
+    # them so a killed/imprisoned NPC stays gone for every peer (live + world snapshot). The
+    # 誓约/誓约解放 covenant gates are NOT here (they toggle during normal covenant play;
+    # covenant rank already syncs via var 110). Switches with no kill set-site in this build
+    # simply never fire, so listing the full roster is harmless and future-proof.
     SHARED_SWITCH_IDS      = [
-      531,  # Evanora story/death flag: set ON by the kill (Map242 "imprison",
-            #   Map287 death cutscene), gates her covenant/oath dialogue (CE895/896/909).
-            #   Only written at story beats (kill + swear), so live-sharing is cheap and
-            #   keeps her killed/sworn state consistent even if a peer never ran the scene.
-            #   (532/534 stay personal — transient sequencing flags the kill scene resets
-            #   locally on each peer; add other NPCs' death flags here as identified.)
+      502,            # Meiko: killed
+      504, 521,       # Scarlett: killed, imprisoned
+      509, 519,       # Nancy: killed, imprisoned
+      512, 520,       # Ein: killed, imprisoned
+      522, 514, 513,  # Gautier: killed, imprisoned, suicide
+      517, 518,       # Klein: killed, imprisoned
+      526, 525,       # Celia: killed, imprisoned
+      530, 529,       # Vera: killed, imprisoned
+      534, 533,       # Evanora: killed, imprisoned
+      538, 537,       # Nog: killed, imprisoned
+      542, 541,       # Becky: killed, imprisoned
+      546, 545,       # Papel: killed, imprisoned
+      550, 549,       # Doris: killed, imprisoned
+      554, 553,       # Nadia: killed, imprisoned
+      560, 559,       # Tamira: killed, imprisoned
+      564, 563,       # Gertrude: killed, imprisoned
+      568, 567,       # Duska: killed, imprisoned
+      572, 571,       # Hecate: killed, imprisoned
+      576, 575,       # Mary: killed, imprisoned
     ]
     SHARED_VARIABLE_RANGES = []
     # Covenant rank (world progress): leveling at the covenant NPC (CE909) does
