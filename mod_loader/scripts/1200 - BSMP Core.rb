@@ -104,7 +104,11 @@ module BSMP
     SHARED_SWITCH_RANGES   = []
     SHARED_SWITCH_IDS      = []
     SHARED_VARIABLE_RANGES = []
-    SHARED_VARIABLE_IDS    = []
+    # Covenant rank (world progress): leveling at the covenant NPC (CE909) does
+    # var += 1 after paying souls. Sharing the rank var syncs the rank to everyone
+    # while only the initiator pays / keeps the personal token. var 110 = Evanora's
+    # covenant (Map242). Add other covenant NPCs' rank vars here as identified.
+    SHARED_VARIABLE_IDS    = [110]
 
     # --- Co-op "local" common events (step 6.5) ---
     # Common events whose item/gold gains must NOT be instanced to other peers via
@@ -557,6 +561,13 @@ module BSMP
       end
     end
 
+    # A peer earned a world-unique covenant token: grant our own copy. add_spirit is
+    # idempotent (no dup); apply_fact's guard stops our own add_spirit hook re-broadcasting.
+    def self.on_spirit_gain(packet)
+      return if $game_party.nil? or not $game_party.respond_to?(:add_spirit)
+      apply_fact { $game_party.add_spirit(packet.data.to_i) }
+    end
+
     # Owner-driven mobs: apply the owner's positions to our copies of the moving
     # events, but only while we're NOT the owner of this map (otherwise the mobs are
     # ours to simulate). Each entry is "id,x,y,dir[,op,speed,trans,forming]"; the event
@@ -683,6 +694,16 @@ module BSMP
     # Instanced loot: an event gave someone an item/gold; each peer grants its own
     # copy. data = "type;id;amount" (type 0=item 1=weapon 2=armor 3=gold).
     LOOT_GAIN           = 19
+
+    # World-unique covenant token ("spirit"): granted via $game_party.add_spirit (a
+    # Script call, NOT ChangeItems, so LOOT_GAIN misses it). When one player earns it
+    # (covenant level-up, CE817) every peer gets their own copy. data = "spirit_id".
+    SPIRIT_GAIN         = 52
+
+    # Mid-battle battle-background change (event command 283 / script 180). Troop events
+    # run only on the host, so a phase-change backdrop swap never reached guests. The host
+    # mirrors it; the guest applies the same battleback. data = "bb1<US>bb2" (file names).
+    BATTLE_BACK         = 53
 
     # Host-driven mobs: the host's periodic position broadcast for every moving
     # event on its current map. data = "map_id;id,x,y,dir;id,x,y,dir;...". Guests on
@@ -840,6 +861,7 @@ module BSMP
       SELF_SWITCH_CHANGED      => method(:on_self_switch_changed),
       PLAYER_PING              => method(:on_player_ping),
       LOOT_GAIN                => method(:on_loot_gain),
+      SPIRIT_GAIN              => method(:on_spirit_gain),
       MOB_SYNC                 => method(:on_mob_sync),
       MOB_BALLOON              => method(:on_mob_balloon),
       MOB_ERASE                => method(:on_mob_erase),

@@ -26,7 +26,7 @@ module BSMP
   module World
 
     # Bump when the wire layout below changes incompatibly.
-    FORMAT = 2
+    FORMAT = 3   # 3: added covenant spirits section
 
     SELF_SWITCH_CHARS = "ABCD"
 
@@ -285,7 +285,16 @@ module BSMP
       dump_switches(w)
       dump_variables(w)
       dump_self_switches(w)
+      dump_spirits(w)
       w
+    end
+
+    # Covenant tokens ("spirits") the party owns — world progress (they unlock summoning
+    # that character in battle), so a joiner adopts the host's set.
+    def self.dump_spirits(w)
+      ids = $game_party ? ($game_party.instance_variable_get(:@spirits) || []) : []
+      write_uint(w, ids.size)
+      ids.each { |id| write_uint(w, id) }
     end
 
     def self.dump_switches(w)
@@ -336,6 +345,7 @@ module BSMP
         load_switches(r)
         load_variables(r)
         load_self_switches(r)
+        load_spirits(r)
       ensure
         $bsmp_applying_fact = false
       end
@@ -422,6 +432,16 @@ module BSMP
         ch       = SELF_SWITCH_CHARS[r.u8, 1] || "A"
         $game_self_switches[[map_id, event_id, ch]] = true
       end
+    end
+
+    def self.load_spirits(r)
+      n = r.uint
+      ids = []
+      n.times { ids << r.uint }          # always drain the bytes first (spirits is the last
+                                          # section, so an early return below is still safe)
+      return unless $game_party and $game_party.respond_to?(:add_spirit)
+      # add_spirit is idempotent; we're inside the apply_fact guard so it won't echo.
+      ids.each { |id| $game_party.add_spirit(id) }
     end
 
     # --- counts / internals --------------------------------------------------

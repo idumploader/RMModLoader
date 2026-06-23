@@ -184,7 +184,9 @@ module BSMP
           # Field 5 = live enemy_id, so a mid-battle Enemy Transform (troop command
           # 336, phase-2 bosses) reaches the mute guest — it doesn't run troop events.
           # st uses only '.'/':' so it never eats the comma before enemy_id.
-          parts << "#{i},#{e.hp},#{e.mp},#{e.ap},#{st},#{e.enemy_id}"
+          # Field 6 = hidden? — a boss that spawns reinforcements mid-fight (Enemy Appear,
+          # command 335) only un-hides them on the host; mirror it so they show on guests.
+          parts << "#{i},#{e.hp},#{e.mp},#{e.ap},#{st},#{e.enemy_id},#{e.hidden? ? 1 : 0}"
         end
         bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::BATTLE_SYNC, 0, parts.join(';')))
       end
@@ -344,6 +346,11 @@ module BSMP
         if f[5] and f[5].to_i > 0 and e.respond_to?(:transform) and e.enemy_id != f[5].to_i
           e.transform(f[5].to_i)
         end
+        # Mirror appear/hide (Enemy Appear, command 335): boss reinforcements spawn only on
+        # the host. Match it so the new enemy's sprite shows (or hides) on the guest too.
+        if f[6] and e.hidden? != (f[6].to_i != 0)
+          f[6].to_i != 0 ? e.hide : e.appear
+        end
         was_alive = e.alive?
         # States straight from the host (icons + dead?). Set the ivars directly: this is
         # a pure visual mirror, so we don't want add_state/remove_state side effects, and
@@ -472,6 +479,17 @@ module BSMP
       e.sprite_effect_type = :whiten if e
     end
 
+    # Host swapped the battle background mid-fight (event command 283): apply the same
+    # battleback here. change_battleback (script 180) repaints our mute scene's spriteset.
+    def self.on_battle_back(packet)
+      return if BSMP::Battle.host_session?  # we're streaming this; ignore our own echo
+      return if not BSMP::Battle.client_session?
+      return if $game_map.nil?
+      bb1, bb2 = packet.data.to_s.split("\n", -1)
+      $game_map.change_battleback(bb1.to_s, bb2.to_s)
+    end
+
+    HANDLERS[BATTLE_BACK]   = method(:on_battle_back)
     HANDLERS[BATTLE_START]  = method(:on_battle_start)
     HANDLERS[BATTLE_END]    = method(:on_battle_end)
     HANDLERS[BATTLE_SYNC]   = method(:on_battle_sync)
@@ -942,6 +960,47 @@ class Game_Enemy < Game_Battler
     base = bsmp_scale_param_base(param_id)
     return base unless param_id == 0  # 0 = MHP
     (base * BSMP.battle_scale(BSMP::Config::BATTLE_SCALE_HP_PER_PLAYER)).to_i
+  end
+end
+
+#==============================================================================
+# ■ Game_Map — mirror a mid-battle battleback change to the guests
+#==============================================================================
+# change_battleback (event command 283, repainted live in-battle by script 180) runs
+# only on the host (troop events). While we're hosting a co-op battle, broadcast it so
+# every mute guest swaps to the same backdrop. The guest's apply (on_battle_back) goes
+# through the same method but never re-broadcasts (it isn't host_session).
+class Game_Map
+  alias bsmp_battle_change_battleback change_battleback
+  def change_battleback(battleback1_name, battleback2_name)
+    bsmp_battle_change_battleback(battleback1_name, battleback2_name)
+    if BSMP::Battle.host_session? and bsmp_network_running?
+      bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::BATTLE_BACK, 0,
+        "#{battleback1_name}\n#{battleback2_name}"))
+    end
+  end
+end
+
+#==============================================================================
+# ■ Game_Interpreter — mirror troop-event battle animations (Show Battle Animation)
+#==============================================================================
+# command_337 plays an animation on a troop enemy (BS2: @params = [enemy_index, anim_id]).
+# It's a troop event, so it ran only on the host — the phase-change magic-circle animations
+# never showed for guests. Reuse BATTLE_ANIM: the guest's on_battle_anim sets the same
+# enemy's animation_id. (Action animations already sync via show_normal_animation; this
+# covers the event-driven ones.)
+class Game_Interpreter
+  alias bsmp_anim_command_337 command_337
+  def command_337
+    bsmp_anim_command_337
+    return unless BSMP::Battle.host_session? and bsmp_network_running?
+    anim_id = @params[1].to_i
+    return if anim_id <= 0
+    idxs = []
+    iterate_enemy_index(@params[0]) { |e| idxs << e.index if e.alive? }
+    return if idxs.empty?
+    bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::BATTLE_ANIM, 0,
+      "#{anim_id};0;#{idxs.join(',')};"))
   end
 end
 

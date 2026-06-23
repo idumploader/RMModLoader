@@ -105,6 +105,29 @@ class Game_Interpreter
 
 end
 
+#==============================================================================
+# ■ Game_Party — broadcast world-unique covenant tokens (spirits)
+#==============================================================================
+# add_spirit is a Script call (CE817 on covenant level-up), not a ChangeItems command,
+# so the loot hooks above miss it. The token should reach every co-op player. Broadcast on
+# EVERY grant — not just a locally-new one: when the granter already owns the token the add
+# is a no-op here but the OTHER peer may still lack it, so it must hear about it. The
+# receiver's add_spirit is idempotent (no dup), and apply_fact's guard stops the echo. Never
+# rebroadcast while applying a received fact/snapshot, never offline.
+class Game_Party
+  # Guard: add_spirit is BS2's covenant system; in a game without it, aliasing a method
+  # that doesn't exist would raise at load and break this whole script. Skip cleanly.
+  if method_defined?(:add_spirit)
+    alias bsmp_orig_add_spirit add_spirit
+    def add_spirit(spirit_id)
+      bsmp_orig_add_spirit(spirit_id)
+      if not $bsmp_applying_fact and bsmp_network_running?
+        bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::SPIRIT_GAIN, 0, spirit_id.to_s))
+      end
+    end
+  end
+end
+
 end # if defined?(BSMP)
 
 end # not $imported["IDL-BSMP-Loot"]
