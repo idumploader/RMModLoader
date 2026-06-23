@@ -1,0 +1,40 @@
+#==============================================================================
+# ModMenuExample - a demo of registering entries into ModMenu (10).
+#
+# Rename to "950 - ModMenuExample.rb" (drop .disabled) to load it, then press
+# F10 in game. Shows every entry kind and how to wire actions to the existing
+# executor cheats. Safe template to copy from - delete once you've seen it work.
+#==============================================================================
+
+if Object.const_defined?(:ModLoader) && defined?(ModLoader::ModMenu)
+
+M = ModLoader::ModMenu
+
+#--- A "Settings" tab: persisted values (saved to nvram, restored next launch) ---
+M.header("Display",  :category => "Settings")
+M.toggle("Fullscreen flag", :category => "Settings",
+         :key => "example.fullscreen", :default => false)
+M.slider("UI scale", :category => "Settings",
+         :key => "example.ui_scale", :default => 100, :min => 50, :max => 200, :step => 10,
+         :format => proc { |v| "#{v}%" })
+M.choice("Language", :category => "Settings",
+         :key => "example.lang", :values => [:en, :ru, :jp],
+         :labels => ["English", "Russian", "Japanese"], :default => :en)
+
+#--- A "Cheats" tab: live actions wired to the executor command set (if present) ---
+if Object.const_defined?(:ExecutorEnvironment)
+  M.header("Party", :category => "Cheats")
+  M.action("Full heal", :category => "Cheats") { ExecutorEnvironment.heal }
+  M.action("Win battle", :category => "Cheats") { ExecutorEnvironment.win_battle }
+  M.slider("Gold (set)", :category => "Cheats",
+           :default => 0, :min => 0, :max => 999999, :step => 1000,
+           :on_change => proc { |v| ExecutorEnvironment.setsouls(v) })
+  # A toggle that drives live game state via get/set instead of persisting.
+  M.toggle("Noclip", :category => "Cheats",
+           :get => proc { $game_temp && $game_temp.exec_noclip_enabled },
+           :set => proc { |_on| ExecutorEnvironment.noclip })
+end
+
+puts "[ModMenuExample] entries registered - press F10 in game"
+
+end
