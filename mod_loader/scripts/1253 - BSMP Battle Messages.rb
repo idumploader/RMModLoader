@@ -344,6 +344,28 @@ class Window_Message < Window_Base
 end
 
 #==============================================================================
+# ■ M_SKIP — don't let CTRL message-skip bypass the co-op all-confirm barrier
+#==============================================================================
+# Script 238's message-skip sets @pause_skip while CTRL is held, which makes the message
+# processor skip input_pause ENTIRELY — so a gated battle dialogue gets blown past without
+# the barrier (no ack), desyncing the turn flow (the guest's command window never opened).
+# Suppress skip only while a gated co-op message (seq stamped) is active; normal messages
+# keep skip. Guarded so a game without script 238 just skips this.
+if defined?(M_SKIP)
+  module M_SKIP
+    class << self
+      alias bsmp_orig_seal seal
+      def seal
+        if $game_message and $game_message.bsmp_msg_seq and BSMP::BattleMsg.gated?
+          return false
+        end
+        bsmp_orig_seal
+      end
+    end
+  end
+end
+
+#==============================================================================
 # ■ Window_BattleLog — host mirrors every log mutation to the guests
 #==============================================================================
 # The action messages ("X strikes!", damage lines) are built only on the host (the mute
