@@ -1,40 +1,119 @@
 #==============================================================================
-# ModMenuExample - a demo of registering entries into ModMenu (10).
+# ModMenuExample - demo + in-game test bench for ModMenu (10) and I18n (11).
 #
 # Rename to "950 - ModMenuExample.rb" (drop .disabled) to load it, then press
-# F10 in game. Shows every entry kind and how to wire actions to the existing
-# executor cheats. Safe template to copy from - delete once you've seen it work.
+# F10 in game. Shows every entry kind, the gauge slider, the inline choice, and
+# a "Test" tab that runs an I18n self-test and a live translated-greeting demo
+# (switch Language in Settings, then Show greeting).
 #==============================================================================
 
-if Object.const_defined?(:ModLoader) && defined?(ModLoader::ModMenu)
+if Object.const_defined?(:ModLoader) && defined?(ModLoader::ModMenu) && defined?(ModLoader::I18n)
 
 M = ModLoader::ModMenu
 
-#--- A "Settings" tab: persisted values (saved to nvram, restored next launch) ---
+#--- demo translation strings + sample language files (only if missing) --------
+module ModMenuExample
+  T = ModLoader::I18n
+
+  def self.setup_demo_strings
+    T.define("example.greet", "Hello, traveler")
+
+    dir = ModLoader::I18n::DIR
+    Dir.mkdir(dir) unless Dir.exist?(dir)
+    write_lang(dir, "ru", '{ "example.greet" => "Привет, странник" }')
+    write_lang(dir, "jp", '{ "example.greet" => "Konnichiwa, tabibito" }')
+    T.reload
+  end
+
+  def self.write_lang(dir, lang, body)
+    path = File.join(dir, "#{lang}.rb")
+    return if File.exist?(path)   # never clobber a translator's edits
+    File.open(path, "w:UTF-8") { |f| f.write(body) }
+  end
+
+  #--- I18n store self-test (runs in-game, reports via msgbox + log) -----------
+  def self.run_i18n_selftest
+    t = ModLoader::I18n
+    results = []
+    check = lambda { |name, cond| results.push([name, cond]) }
+
+    saved_lang = t.language
+    dir  = ModLoader::I18n::DIR
+    path = File.join(dir, "zz.rb")
+    Dir.mkdir(dir) unless Dir.exist?(dir)
+
+    t.define("selftest.hello", "Hello")
+    t.define("selftest.bye",   "Bye")
+
+    begin
+      t.language = ModLoader::I18n::DEFAULT_LANG
+      check.call("default lookup",            t["selftest.hello"] == "Hello")
+      check.call("missing key -> key",        t["selftest.nope"]  == "selftest.nope")
+
+      File.open(path, "w:UTF-8") { |f| f.write('{ "selftest.hello" => "Привет" }') }
+      t.reload
+      t.language = :zz
+      check.call("translated (utf-8)",        t["selftest.hello"] == "Привет")
+      check.call("untranslated -> default",   t["selftest.bye"]   == "Bye")
+      check.call("language persisted",        ModLoader.nvram[:language] == :zz)
+
+      t.dump_template(:zz); t.reload; t.language = :zz
+      check.call("template keeps translation", t["selftest.hello"] == "Привет")
+      check.call("template adds missing key",  t["selftest.bye"]   == "Bye")
+
+      File.open(path, "w:UTF-8") { |f| f.write("{ this is : not ruby") }
+      t.reload; t.language = :zz
+      check.call("corrupt file -> defaults",   t["selftest.hello"] == "Hello")
+    ensure
+      File.delete(path) if File.exist?(path)
+      t.reload
+      t.language = saved_lang
+    end
+
+    passed = results.count { |_n, c| c }
+    body = results.map { |n, c| "#{c ? 'OK  ' : 'FAIL'}  #{n}" }.join("\n")
+    summary = "I18n self-test: #{passed}/#{results.size} passed\n\n#{body}"
+    puts summary
+    msgbox(summary)
+  end
+end
+
+ModMenuExample.setup_demo_strings
+
+#--- Settings tab: persisted values + live language switch --------------------
 M.header("Display",  :category => "Settings")
 M.toggle("Fullscreen flag", :category => "Settings",
          :key => "example.fullscreen", :default => false)
 M.slider("UI scale", :category => "Settings",
          :key => "example.ui_scale", :default => 100, :min => 50, :max => 200, :step => 10,
-         :format => proc { |v| "#{v}%" })
+         :format => proc { |v| "#{v}%" },
+         :gauge => [18, 10])   # palette indices -> green gradient (like HP)
 M.choice("Language", :category => "Settings",
-         :key => "example.lang", :values => [:en, :ru, :jp],
-         :labels => ["English", "Russian", "Japanese"], :default => :en)
+         :values => [:en, :ru, :jp], :labels => ["English", "Russian", "Japanese"],
+         :get => proc { ModLoader::I18n.language },
+         :set => proc { |v| ModLoader::I18n.language = v })
 
-#--- A "Cheats" tab: live actions wired to the executor command set (if present) ---
+#--- Test tab: exercise the I18n store + a live translated greeting -----------
+M.header("I18n", :category => "Test")
+M.action("Run I18n self-test", :category => "Test") { ModMenuExample.run_i18n_selftest }
+M.action("Show greeting (current lang)", :category => "Test") do
+  msgbox(ModLoader::I18n["example.greet"])
+end
+
+#--- Cheats tab: live actions wired to the executor command set (if present) --
 if Object.const_defined?(:ExecutorEnvironment)
   M.header("Party", :category => "Cheats")
   M.action("Full heal", :category => "Cheats") { ExecutorEnvironment.heal }
   M.action("Win battle", :category => "Cheats") { ExecutorEnvironment.win_battle }
   M.slider("Gold (set)", :category => "Cheats",
            :default => 0, :min => 0, :max => 999999, :step => 1000,
+           :gauge => [14, 6],   # gold-ish gradient
            :on_change => proc { |v| ExecutorEnvironment.setsouls(v) })
-  # A toggle that drives live game state via get/set instead of persisting.
   M.toggle("Noclip", :category => "Cheats",
            :get => proc { $game_temp && $game_temp.exec_noclip_enabled },
            :set => proc { |_on| ExecutorEnvironment.noclip })
 end
 
-puts "[ModMenuExample] entries registered - press F10 in game"
+puts "[ModMenuExample] registered - F10 in game; see the Test tab"
 
 end
