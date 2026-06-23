@@ -220,6 +220,17 @@ module BSMP
       404 => [12],           # Boss: Frog
     }
 
+    # --- Consensus gate on irreversible dialogue choices ---
+    # A Show Choices whose chosen option (after stripping \c[n] colour codes, matched
+    # case-insensitively and EXACTLY — not as a substring) equals one of these words is
+    # treated as a point of no return (an NPC kill). The acting player parks at a ready
+    # gate until EVERY player has reached the SAME choice and confirmed it; a holdout
+    # never arrives -> no kill, and the actor can press cancel (B) to back out. Exact
+    # match keeps "Не убивать" / "Убить монстра" from tripping it; add wordings here as
+    # found. Trailing punctuation (?, !, .) is ignored, so "Изнасиловать?" matches too.
+    # Empty disables the feature. Kill (杀害) and rape/imprison (监禁) are both permanent.
+    CHOICE_GATE_WORDS = ["убить", "убийство", "изнасиловать", "杀害", "杀", "kill"]
+
     # --- Host-driven mobs (step 4) ---
     # The host re-broadcasts the positions of all moving events on its current map
     # every this many frames; guests on that map glide their copies to match. Small

@@ -194,8 +194,11 @@ class Game_Interpreter
   # at once (the event just continues). gate_id must be identical on every peer for
   # the SAME gate — the default (map:event) is, since it's the same event on each
   # peer's copy of the map. Cancel button = back out (the event exits, no payoff).
+  # Returns true if consensus was reached (run the rest of the page) or there was no
+  # gate to wait on (solo / lost session); false if the player cancelled (the event was
+  # already aborted via command_115, so the caller must not run the gated payload).
   def bsmp_ready_gate(gate_id = nil)
-    return unless bsmp_network_running?  # solo: no gate, run the rest of the page
+    return true unless bsmp_network_running?  # solo: no gate, run the rest of the page
     gate_id = (gate_id || "#{@map_id}:#{@event_id}").to_s
     BSMP::ReadyGate.clear(gate_id)
     BSMP::ReadyGate.signal(gate_id)
@@ -203,7 +206,7 @@ class Game_Interpreter
     loop do
       unless bsmp_network_running?  # lost the session mid-wait -> proceed (now solo)
         win.dispose
-        return
+        return true
       end
       win.text     = BSMP::ReadyGate.text(gate_id)
       win.progress = BSMP::ReadyGate.ratio(gate_id)
@@ -213,13 +216,14 @@ class Game_Interpreter
         BSMP::ReadyGate.cancel(gate_id)
         win.dispose
         command_115
-        return
+        return false
       end
       Fiber.yield
     end
     win.dispose
     BSMP::ReadyGate.mark_completed(gate_id)  # consensus reached: don't re-fire this wall
     BSMP::ReadyGate.clear(gate_id)
+    true
   end
 
   # --- auto-gate configured events (no map editing) ---------------------------
@@ -232,6 +236,7 @@ class Game_Interpreter
   def setup(*args)
     bsmp_gate_setup(*args)
     @bsmp_gate_id = nil
+    @bsmp_kill_gated = false  # re-arm the kill-choice consensus gate for this event run
     ev = args[1].to_i
     return unless ev > 0 and $game_map
     gid = BSMP.ready_gate_id(@map_id, ev)
@@ -255,6 +260,61 @@ class Game_Interpreter
       bsmp_ready_gate(gid)
     end
     bsmp_gate_run
+  end
+end
+
+#==============================================================================
+# ■ Game_Interpreter — consensus gate on an irreversible removal choice
+#==============================================================================
+# Killing/imprisoning a covenant NPC is permanent shared world state (the 杀害/监禁
+# switches remove them for everyone). So one player shouldn't do it alone. We gate on the
+# SELECTED option (command_402 "When [choice]"), NOT on the menu appearing — a mixed menu
+# like ["Ничего не делать", "Изнасиловать", "Убить"] must only gate when the player
+# actually picks a removal option, never on "do nothing". The acting player parks at a
+# ready gate until EVERY player has reached the SAME NPC and picked the SAME deed; a
+# holdout never arrives -> no removal, and the actor can cancel (B) to back out. The gate
+# is keyed by the chosen deed (c<index> of Config::CHOICE_GATE_WORDS) so kill vs imprison
+# need separate consensus. No new packets/UI — reuses bsmp_ready_gate; the co-op battle
+# that follows is deduped by host authority, then transfer-follow pulls everyone to the
+# scene. Dissent is passive (not coming = veto); fine for a rare, momentous action.
+class Game_Interpreter
+  alias bsmp_killgate_command_402 command_402
+  def command_402
+    # @branch[@indent] == @params[0] => this is the SELECTED When-branch (stock's own
+    # test); @params[1] is its choice text. Only the picked option can open the gate.
+    if not @bsmp_kill_gated and bsmp_network_running? and @branch[@indent] == @params[0]
+      key = bsmp_gate_choice_key(@params[1])
+      if key
+        @bsmp_kill_gated = true
+        # False = cancelled; bsmp_ready_gate already aborted the event (command_115),
+        # so don't run the picked branch's body (the kill/imprison sequence).
+        return unless bsmp_ready_gate("#{@map_id}:#{@event_id}:#{key}")
+      end
+    end
+    bsmp_killgate_command_402
+  end
+
+  # ASCII gate key "c<index>" for a choice text matching Config::CHOICE_GATE_WORDS (exact,
+  # colour codes + trailing punctuation stripped), or nil. The index keeps the wire key
+  # ASCII (no Cyrillic/CJK in packet gate-ids) and distinguishes deeds; identical choice
+  # text on every peer's copy of the data yields the same index, so the gate aligns.
+  # Normalise a choice's text for matching: drop escape codes (\c[2] / \\c[2], 1+
+  # backslashes), any stray backslashes, trim, downcase, strip trailing punctuation.
+  # Ruby 1.9.2 String#downcase is ASCII-only (won't lower "Изнасиловать"->"изнасиловать"),
+  # so fold Cyrillic ourselves with tr before the ASCII downcase. Keep CHOICE_GATE_WORDS
+  # lowercase.
+  CYR_UP = "АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ"
+  CYR_LO = "абвгдеёжзийклмнопрстуфхцчшщъыьэюя"
+  def bsmp_choice_clean(text)
+    text.to_s.gsub(/\\+[A-Za-z]\[\d+\]/, "").gsub(/\\+/, "").strip.
+      tr(CYR_UP, CYR_LO).downcase.sub(/[?!.。！？…]+\z/, "")
+  end
+
+  def bsmp_gate_choice_key(text)
+    words = BSMP::Config::CHOICE_GATE_WORDS
+    return nil if words.nil? or words.empty?
+    i = words.index(bsmp_choice_clean(text))
+    i ? "c#{i}" : nil
   end
 end
 
