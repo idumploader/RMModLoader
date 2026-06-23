@@ -37,7 +37,28 @@ module BSMP
       { :get => getter(field), :set => setter(field) }
     end
 
+    # Start hosting with the current lobby settings (dropping any client link
+    # first, like the make_server console command). create_lobby is async — the
+    # status plate flips to HOST once Steam confirms the lobby.
+    def self.host!
+      return unless $bsmp_server
+      $bsmp_client.leave_lobby if $bsmp_client and $bsmp_client.connected?
+      $bsmp_server.create_lobby(BSMP.settings.lobby_type, BSMP.settings.max_players)
+    end
+
+    # Leave the session: a host stops its server (the only way out for the host),
+    # a guest leaves the lobby. Both clear their roster/sprites.
+    def self.leave!
+      $bsmp_server.leave_lobby if $bsmp_server and $bsmp_server.running?
+      $bsmp_client.leave_lobby if $bsmp_client and $bsmp_client.connected?
+    end
+
     def self.install
+      #--- Session ------------------------------------------------------------
+      M.header("Session", :category => CAT)
+      M.action("Host lobby", :category => CAT, :close_after => true) { host! }
+      M.action("Leave session", :category => CAT, :close_after => true) { leave! }
+
       #--- Lobby --------------------------------------------------------------
       M.header("Lobby", :category => CAT)
       M.choice("Visibility", bind(:lobby_type).merge(
