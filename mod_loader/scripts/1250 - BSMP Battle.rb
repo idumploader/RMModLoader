@@ -489,6 +489,20 @@ module BSMP
       $game_map.change_battleback(bb1.to_s, bb2.to_s)
     end
 
+    # The peer that ran a co-op battle event did a post-battle TransferPlayer (IfWin —
+    # boss victory warp, or a kill that moves to another map). We were a mute client and
+    # never ran that branch, so we'd be left behind. Reserve the SAME transfer; it
+    # performs once we're back on our map (reserve_transfer is just ivars, safe to set
+    # even while still in the mute battle scene). dir 0 = keep facing (stock semantics).
+    # This isn't command_201, so it never re-broadcasts — no echo.
+    def self.on_story_transfer(packet)
+      return unless bsmp_network_running?
+      map_id, x, y, dir = packet.data.to_s.split(';').map { |s| s.to_i }
+      return if map_id <= 0
+      $game_player.reserve_transfer(map_id, x, y, dir)
+    end
+
+    HANDLERS[STORY_TRANSFER] = method(:on_story_transfer)
     HANDLERS[BATTLE_BACK]   = method(:on_battle_back)
     HANDLERS[BATTLE_START]  = method(:on_battle_start)
     HANDLERS[BATTLE_END]    = method(:on_battle_end)
@@ -891,9 +905,14 @@ class Game_Interpreter
   alias bsmp_battle_command_301 command_301
   def command_301
     return bsmp_battle_command_301 if not bsmp_network_running?
-    return bsmp_battle_command_301 if BSMP.host?
+    if BSMP.host?
+      bsmp_battle_command_301      # runs the co-op battle; returns once it's over
+      bsmp_arm_post_battle_xfer    # so the IfWin TransferPlayer mirrors to the others
+      return
+    end
     return if $game_party.in_battle
-    bsmp_battle_request_remote
+    bsmp_battle_request_remote     # parks until the host's battle ends, then resumes
+    bsmp_arm_post_battle_xfer
   end
 
   def bsmp_battle_request_remote
@@ -1001,6 +1020,57 @@ class Game_Interpreter
     return if idxs.empty?
     bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::BATTLE_ANIM, 0,
       "#{anim_id};0;#{idxs.join(',')};"))
+  end
+end
+
+#==============================================================================
+# ■ Game_Interpreter — pull the party along on a post-battle story transfer
+#==============================================================================
+# A co-op battle event's IfWin branch often warps the player (boss arena exit, or a
+# kill that moves to another map). That branch runs only in the interpreter of the peer
+# who ran the battle (the host on a host-touched fight, the requester on a guest-touched
+# one) — the others were mute clients and stayed put. We arm a one-shot marker right
+# after the battle returns (command_301 above) and mirror the very next TransferPlayer
+# in that same event to the other peers (STORY_TRANSFER -> reserve_transfer).
+class Game_Interpreter
+  # Fresh event run: drop any stale marker. The post-battle 301 re-arms within the run,
+  # so this only clears a marker left over from an IfWin that DIDN'T transfer (belt and
+  # suspenders alongside the one-shot consume + @event_id guard in command_201).
+  alias bsmp_xfer_setup setup
+  def setup(list, event_id = 0)
+    @bsmp_post_battle_xfer = false
+    bsmp_xfer_setup(list, event_id)
+  end
+
+  def bsmp_arm_post_battle_xfer
+    return unless bsmp_network_running?
+    @bsmp_post_battle_xfer  = true
+    @bsmp_post_battle_event = @event_id
+  end
+
+  # Broadcast the resolved transfer when (and only when) this interpreter just ran a
+  # co-op battle and is still in that same event. Normal map-edge walking transfers are
+  # unrelated events — never armed — so they stay personal. One-shot: consumed here so a
+  # switch-only IfWin can't leave the marker live for a later transfer in the same event.
+  alias bsmp_xfer_command_201 command_201
+  def command_201
+    if @bsmp_post_battle_xfer and @event_id == @bsmp_post_battle_event and
+       bsmp_network_running?
+      @bsmp_post_battle_xfer = false
+      if @params[0] == 0
+        map_id, x, y = @params[1], @params[2], @params[3]
+      else
+        map_id = $game_variables[@params[1]]
+        x      = $game_variables[@params[2]]
+        y      = $game_variables[@params[3]]
+      end
+      dir = @params[4].to_i
+      if map_id.to_i > 0
+        bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::STORY_TRANSFER, 0,
+          "#{map_id};#{x};#{y};#{dir}"))
+      end
+    end
+    bsmp_xfer_command_201
   end
 end
 

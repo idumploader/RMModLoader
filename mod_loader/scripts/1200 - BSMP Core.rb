@@ -102,7 +102,14 @@ module BSMP
     # facts. self-switches are ALWAYS shared (no list). Start empty and grow as the
     # real flags are identified. Ranges are inclusive Ruby Ranges.
     SHARED_SWITCH_RANGES   = []
-    SHARED_SWITCH_IDS      = []
+    SHARED_SWITCH_IDS      = [
+      531,  # Evanora story/death flag: set ON by the kill (Map242 "imprison",
+            #   Map287 death cutscene), gates her covenant/oath dialogue (CE895/896/909).
+            #   Only written at story beats (kill + swear), so live-sharing is cheap and
+            #   keeps her killed/sworn state consistent even if a peer never ran the scene.
+            #   (532/534 stay personal — transient sequencing flags the kill scene resets
+            #   locally on each peer; add other NPCs' death flags here as identified.)
+    ]
     SHARED_VARIABLE_RANGES = []
     # Covenant rank (world progress): leveling at the covenant NPC (CE909) does
     # var += 1 after paying souls. Sharing the rank var syncs the rank to everyone
@@ -744,6 +751,13 @@ module BSMP
     # run only on the host, so a phase-change backdrop swap never reached guests. The host
     # mirrors it; the guest applies the same battleback. data = "bb1<US>bb2" (file names).
     BATTLE_BACK         = 53
+
+    # Story transfer-follow: a co-op battle's aftermath (IfWin TransferPlayer, e.g. boss
+    # victory or a kill that moves to another map) runs only in the interpreter of the
+    # peer that ran the battle event — the others, pulled in as mute clients, never run
+    # that branch and so stayed behind. That peer broadcasts the resolved transfer; every
+    # other peer reserves the SAME one so the party moves together. data = "map;x;y;dir".
+    STORY_TRANSFER      = 54
 
     # Host-driven mobs: the host's periodic position broadcast for every moving
     # event on its current map. data = "map_id;id,x,y,dir;id,x,y,dir;...". Guests on
