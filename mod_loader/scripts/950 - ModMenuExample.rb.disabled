@@ -99,6 +99,11 @@ M.action("Run I18n self-test", :category => "Test") { ModMenuExample.run_i18n_se
 M.action("Show greeting (current lang)", :category => "Test") do
   msgbox(ModLoader::I18n["example.greet"])
 end
+M.action("Dump translation templates", :category => "Test") do
+  langs = ModLoader::I18n.available | [:ru, :jp]   # refresh existing + ensure ru/jp
+  paths = langs.map { |l| ModLoader::I18n.dump_template(l) }
+  msgbox("Templates refreshed (all registered keys):\n\n" + paths.join("\n"))
+end
 
 #--- Cheats tab: live actions wired to the executor command set (if present) --
 if Object.const_defined?(:ExecutorEnvironment)
