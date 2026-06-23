@@ -40,11 +40,19 @@ module BSMP
     BARRIER_TIMEOUT = 720
 
     class << self
+      # result_phase (host): we're inside process_victory/defeat/escape, so mirror those
+      # system messages too (they don't go through command_101). suppress_local (guest):
+      # we're replaying the result for control flow only — drop its local $game_message
+      # lines, since the host already mirrored them during the mute battle.
+      attr_accessor :result_phase, :suppress_local
+
       def reset
         @seq      = 0     # host: monotonic dialogue id
         @acks     = {}    # host: seq => [player_id, ...] that dismissed it
         @closed   = {}    # everyone: seq => true once the gate opened
         @pending  = []    # guest: received shows not yet applied (window was busy)
+        @result_phase   = false
+        @suppress_local = false
       end
 
       # True while we should be syncing/gating battle messages: networked and inside a
@@ -256,6 +264,14 @@ class Game_Message
     bsmp_msg_clear
     @bsmp_msg_seq = nil
   end
+
+  # While the guest replays the battle result for control flow only (client_battle_return),
+  # drop its locally-generated lines — the host already mirrored them with the barrier.
+  alias bsmp_msg_add add
+  def add(text)
+    return if defined?(BSMP::BattleMsg) and BSMP::BattleMsg.suppress_local
+    bsmp_msg_add(text)
+  end
 end
 
 #==============================================================================
@@ -293,7 +309,12 @@ class Window_Message < Window_Base
   alias bsmp_msg_update_fiber update_fiber
   def update_fiber
     if @fiber.nil? and !$game_message.scroll_mode
-      if BSMP::BattleMsg.host_broadcasting? and $game_temp.bsmp_dialogue_pending and $game_message.busy?
+      # Mirror a starting host message when it's a troop dialogue (command_101 flagged it)
+      # OR a result-phase system message (victory/defeat lines — they bypass command_101).
+      # Emerge is NOT mirrored: it's shown locally on the guest (different code path), so
+      # mirroring it too would double it.
+      if BSMP::BattleMsg.host_broadcasting? and $game_message.busy? and
+         ($game_temp.bsmp_dialogue_pending or BSMP::BattleMsg.result_phase)
         $game_temp.bsmp_dialogue_pending = false
         BSMP::BattleMsg.broadcast_show
       elsif BSMP::Battle.client_session? and !$game_message.busy?
@@ -396,6 +417,24 @@ module BattleManager
     def init_members
       bsmp_msg_init_members
       BSMP::BattleMsg.reset
+    end
+
+    # The result messages (victory / defeat / escape) go straight to $game_message, not
+    # through command_101, so flag the result phase: while it's set, the host mirrors those
+    # messages to the guests (update_fiber) with the all-confirm barrier, so everyone sees
+    # the SAME "X were victorious / NNNG / item" text at the SAME time. Host-only (the guest
+    # runs these post-BATTLE_END with suppress_local instead). Reset is guaranteed.
+    [:process_victory, :process_defeat, :process_escape].each do |m|
+      orig = :"bsmp_rp_#{m}"
+      alias_method orig, m
+      define_method(m) do
+        BSMP::BattleMsg.result_phase = true if BSMP::BattleMsg.host_broadcasting?
+        begin
+          send(orig)
+        ensure
+          BSMP::BattleMsg.result_phase = false
+        end
+      end
     end
   end
 end

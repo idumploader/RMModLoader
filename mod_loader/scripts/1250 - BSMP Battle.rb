@@ -237,11 +237,20 @@ module BSMP
 
       # Client: Process battle end, e.g. from BATTLE_END from host or watchdog abort
       def client_battle_return
-        # Call methods like game, when result is known
-        if not @result.nil?
-            return BattleManager.process_victory if @result == 0
-            return BattleManager.process_abort   if @result == 1
-            return BattleManager.process_defeat  if @result == 2
+        # The host already showed (and mirrored, with the all-confirm barrier) the
+        # victory/defeat messages while we were in the mute battle. Run the result for its
+        # control flow only — suppress its $game_message lines so they don't appear a second
+        # time now, after BATTLE_END. The flag is tight (just this call) and always reset.
+        BSMP::BattleMsg.suppress_local = true if defined?(BSMP::BattleMsg)
+        begin
+          # Call methods like game, when result is known
+          if not @result.nil?
+              return BattleManager.process_victory if @result == 0
+              return BattleManager.process_abort   if @result == 1
+              return BattleManager.process_defeat  if @result == 2
+          end
+        ensure
+          BSMP::BattleMsg.suppress_local = false if defined?(BSMP::BattleMsg)
         end
         # Emergency abort the battle if result unset (host disconnected / watchdog abort)
         SceneManager.return
@@ -612,14 +621,19 @@ class Scene_Battle
     bsmp_battle_scene_execute_action
   end
 
-  # Mute client: skip the emerge messages / ATB charge loop / command selection that
-  # the real battle_start runs. Just initialise the battlers so the troop renders;
-  # the host drives everything else.
+  # Mute client: skip the ATB charge loop / command selection that the real battle_start
+  # runs. Just initialise the battlers so the troop renders; the host drives everything
+  # else. We DO show the emerge banner ("X appeared") locally — the troop is identical, so
+  # the text matches the host's, and the mute scene's message window displays + dismisses
+  # it (no barrier; it's a battle-start flash, not a host-driven dialogue).
   alias bsmp_battle_scene_battle_start battle_start
   def battle_start
     if BSMP::Battle.client_session?
       $game_party.on_battle_start
       $game_troop.on_battle_start
+      $game_troop.enemy_names.each do |name|
+        $game_message.add(sprintf(Vocab::Emerge, name))
+      end
       # The battle status window (the combined-party HUD: rows + HP/MP/AP) is created
       # CLOSED (openness 0) and normally opened in start_party_command_selection — which
       # the mute client never reaches, so it stayed invisible. Open it here. refresh_status
@@ -692,6 +706,10 @@ module BattleManager
 
     alias bsmp_battle_gain_drop_items gain_drop_items
     def gain_drop_items
+      # Drops roll rand, so they're host-authoritative and can't be derived on the guest.
+      # The host grants + shows the "obtained X" lines + broadcasts each item; guests get
+      # them via LOOT_GAIN (which fires the BS2 item popup, script 134). Guest victory
+      # screen shows the items as popups rather than message lines — content still arrives.
       return unless BSMP.host? or not bsmp_network_running?
       items = $game_troop.make_drop_items
       items.each do |item|
