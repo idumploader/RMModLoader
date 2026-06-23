@@ -10,7 +10,8 @@
 #   1240 Hooks   — game-class patches, $bsmp_* globals, console commands
 #
 # Dependencies: Steam runtime (SteamAPI, SteamCCallResult, SteamCCallback,
-#               BasicNetworkPacket), MLLocalizedStrings (100).
+#               BasicNetworkPacket). Optional: ModLoader::I18n (11) for
+#               translatable on-screen strings (see 1201 BSMP I18n).
 # Gate: module BSMP is only defined when SteamAPI exists; every later file loads
 #       its body only `if defined?(BSMP)`, so one Steam check gates them all.
 #==============================================================================
@@ -82,9 +83,14 @@ module BSMP
     DEFAULT_SERVER_CHANNEL_ID = 0
     DEFAULT_SERVER_CLIENT_ID = 1
 
-    # Steam ELobbyType (as the native create_lobby binding expects it). Default lobby
-    # visibility when hosting; Settings.lobby_type defaults to this.
-    LOBBY_ONLY_FRIENDS = 10
+    # Steam ELobbyType (cast straight to ELobbyType by the native create_lobby
+    # binding and handed to CreateLobby). Default visibility when hosting;
+    # Settings.lobby_type defaults to LOBBY_ONLY_FRIENDS.
+    LOBBY_PRIVATE      = 0   # invite-only, never listed
+    LOBBY_FRIENDS_ONLY = 1   # friends/invitees see it; not in the public list
+    LOBBY_PUBLIC       = 2   # friends + public lobby list
+    LOBBY_INVISIBLE    = 3   # search-only, hidden from friends
+    LOBBY_ONLY_FRIENDS = LOBBY_FRIENDS_ONLY   # was a stray 10 (out-of-range enum)
 
     LOBBY_CHAT_UPDATE_JOINED = 1
 
@@ -311,6 +317,18 @@ module BSMP
 
     def initialize
       @data = open_backing
+      sanitize
+    end
+
+    # Repair values an older build may have persisted out of range, so a stale
+    # NVRAM section can't carry a bad value forward. Currently: the stray
+    # lobby_type 10 that predated the ELobbyType fix (valid range 0..3). Edits the
+    # working copy only; the next #commit (e.g. a menu change) flushes the repair.
+    def sanitize
+      lt = @data[:lobby_type]
+      unless lt.is_a?(Integer) and lt >= Config::LOBBY_PRIVATE and lt <= Config::LOBBY_INVISIBLE
+        @data[:lobby_type] = DEFAULTS[:lobby_type]
+      end
     end
 
     # NVRAM section (persisted, defaults fill missing keys) when the store exists,
