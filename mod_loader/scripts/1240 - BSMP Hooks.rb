@@ -279,6 +279,13 @@ class Game_Player
     last_moving = moving?
     bsmp_orig_update
     send_pos_packet if last_moving and not moving?
+    # Just arrived on a new map: announce our (now settled) position so peers already
+    # here see us at once, even if we never take a step. Game_Map#setup runs BEFORE
+    # the transfer's moveto, so its coords are stale — do it here, post-transfer.
+    if bsmp_network_running? and $game_map and @bsmp_last_map != $game_map.map_id
+      @bsmp_last_map = $game_map.map_id
+      send_pos_packet
+    end
     if @last_real_move_speed != real_move_speed
       @last_real_move_speed = real_move_speed
       send_speed_packet

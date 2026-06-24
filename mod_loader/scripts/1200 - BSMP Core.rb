@@ -532,15 +532,30 @@ module BSMP
       BSMP::World.handle_player_leaved(packet.from_id)
     end
 
+    # True when we're on a real map and this peer is on a DIFFERENT real map, so its
+    # movement must NOT be simulated against our geometry: network_move/network_moveto
+    # run on $game_map (passability, width-wrap), so applying an off-map peer's steps
+    # here corrupts its stored position — it reappears "standing in the wrong spot"
+    # when we follow it over. With either side still map-less (title/load, map_id 0)
+    # we apply, so a joiner's initial position isn't dropped.
+    def self.peer_elsewhere?(from_id)
+      pl = $bsmp_players[from_id]
+      return false if pl.nil? or $game_map.nil? or $game_map.map_id == 0 or pl.map_id == 0
+      pl.map_id != $game_map.map_id
+    end
+
     def self.on_player_moved(packet)
       return if not SceneManager.scene_is?(Scene_Map) # needs a loaded map (round_x_with_direction)
+      return if peer_elsewhere?(packet.from_id)
       dir = packet.data.to_i
       $bsmp_players.move_player_straight(packet.from_id, dir)
     end
 
     def self.on_player_changed_pos(packet)
-      # No scene guard: positioning is plain data (moveto, no $game_map). Dropping it
-      # off-map would lose a joiner's initial position until they next move.
+      # No scene guard: positioning is plain data (network_moveto handles the no-map
+      # case), so a joiner's initial position isn't dropped off-map. But skip a peer
+      # on a DIFFERENT map — moveto would wrap its coords to our width and misplace it.
+      return if peer_elsewhere?(packet.from_id)
       pos = packet.data.split(';')
       $bsmp_players.player_moveto(packet.from_id, pos[0].to_i, pos[1].to_i)
     end
@@ -575,10 +590,15 @@ module BSMP
       BSMP.debug_log { "Player #{packet.from_id} moved to map #{map} (#{loc})" }
       $bsmp_players.set_player_map(packet.from_id, map)
       $bsmp_players.set_player_location(packet.from_id, loc.to_s)
+      # A peer just arrived on OUR map — re-announce our position so it places us at
+      # once, even while we stand still (else we're invisible / offset to it until our
+      # next move sends a fresh anchor).
+      $game_player.send_pos_packet if $game_player and $game_map and map == $game_map.map_id
     end
 
     def self.on_player_moved_diag(packet)
       return if not SceneManager.scene_is?(Scene_Map)
+      return if peer_elsewhere?(packet.from_id)
       horz, vert = packet.data.split(';')
 
       $bsmp_players.move_player_diagonal(packet.from_id, horz.to_i, vert.to_i)
