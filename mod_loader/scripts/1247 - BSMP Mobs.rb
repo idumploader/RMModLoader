@@ -209,7 +209,16 @@ class Game_Event < Game_Character
   # hostiles, so a non-owner should be able to pick them up / talk to them.
   alias bsmp_orig_trigger_in? trigger_in?
   def trigger_in?(triggers)
-    return bsmp_orig_trigger_in?(triggers) if BSMP::World.map_owner_here?
+    if BSMP::World.map_owner_here?
+      # While the owner is sweeping touch events at a REMOTE player's tile (co-op mob
+      # battles, see bsmp_check_touch_event), only a mob may fire — a door / NPC /
+      # other player-touch event there must NOT trigger on the owner just because a
+      # guest stepped on it (it would, e.g., transfer the owner through the guest's door).
+      if $game_player and $game_player.bsmp_remote_touch? and not (@symbol_encount || @bsmp_is_mob)
+        return false
+      end
+      return bsmp_orig_trigger_in?(triggers)
+    end
     return bsmp_orig_trigger_in?(triggers) unless @symbol_encount || @bsmp_is_mob
     false
   end
@@ -226,12 +235,23 @@ class Game_Player
     bsmp_check_touch_event if BSMP::World.map_owner_here?
   end
 
-  # Check if some client touched trigger=2 event (usually mob)
+  # True only during the sweep below, so trigger_in? can fire mobs but suppress
+  # doors/NPCs for a REMOTE player's tile (they'd otherwise run on the owner).
+  def bsmp_remote_touch?
+    @bsmp_remote_touch
+  end
+
+  # Check if some client touched a mob (trigger=2 hostile) on this map. The flag
+  # restricts the stock touch-check to mobs only (see trigger_in? above), so a
+  # guest stepping on a door / NPC tile doesn't trigger it on the owner.
   def bsmp_check_touch_event
+    @bsmp_remote_touch = true
     $bsmp_players.bsmp_players.each_value do |pl|
       next if pl.map_id != $game_map.map_id
       check_event_trigger_touch(pl.x, pl.y)
     end
+  ensure
+    @bsmp_remote_touch = false
   end
 end
 
