@@ -99,6 +99,8 @@ module BSMP
       M.header("Diagnostics", :category => CAT)
       M.toggle("Debug log", bind(:debug).merge(:category => CAT))
       M.toggle("Packet trace", bind(:debug_packets).merge(:category => CAT))
+      M.toggle("Log to file", bind(:log_to_file).merge(:category => CAT))
+      M.action("Mark log (bug here)", :category => CAT) { BSMP.mark_log("from menu") }
 
       # Language lives in the loader's own "General" tab (12 - ModMenuDefaults),
       # not here — it's a global ModLoader setting, not a co-op one.

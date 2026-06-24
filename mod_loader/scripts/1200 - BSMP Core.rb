@@ -298,6 +298,8 @@ module BSMP
       :roster_mode     => :hold,                       # :hold (show while held) or :toggle (press to flip)
       :debug           => false,                      # runtime diagnostic logging (BSMP.log / debug_log)
       :debug_packets   => false,                      # per-packet wire trace firehose (independent of :debug)
+      :log_to_file     => false,                      # also write the log to mod_loader/bsmp-log.txt (survives a long session)
+      :log_mark_key    => ModLoader::Keyboard::F7,    # hotkey: drop a context-stamped marker into the log ("bug here")
       # Co-op battle heartbeat watchdog: frames (~60/s) a mute guest waits without ANY
       # host battle state before assuming the host left its battle (missed BATTLE_END,
       # e.g. across an F12 reset) and bailing to the map. 0 disables it. Generous by
@@ -395,23 +397,89 @@ module BSMP
   def self.roster_shown=(value); @roster_shown = value;   end
 
   # Runtime diagnostic log, off by default. Flip BSMP.settings.debug = true (e.g. on
-  # both machines) to trace behaviour over the wire, then read the console.
+  # both machines) to trace behaviour over the wire and read the console; flip
+  # :log_to_file to also persist it to mod_loader/bsmp-log.txt (survives a long
+  # session, where the console scrollback wouldn't). Either flag emits.
   def self.log(msg)
+    return unless settings.debug or settings.log_to_file
     p "[BSMP] #{msg}" if settings.debug
+    file_log(msg)
   end
 
-  # Lazy variant: the block is evaluated ONLY when debug is on, so a (frequently
-  # interpolated, sometimes bursty) message string is never built in the hot path
-  # when logging is off. Prefer over `log("...#{x}...") if settings.debug` — that
-  # form still builds the string every call because Ruby evaluates args first.
+  # Lazy variant: the block is evaluated ONLY when something wants it, so a (frequently
+  # interpolated, sometimes bursty) message string is never built in the hot path when
+  # logging is off. Prefer over `log("...#{x}...") if settings.debug` — that form
+  # still builds the string every call because Ruby evaluates args first.
   def self.debug_log
-    p "[BSMP] #{yield}" if settings.debug
+    return unless settings.debug or settings.log_to_file
+    s = yield
+    p "[BSMP] #{s}" if settings.debug
+    file_log(s)
   end
 
   # Per-packet wire firehose, behind its own flag so plain :debug stays readable.
-  # Fires on every packet (movement spam included) — keep block-form and opt-in.
+  # Fires on every packet (movement spam included) — keep block-form and opt-in. Goes
+  # to the file too (only) when both its flag and :log_to_file are on.
   def self.debug_packet_log
-    p "[BSMP] #{yield}" if settings.debug_packets
+    return unless settings.debug_packets
+    s = yield
+    p "[BSMP] #{s}"
+    file_log(s)
+  end
+
+  # --- file log sink (opt-in via :log_to_file) ------------------------------
+  LOG_MAX_BYTES = 8_000_000   # rotate at ~8 MB (keep one .old) so a long session
+                              # can't balloon — worst case ~16 MB on disk, never GBs.
+
+  def self.log_file_path
+    @log_file_path ||= File.join(ModLoader.data_directory, "bsmp-log.txt")
+  end
+
+  # Short per-line stamp: wall-clock (to correlate the two players' logs) + the RGSS
+  # frame counter (per-machine ordering). Never raises.
+  def self.log_stamp
+    "#{Time.now.strftime('%H:%M:%S')} f#{Graphics.frame_count}"
+  rescue StandardError
+    ""
+  end
+
+  # Append a line to the log file, rotating at LOG_MAX_BYTES. No-op unless
+  # :log_to_file. Wrapped so logging can never crash gameplay.
+  def self.file_log(msg)
+    return unless settings.log_to_file
+    path = log_file_path
+    @log_bytes ||= (File.exist?(path) ? File.size(path) : 0)
+    if @log_bytes > LOG_MAX_BYTES
+      old = path.sub(/\.txt\z/, ".old.txt")
+      File.delete(old) if File.exist?(old)
+      File.rename(path, old) if File.exist?(path)
+      @log_bytes = 0
+    end
+    line = "[#{log_stamp}] #{msg}\n"
+    File.open(path, "a") { |f| f.write(line) }
+    @log_bytes += line.bytesize
+  rescue StandardError
+  end
+
+  # Drop a context-stamped marker into the log — the "I just saw a bug" button
+  # (default F9, BSMP.settings.log_mark_key). The auto-captured context (map, our
+  # tile, role, players online, owner-here, in-battle) is what makes a bare marker
+  # actually useful after the fact. Always prints; persists when :log_to_file is on.
+  def self.mark_log(note = nil)
+    @mark_seq = (@mark_seq || 0) + 1
+    bits = ["MARK ##{@mark_seq}"]
+    bits << note.to_s if note and not note.to_s.empty?
+    bits << "map=#{$game_map.map_id}(#{current_location_name})" if $game_map
+    bits << "pos=#{$game_player.x},#{$game_player.y}" if $game_player
+    bits << "role=#{host? ? 'host' : (guest? ? 'guest' : 'solo')}"
+    bits << "online=#{($bsmp_players ? $bsmp_players.size : 0) + 1}"
+    bits << "owner_here=#{BSMP::World.map_owner_here?}" if defined?(BSMP::World)
+    bits << "in_battle=#{$game_party ? $game_party.in_battle : '?'}"
+    line = "=== #{bits.join(' ')} ==="
+    p "[BSMP] #{line}"
+    file_log(line)
+  rescue StandardError => e
+    p "[BSMP] mark_log failed: #{e}"
   end
 
   # A common event whose body runs "local-only": its item/gold gains must not be

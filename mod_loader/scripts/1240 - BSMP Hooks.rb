@@ -370,6 +370,12 @@ class Scene_Base
     if $game_map and BSMP::World.owned_map_id != $game_map.map_id
       BSMP::World.on_map_setup($game_map.map_id)
     end
+    # "Bug here" marker: drop a context-stamped line into the log on the hotkey
+    # (raw VK, so it works even while the game's own Input is frozen by a menu).
+    mk = BSMP.settings.log_mark_key
+    if mk and ModLoader.respond_to?(:input_trigger?) and ModLoader.input_trigger?(mk)
+      BSMP.mark_log
+    end
   end
 
 end
