@@ -523,6 +523,38 @@ module BSMP
 
   end
 
+  # --- map / location naming ------------------------------------------------
+  # BSMP.* map-naming helpers (moved here from Core — they sit with the map logic).
+
+  # Best human name for OUR current map: the lore display_name (the on-screen
+  # banner) if set, else the editor tree name. Broadcast with PLAYER_CHANGED_MAP
+  # so viewers show a real location without loading the peer's map.
+  def self.current_location_name
+    name = $game_map.display_name.to_s
+    if name.empty? and $data_mapinfos and $data_mapinfos[$game_map.map_id]
+      name = $data_mapinfos[$game_map.map_id].name.to_s
+    end
+    name
+  end
+
+  # PLAYER_CHANGED_MAP payload: "map_id;location_name".
+  def self.current_map_payload
+    "#{$game_map.map_id};#{current_location_name}"
+  end
+
+  # Local fallback name for an arbitrary map id (editor tree name); used when a
+  # peer didn't send a name. "?" if unknown.
+  def self.location_name(map_id)
+    info = $data_mapinfos ? $data_mapinfos[map_id] : nil
+    (info and info.name and not info.name.empty?) ? info.name : "?"
+  end
+
+  # Map-ownership reply dispatches straight to World (it owns the local owner flag
+  # + the mob-snapshot apply), so Core's Events table needs no thin wrapper.
+  module Events
+    HANDLERS[MAP_OWNERSHIP_REPLY] = World.method(:on_map_ownership_reply)
+  end
+
 end # module BSMP
 
 #==============================================================================

@@ -11,9 +11,10 @@
 # page / passability stay correct for free — page changes follow from the synced
 # world state (self-switches), so only the continuous position needs the wire.
 #
-# Authority is per-map: mobs are the host's only on the map the host is on
-# (BSMP.host_here?). A guest alone on another map simulates its mobs locally —
-# there's no one to desync against. Triggers/battles are untouched here (step 6).
+# Authority is per-map: each map has a single owner that simulates its mobs
+# (BSMP::World.map_owner_here?); everyone else on that map puppets them to the
+# owner's MOB_SYNC. A peer alone on a map owns it and simulates locally — there's
+# no one to desync against. Triggers/battles are untouched here (step 6).
 #
 # Loads after the game's Game_Event so the alias wraps the final version.
 #==============================================================================

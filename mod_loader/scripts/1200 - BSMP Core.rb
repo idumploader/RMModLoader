@@ -493,30 +493,8 @@ module BSMP
 
   end
 
-  # --- map / location naming ------------------------------------------------
-
-  # Best human name for OUR current map: the lore display_name (the on-screen
-  # banner) if set, else the editor tree name. Broadcast with PLAYER_CHANGED_MAP
-  # so viewers show a real location without loading the peer's map.
-  def self.current_location_name
-    name = $game_map.display_name.to_s
-    if name.empty? and $data_mapinfos and $data_mapinfos[$game_map.map_id]
-      name = $data_mapinfos[$game_map.map_id].name.to_s
-    end
-    name
-  end
-
-  # PLAYER_CHANGED_MAP payload: "map_id;location_name".
-  def self.current_map_payload
-    "#{$game_map.map_id};#{current_location_name}"
-  end
-
-  # Local fallback name for an arbitrary map id (editor tree name); used when a
-  # peer didn't send a name. "?" if unknown.
-  def self.location_name(map_id)
-    info = $data_mapinfos ? $data_mapinfos[map_id] : nil
-    (info and info.name and not info.name.empty?) ? info.name : "?"
-  end
+  # map / location naming helpers (BSMP.current_location_name / current_map_payload /
+  # location_name) live in 1205 - BSMP World.rb, next to the rest of the map logic.
 
   # shared world-state classification (shared_switch? / shared_variable? /
   # world_owned_condition?) lives in BSMP::World — it sits next to the snapshot
@@ -532,29 +510,6 @@ module BSMP
     $bsmp_client and $bsmp_client.connected? and not host?
   end
 
-  # --- host presence (host-driven mobs) -------------------------------------
-  # Mobs are host-authoritative only on the map the host is currently on. A guest
-  # uses these to decide whether to hand its moving events over to the host's
-  # positions (host_here?) or keep simulating them locally (host elsewhere).
-
-  def self.host_user_id
-    ($bsmp_client and $bsmp_client.connected?) ? $bsmp_client.server_user_id : nil
-  end
-
-  # The host's remote-player character on this guest (carries the host's map_id).
-  def self.host_character
-    id = host_user_id
-    (id and $bsmp_players) ? $bsmp_players[id] : nil
-  end
-
-  # True on a guest when the host is present on our current map, so the host is
-  # simulating these mobs and we should puppet ours to its broadcasts.
-  def self.host_here?
-    return false if not guest?
-    hc = host_character
-    hc and $game_map and hc.map_id == $game_map.map_id
-  end
-
   module Events
 
     def self.on_packet(packet)
@@ -562,13 +517,6 @@ module BSMP
       # (see the reopen at the top of this file), so handlers never need force_encoding.
       handler = HANDLERS[packet.type]
       handler.call(packet) if handler
-    end
-
-    # Map ownership registrar reply (handled by BSMP::World, which holds the local
-    # owner flag + snapshot apply). Plain delegation so the Events/HANDLERS table can
-    # reference it the same way as the other on_* handlers.
-    def self.on_map_ownership_reply(packet)
-      BSMP::World.on_map_ownership_reply(packet)
     end
 
     def self.on_player_joined(packet)
@@ -978,14 +926,9 @@ module BSMP
       MOB_SYNC                 => method(:on_mob_sync),
       MOB_BALLOON              => method(:on_mob_balloon),
       MOB_ERASE                => method(:on_mob_erase),
-      MAP_OWNERSHIP_REPLY      => method(:on_map_ownership_reply),
     }
-
-    NAMES = {
-      PLAYER_JOINED => "PLAYER_JOINED",
-      PLAYER_MOVED => "PLAYER_MOVED",
-      PLAYER_CHANGED_NICK => "PLAYER_CHANGED_NICK",
-    }
+    # MAP_OWNERSHIP_REPLY is registered in 1205 - BSMP World.rb, pointing straight
+    # at BSMP::World.on_map_ownership_reply (no Core wrapper needed).
 
   end
 
