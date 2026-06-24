@@ -85,6 +85,14 @@ target_compile_definitions(ModLoader PUBLIC
 # break that crashes std::mutex when an older msvcp140 is present).
 target_compile_definitions(ModLoader PRIVATE _DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR)
 target_link_options(ModLoader PRIVATE "/MAP")
+
+# Emit a PDB for optimized builds too, so release crashes symbolicate in VS / the
+# debugger instead of showing a bare ModLoader.dll!<addr>. /Zi puts debug info in
+# the .obj; the linker's /DEBUG writes the .pdb. /DEBUG implies /OPT:NOREF,NOICF,
+# so restore the release fold/strip explicitly to keep the binary lean. Debug
+# already carries its own /Zi+/DEBUG, so scope this to the non-Debug configs.
+target_compile_options(ModLoader PRIVATE "$<$<NOT:$<CONFIG:Debug>>:/Zi>")
+target_link_options(ModLoader PRIVATE "$<$<NOT:$<CONFIG:Debug>>:/DEBUG;/OPT:REF;/OPT:ICF>")
 #target_precompile_headers(ModLoader PRIVATE "src/pch.h")
 
 # The vendored Steamworks SDK headers (src/ModLoader/Steam) use deprecated CRT
