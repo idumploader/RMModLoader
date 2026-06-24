@@ -144,6 +144,27 @@ module BSMP
         @host_active = false
       end
 
+      # True while we're on a battle-equip excursion. BS2's in-battle "equip" command
+      # (script 171) leaves the battle scene to open Scene_Equip and re-enters it on
+      # return, with $game_temp.battle_equip set across the whole round trip. The co-op
+      # layer must NOT treat that as a real battle end/start — otherwise the host's
+      # terminate BATTLE_ENDs every guest (immediate kick) and the proxy/input state gets
+      # wiped ("alone in battle"). Every battle teardown/rebuild hook checks this.
+      # respond_to? guards a game without script 171.
+      def equip_excursion?
+        t = $game_temp
+        (t and t.respond_to?(:battle_equip) and t.battle_equip) ? true : false
+      end
+
+      # True when we're (logically) inside the battle: the active scene is Scene_Battle,
+      # OR we're on a BS2 in-battle equip excursion (Scene_Equip opened mid-fight is still
+      # part of the battle, just a sub-screen). Lets the stale-session safety net tell a
+      # genuinely orphaned session apart from one that's only briefly outside Scene_Battle.
+      def is_battle_scene?
+        s = SceneManager.scene
+        (s.is_a?(Scene_Battle)) or equip_excursion?
+      end
+
       # Drop every battle session. Called when we land on the map/title OUTSIDE a
       # battle scene — e.g. after an F12 reset (RGSSReset) unwinds straight out of the
       # mute Scene_Battle without our update running, leaving client_session stuck true
@@ -553,8 +574,13 @@ class Scene_Battle
   # BSMP.host? guard is false there.
   alias bsmp_battle_scene_start start
   def start
+    # Capture BEFORE the original start: BS2's battle_start (171) clears
+    # $game_temp.battle_equip DURING it, so checking equip_excursion? afterwards would miss
+    # the equip-return case and wrongly re-broadcast BATTLE_START to guests that never left
+    # (which kicks them with no recovery). The co-op battle is already live on return.
+    excursion = BSMP::Battle.equip_excursion?
     bsmp_battle_scene_start
-    if BSMP.host? and bsmp_network_running?
+    if BSMP.host? and bsmp_network_running? and not excursion
       BSMP::Battle.host_ensure_battle($game_troop.troop.id, BattleManager.can_escape?)
       # Build the requester's party proxies now — the session is live (host_ensure_battle
       # set it) and the start-of-battle proxy clear (1251) has run, so these survive and
@@ -661,10 +687,17 @@ class Scene_Battle
   alias bsmp_battle_scene_battle_start battle_start
   def battle_start
     if BSMP::Battle.client_session?
-      $game_party.on_battle_start
-      $game_troop.on_battle_start
-      $game_troop.enemy_names.each do |name|
-        $game_message.add(sprintf(Vocab::Emerge, name))
+      # Fresh entry: init the battlers + flash the emerge banner. On a BS2 in-battle equip
+      # RETURN the scene re-runs start, so skip both — re-running on_battle_start would reset
+      # the mid-fight battler state, and the emerge would re-show "Появился X!" over the party
+      # list (the mute scene has no FSM to dismiss it). Only re-open the status window.
+      equip_return = BSMP::Battle.equip_excursion?
+      unless equip_return
+        $game_party.on_battle_start
+        $game_troop.on_battle_start
+        $game_troop.enemy_names.each do |name|
+          $game_message.add(sprintf(Vocab::Emerge, name))
+        end
       end
       # The battle status window (the combined-party HUD: rows + HP/MP/AP) is created
       # CLOSED (openness 0) and normally opened in start_party_command_selection — which
@@ -674,6 +707,11 @@ class Scene_Battle
         @status_window.open
         refresh_status if respond_to?(:refresh_status)
       end
+      # The mute client runs THIS battle_start, not BS2's (171) — which is what normally
+      # clears $game_temp.battle_equip. battle_start runs in post_start (AFTER Scene#start),
+      # so this is the right place to release the flag, once the equip_return guard above has
+      # consumed it. Otherwise it stays stuck true and every equip guard never releases.
+      $game_temp.battle_equip = false if equip_return and $game_temp.respond_to?(:battle_equip)
     else
       bsmp_battle_scene_battle_start
     end
@@ -687,7 +725,10 @@ class Scene_Battle
   # this won't double-send.) Result is unknown here; guests only use it to leave.
   alias bsmp_battle_scene_terminate terminate
   def terminate
-    if BSMP.host? and BSMP::Battle.host_session? and bsmp_network_running?
+    # not equip_excursion?: leaving the battle scene to open the in-battle equip menu is
+    # NOT the battle ending — without this the host BATTLE_ENDs every guest the instant it
+    # opens equip (they're kicked to the map immediately, then re-pulled on return).
+    if BSMP.host? and BSMP::Battle.host_session? and bsmp_network_running? and not BSMP::Battle.equip_excursion?
       result = BSMP::Battle.result || -1
       bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::BATTLE_END, 0, result.to_s))
       BSMP::Battle.end_host_session
@@ -885,7 +926,11 @@ class Scene_Base
   alias bsmp_battle_base_update update
   def update
     bsmp_battle_base_update
-    if (BSMP::Battle.client_session? or BSMP::Battle.host_session?) and not is_a?(Scene_Battle)
+    # A battle session only makes sense inside the battle. is_battle_scene? counts the real
+    # Scene_Battle AND a BS2 in-battle equip excursion (Scene_Equip opened mid-fight) — so
+    # we don't abort a live session just because the host stepped into the equip screen
+    # (which used to kill its heartbeat and starve the guests out ~5s later).
+    if (BSMP::Battle.client_session? or BSMP::Battle.host_session?) and not BSMP::Battle.is_battle_scene?
       BSMP::Battle.abort_sessions
     end
   end

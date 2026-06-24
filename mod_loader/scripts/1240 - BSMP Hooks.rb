@@ -360,6 +360,13 @@ class Scene_Base
     SteamAPI.run_callbacks
     bsmp_read_packets
     bsmp_update_ping
+    # Keep the host's battle heartbeat alive even when it steps into a sub-scene
+    # mid-fight — chiefly Scene_Equip via the in-battle "equip" command. Otherwise
+    # host_broadcast_state only runs from Scene_Battle#update / update_for_wait, so
+    # while the host sits in the equip screen the guests hear nothing and their
+    # starve watchdog yanks them out of the battle. host_broadcast_state is self-
+    # throttled, so also calling it on a normal battle frame here is cheap/harmless.
+    BSMP::Battle.host_broadcast_state if BSMP::Battle.host_session?
     BSMP::UI.update_sync_overlay
     # Polling fallback for map-ownership setup. Our Game_Map#setup alias above is
     # the primary hook, but some BS2 mods redefine Game_Map#setup without preserving

@@ -189,6 +189,20 @@ module BSMP
       end
       battler.instance_variable_set(:@states, ids)
       battler.instance_variable_set(:@state_turns, turns)
+      # Seed @state_steps too. We set @states directly (not via add_state ->
+      # reset_state_counts), so a step-removed state (remove_by_walking, e.g. a poison
+      # that wears off over N map steps) gets no @state_steps entry. Stock
+      # Game_Actor#update_state_steps then evaluates `@state_steps[id] > 0` on nil and
+      # crashes ("undefined method `>' for nil") on the FIRST map step after the battle —
+      # and apply_state runs on the guest's OWN actor too, so it hit real players. The
+      # wire carries no step count, so seed each with the state's full steps_to_remove
+      # (0 for non-walking states, matching stock reset_state_counts).
+      steps = {}
+      ids.each do |sid|
+        st = $data_states[sid]
+        steps[sid] = st.steps_to_remove if st
+      end
+      battler.instance_variable_set(:@state_steps, steps)
       battler.instance_variable_set(:@hp, hp.to_i)
       battler.instance_variable_set(:@mp, mp.to_i)
       battler.instance_variable_set(:@tp, tp.to_i) unless tp.nil?
@@ -265,6 +279,8 @@ module BSMP
     # (we never built a self-proxy) UNLESS the owner is a known other player (then its
     # proxy is just lagging the roster — skip; the next re-send builds it).
     def self.apply_party_state(data)
+      seen_owners = {}   # owners we heard about in THIS sync (authoritative roster)
+      seen_keys   = {}   # "owner.actor_id" present in THIS sync
       data.to_s.split(';').each do |entry|
         head, rest = entry.split(',', 2)
         next if head.nil? or rest.nil?
@@ -272,6 +288,8 @@ module BSMP
         next if owner_s.nil? or aid_s.nil?
         owner = owner_s.to_i
         actor_id = aid_s.to_i
+        seen_owners[owner]               = true
+        seen_keys["#{owner}.#{actor_id}"] = true
         hp, mp, ap, st, bf = rest.split(',')
         target = $bsmp_battle_proxies.find { |a| a.bsmp_owner == owner and a.id == actor_id }
         if target.nil?
@@ -285,6 +303,16 @@ module BSMP
         # means "no buffs" and clears stale icons, vs the snapshot which omits buffs (nil).
         apply_state(target, hp, mp, nil, ap, st, bf.to_s)
       end
+      # Prune proxies the authority no longer lists. A skill that temporarily summons
+      # an ally adds it to the host's battle (streamed here so guests proxy it); when
+      # the host removes it the entry just stops appearing, but nothing dropped the
+      # proxy -> a "ghost" battler lingered on the guest. Only prune WITHIN an owner we
+      # heard from this sync (owner present, this actor_id absent), so a momentarily
+      # lagging/empty owner isn't wrongly cleared. Spriteset_Battle#update_actors drops
+      # the now-orphaned sprite on the next frame.
+      $bsmp_battle_proxies.reject! do |p|
+        seen_owners[p.bsmp_owner] and not seen_keys["#{p.bsmp_owner}.#{p.id}"]
+      end unless seen_owners.empty?
     end
 
     # Guest: resolve a wire ally spec "owner.actor_id" to the local battler — a proxy of
@@ -341,7 +369,9 @@ class Scene_Battle
   # F12 reset that skipped terminate), so a stale/dead clone can't leak into a new battle.
   alias bsmp_party_scene_start start
   def start
-    BSMP::BattleParty.clear
+    # Skip on an equip excursion: returning from the in-battle equip menu re-runs start,
+    # but the combined party must survive (clearing it would leave everyone "alone").
+    BSMP::BattleParty.clear unless BSMP::Battle.equip_excursion?
     bsmp_party_scene_start
   end
 
@@ -386,7 +416,9 @@ class Scene_Battle
   # party is pristine. Harmless on a peer that had none.
   alias bsmp_party_terminate terminate
   def terminate
-    BSMP::BattleParty.clear
+    # Skip on an equip excursion: leaving the battle scene FOR the equip menu must keep
+    # the combined party (BS2 terminates the battle scene to open Scene_Equip).
+    BSMP::BattleParty.clear unless BSMP::Battle.equip_excursion?
     bsmp_party_terminate
   end
 end

@@ -46,6 +46,17 @@ module BSMP
         t > 0 ? t : BSMP::Config::BATTLE_INPUT_TIMEOUT
       end
 
+      # The HOST's input budget is authoritative — it auto-resolves the turn on ITS timeout,
+      # which can differ from the guest's local setting and can change mid-fight. The host
+      # sends its current value with each request; the guest's on-screen timer counts down
+      # THAT, not its own timeout_frames (otherwise the bar lies — e.g. shows 120s while the
+      # host cuts the turn at 30s). Set per request, snapshotted for the turn at guest_begin.
+      attr_writer :host_timeout
+
+      def guest_total_frames
+        (@guest_timeout and @guest_timeout > 0) ? @guest_timeout : timeout_frames
+      end
+
       # Drop all parked/active input state — called on battle start so nothing leaks in.
       def reset
         @awaiting         = nil   # host: the proxy whose command we're waiting on
@@ -54,6 +65,8 @@ module BSMP
         @escape_requested = false # host: the reply was "flee" -> run command_escape, not an action
         @guest_actor      = nil   # guest: the real actor we're picking a command for
         @guest_elapsed    = 0     # guest: frames since our turn timer started (6.4.2)
+        @host_timeout     = nil   # guest: host's authoritative budget from the last request
+        @guest_timeout    = nil   # guest: that budget snapshotted for the current turn
         dispose_guest_timer       # guest: drop any leftover timer window
       end
 
@@ -73,8 +86,11 @@ module BSMP
         return if $bsmp_server.nil?
         client = $bsmp_server.find_client(proxy.bsmp_owner)
         if client
+          # Carry OUR (authoritative) input budget so the guest's turn timer counts down
+          # the same value we auto-resolve on — re-sent each request, so a mid-fight change
+          # propagates.
           $bsmp_server.send_packet_to(client,
-            BasicNetworkPacket.new(BSMP::Events::BATTLE_INPUT_REQUEST, 0, proxy.id.to_s))
+            BasicNetworkPacket.new(BSMP::Events::BATTLE_INPUT_REQUEST, 0, "#{proxy.id};#{timeout_frames}"))
         else
           fallback_auto(proxy)
           @advance = true
@@ -215,6 +231,7 @@ module BSMP
       def guest_begin(actor)
         @guest_actor   = actor
         @guest_elapsed = 0
+        @guest_timeout = @host_timeout  # host's authoritative budget for THIS turn
       end
 
       def guest_end
@@ -230,7 +247,16 @@ module BSMP
       def guest_tick(scene)
         return unless guest_active?
         @guest_elapsed += 1
-        total = timeout_frames
+        # Self-heal the actor-command window. After an equip excursion the rebuilt window is
+        # opened by our re-arm but then CLOSED again by the post-start battle flow, leaving us
+        # mid-input with no visible window (openness stuck at 0). The closer only fires once on
+        # the re-start, so re-opening here — past the normal open animation (a few frames) —
+        # sticks and the window finally shows.
+        acw = scene.instance_variable_get(:@actor_command_window)
+        if acw and acw.openness == 0 and @guest_elapsed >= 3
+          scene.start_actor_command_selection
+        end
+        total = guest_total_frames
         ensure_guest_timer
         if @guest_elapsed % 6 == 0 or @guest_elapsed >= total  # throttle the redraw
           left = total - @guest_elapsed
@@ -312,8 +338,13 @@ module BSMP
     def self.on_battle_input_request(packet)
       return if BSMP::Battle.host_session?  # the battle host doesn't get requests
       return if not BSMP::Battle.client_session?
-      return if BSMP::BattleInput.guest_active?
-      actor_id = packet.data.to_i
+      # A fresh request supersedes any still-active input: the host re-asks (after its own
+      # turn timeout, or after an equip excursion left our input dangling), so re-arm rather
+      # than drop — otherwise a stuck guest_active? swallows every future turn (no window).
+      BSMP::BattleInput.guest_end if BSMP::BattleInput.guest_active?
+      parts    = packet.data.to_s.split(';')
+      actor_id = parts[0].to_i
+      BSMP::BattleInput.host_timeout = parts[1] ? parts[1].to_i : nil  # host's turn budget
       actor = $game_party.battle_members.find do |a|
         (not a.is_a?(Game_BSMPProxyActor)) and a.id == actor_id
       end
@@ -344,7 +375,13 @@ class Scene_Battle
   # Fresh battle: clear any parked/active input from a previous fight (e.g. an F12 unwind).
   alias bsmp_input_scene_start start
   def start
-    BSMP::BattleInput.reset
+    # Skip the input reset on an equip excursion: returning from the in-battle equip menu
+    # re-runs start, but a guest mid-turn must keep its pending remote-input context. The
+    # excursion flag ($game_temp.battle_equip) is released LATER — in the mute battle_start
+    # (post_start), once the emerge guard there has consumed it — NOT here, or battle_start
+    # (which runs after start) would see it already false and re-flash the emerge. The
+    # actor-command window is reopened by guest_tick's self-heal without resetting the timer.
+    BSMP::BattleInput.reset unless BSMP::Battle.equip_excursion?
     bsmp_input_scene_start
   end
 
@@ -357,6 +394,12 @@ class Scene_Battle
     actor = BattleManager.actor
     if BSMP::Battle.host_session? and actor.is_a?(Game_BSMPProxyActor)
       BSMP::BattleInput.host_request(actor)
+    elsif BSMP::Battle.client_session? and not BSMP::BattleInput.guest_active?
+      # Mute guest: it never runs a local command phase — its real turns come only
+      # via bsmp_guest_start_input (which sets guest_active?, so it bypasses this).
+      # Without this, BS2's in-battle "equip" return (171 battle_start) calls
+      # start_actor_command_selection and would wake the mute scene into a LOCAL
+      # turn that no longer relays to the host. Swallow it instead.
     else
       bsmp_input_start_actor_command_selection
     end
@@ -455,6 +498,41 @@ class Scene_Battle
       bsmp_input_prior_command
     end
   end
+end
+
+#==============================================================================
+# ■ Window_BattleEnemy — nil-safe target highlight (script 152)
+#==============================================================================
+# 152 whitens the (de)selected enemy's sprite on show/hide/cursor-move, but `enemy`
+# / `old_enemy` ($game_troop.alive_members[idx]) can be nil — no/stale selection, or
+# all targets gone. On a guest whose turn TIMES OUT mid-targeting, bsmp_guest_finish_input
+# hides the enemy window and 152's hide hit `enemy.sprite_effect_type=` on nil -> crash
+# ('点选敌人的窗口' line 24). Re-define both with the SAME behaviour but nil-guarded; the
+# whiten is purely cosmetic, so skipping it when the sprite is gone is harmless (host /
+# single-player included).
+if defined?(Window_BattleEnemy)
+class Window_BattleEnemy < Window_Selectable
+  def hide
+    e = (@old_index != nil) ? old_enemy : nil
+    e.sprite_effect_type = :whiten_loop_stop if e
+    cur = enemy
+    cur.sprite_effect_type = :whiten_loop_stop if cur
+    @target_anim_on = false
+    @old_index = nil
+    hide2
+  end
+
+  def update_target_anim
+    return if @target_anim_on == nil
+    if @target_anim_on && @index != @old_index
+      o = (@old_index != nil) ? old_enemy : nil
+      o.sprite_effect_type = :whiten_loop_stop if o
+      cur = enemy
+      cur.sprite_effect_type = :whiten_loop if cur
+    end
+    @old_index = @index
+  end
+end
 end
 
 end # if defined?(BSMP)
