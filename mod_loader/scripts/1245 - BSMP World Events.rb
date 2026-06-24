@@ -40,7 +40,14 @@ class Game_Event < Game_Character
     return false if not BSMP.guest?
     return false if BSMP::World.map_owner_here?  # map owner runs its world events
     return false if @trigger != 3 and @trigger != 4 # != autorun && != parallel
+    return false if bsmp_shared_cutscene_event?  # story scene every peer watches
     bsmp_world_owned_event?
+  end
+
+  # Listed in Config::SHARED_CUTSCENE_EVENTS: an idempotent story cutscene the guest
+  # should run locally too (not leave to the owner). @id is the event id on the map.
+  def bsmp_shared_cutscene_event?
+    $game_map && BSMP::World.shared_cutscene_event?($game_map.map_id, @id)
   end
 
   # Autorun (trigger 3): don't let it start, so the map interpreter never picks it

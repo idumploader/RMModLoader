@@ -215,6 +215,11 @@ module BSMPTests
       expect("shared switch1 page is world-owned", BSMP::World.world_owned_condition?(cond(:switch1_valid => true, :switch1_id => 42)))
       expect("local switch1 page not world-owned", !BSMP::World.world_owned_condition?(cond(:switch1_valid => true, :switch1_id => 43)))
       expect("unconditional page not world-owned", !BSMP::World.world_owned_condition?(cond))
+
+      # shared-cutscene allowlist (guests DO run it; its self-switch stays per-peer)
+      expect("listed cutscene event is shared",  BSMP::World.shared_cutscene_event?(358, 22))
+      expect("other event on listed map is not", !BSMP::World.shared_cutscene_event?(358, 23))
+      expect("event on unlisted map is not",     !BSMP::World.shared_cutscene_event?(999, 22))
     ensure
       s_ids.replace(saved_ids)
       s_ranges.replace(saved_ranges)

@@ -58,6 +58,14 @@ module BSMP
       false
     end
 
+    # A story cutscene that EVERY peer should watch despite being gated on a synced
+    # flag (Config::SHARED_CUTSCENE_EVENTS). Drives two exceptions: guests run its
+    # autorun (1245) and its self-switch latch stays per-peer / unsynced (1240).
+    def self.shared_cutscene_event?(map_id, event_id)
+      list = Config::SHARED_CUTSCENE_EVENTS[map_id]
+      list ? list.include?(event_id) : false
+    end
+
     # --- map ownership (per-map authority) ------------------------------------
     # True on the peer that the lobby host has authorised to own the CURRENT map. The
     # owner simulates mobs, streams MOB_SYNC, runs command_301 on touch, and acts as

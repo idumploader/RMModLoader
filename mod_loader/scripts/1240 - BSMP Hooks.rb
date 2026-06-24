@@ -460,6 +460,10 @@ class Game_SelfSwitches
     BSMP.debug_log { "set self_switch #{key.inspect}=#{value} applying=#{$bsmp_applying_fact} net=#{bsmp_network_running?}" } if defined?(BSMP)
     return if $bsmp_applying_fact
     return if not bsmp_network_running?
+    # A shared-cutscene event's self-switch is the per-peer "I watched it" latch —
+    # keep it LOCAL so the first viewer doesn't flip everyone else past the scene
+    # (the event itself runs on every peer; see 1245 / Config::SHARED_CUTSCENE_EVENTS).
+    return if BSMP::World.shared_cutscene_event?(key[0], key[1])
     bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::SELF_SWITCH_CHANGED, 0, "#{key[0]};#{key[1]};#{key[2]};#{value ? 1 : 0}"))
   end
 end

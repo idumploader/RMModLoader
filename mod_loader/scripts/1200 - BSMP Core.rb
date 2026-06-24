@@ -119,6 +119,12 @@ module BSMP
     # covenant rank already syncs via var 110). Switches with no kill set-site in this build
     # simply never fire, so listing the full roster is harmless and future-proof.
     SHARED_SWITCH_IDS      = [
+      # --- World/story flags (non-kill) ---
+      20,             # "时间重叠开启" — Map358 time-overlap beacon ON/OFF (CE55).
+                      # Gates the map's "special items" event pages, so the toggle
+                      # state must agree for everyone. CE55's set_tone/fog/noise are
+                      # caller-only screen FX and stay local (cosmetic desync only).
+      # --- NPC kill/imprison flags ---
       502,            # Meiko: killed
       504, 521,       # Scarlett: killed, imprisoned
       509, 519,       # Nancy: killed, imprisoned
@@ -158,6 +164,12 @@ module BSMP
       114,    # Covenant lvl: Isabella
       115,    # Covenant lvl: Gertruda
 
+      # --- Story / world-progress counters (absolute or monotonic) ---
+      48,     # "星炬波动计数" — time-overlap beacon oscillation counter; CE55 does
+              #  v48 += 1 on each activation. Broadcast carries the absolute value,
+              #  so peers converge without double-counting the increment.
+      272,    # "娜蒂雅演出1" — Map358: set to 1 on the fish-boss win (IfWin), then 2
+              #  after the rope-ladder scene; gates the rope. Absolute set.
     ]
 
     # --- Co-op "local" common events (step 6.5) ---
@@ -169,11 +181,33 @@ module BSMP
     #   SHARED   = additionally mirrored so EVERY peer runs its own (CE 12 = death).
     # The mirror itself is wired separately; this list only governs loot locality.
     PERSONAL_COMMON_EVENT_IDS = [
-      2
+      2,                  # Bonfire rest (Estus refill)
+      # Map108 "Veronika" merchant — soul/material -> gear crafting. Each player
+      # spends their OWN souls/materials and must keep their OWN result; the gear
+      # grant (ChangeWeapons/Armor/Items, command 126-128) would otherwise instance
+      # to every peer via the loot broadcast. Her "buy" options (CE 84/85) use
+      # ShopProcessing instead, which is already personal, so they're not listed.
+      510, 511, 512,      # Smelt special soul -> weapon / armor / accessory
+      540,                # Recycle space-time shards -> items
     ]
     SHARED_COMMON_EVENT_IDS   = [
       12,  # Death
     ]
+
+    # --- Co-op shared story cutscenes (watched by EVERY peer, not only the owner) ---
+    # By default a guest does NOT run an autorun/parallel page gated on a synced flag:
+    # the map owner runs it once and the result flags sync (see 1245). That is right
+    # for world-progression logic (spawns, counters, battles) but wrong for a STORY
+    # cutscene everyone present should watch. Listing an event here (a) lets guests run
+    # its autorun too and (b) keeps that event's self-switch latch LOCAL (per-peer), so
+    # the first viewer finishing doesn't flip the others' page past the scene before
+    # they see it. ONLY for IDEMPOTENT scenes — dialogue, local transfer, absolute flag
+    # sets — never loot / battle / relative counters (those would double up).
+    # { map_id => [event_id, ...] }
+    SHARED_CUTSCENE_EVENTS = {
+      358 => [22],   # post-fish "rope ladder" dialogue (Nadia): autorun on var272>=1,
+                     #  sets var272=2 + self-switch A. Pure idempotent story beat.
+    }
 
     # --- Co-op battle scaling (step 6.6) ---
     # Enemies scale with the number of PLAYERS in the fight (1 = no scaling). co-op
