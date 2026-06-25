@@ -124,6 +124,12 @@ module BSMP
                       # Gates the map's "special items" event pages, so the toggle
                       # state must agree for everyone. CE55's set_tone/fog/noise are
                       # caller-only screen FX and stay local (cosmetic desync only).
+      26,             # "猎犬出现" — the hound spawn. CE55 sets it ON when the beacon
+                      # oscillation hits max (var48 == 10). Only the peer that toggles
+                      # the device runs CE55, so although var48 (shared) reaches 10 on
+                      # everyone, the "==10 -> switch 26 ON" line runs on the toggler
+                      # alone; without sharing it the others keep var48=10 but never
+                      # spawn the hound. Same world-spawn class as the kill flags below.
       # --- NPC kill/imprison flags ---
       502,            # Meiko: killed
       504, 521,       # Scarlett: killed, imprisoned
@@ -189,6 +195,15 @@ module BSMP
       # ShopProcessing instead, which is already personal, so they're not listed.
       510, 511, 512,      # Smelt special soul -> weapon / armor / accessory
       540,                # Recycle space-time shards -> items
+      87,                 # Ferry ("Переправа"). Builds a throwaway key-item menu: CE88
+                          # (called from here) grants one transient destination ticket
+                          # (items 525-534) per unlocked dock so SelectKeyItem can list
+                          # them, then this CE removes 525-531 again at the end. Those
+                          # +1 grants would loot-broadcast and pile up on the OTHER peers
+                          # (who never run the matching cleanup), making the normally
+                          # invisible service items appear in their bags. Local CE88
+                          # inherits the flag (1246 command_117), so both ends stay
+                          # per-peer. Pure transient bookkeeping -> never a shared grant.
     ]
     SHARED_COMMON_EVENT_IDS   = [
       12,  # Death
