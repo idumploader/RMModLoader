@@ -43,7 +43,6 @@ if defined?(BSMP)
 
 module BSMP
   module BeaconFX
-    MAP_IDS     = [358]   # maps carrying the time-overlap device (extend if it exists elsewhere)
     SWITCH      = 20      # 时间重叠开启 — shared world flag whose sync drives the FX
     EFFECTS_OFF = 27      # 时间重叠特效关闭 — per-peer "reduce effects" setting (read locally)
 
@@ -53,12 +52,34 @@ module BSMP
       def on_remote_toggle(on)
         return unless bsmp_network_running?
         return unless SceneManager.scene.is_a?(Scene_Map)
-        return if $game_map.nil? or not MAP_IDS.include?($game_map.map_id)
+        # The time-overlap device can be used on ANY map and its tone/fog applies to
+        # wherever the player stands, so mirror on whatever map the receiver is on.
+        return if $game_map.nil?
         interp = $game_map.interpreter
         if interp and not interp.running?
           interp.setup(fx_list(on), 0)  # variant 2: full anim, player frozen like the toggler
         else
           snap(on)                       # variant 1: interpreter busy -> snap the end state
+        end
+      end
+
+      # Re-assert the DURABLE time-overlap state for the current map (no animation, flash,
+      # SE or blur). Called on every map entry (walk-transfer, and save-load / world-sync on
+      # join). Needed because the persistent fog is normally re-applied by a per-map autorun
+      # gated on switch 20, which is SUPPRESSED on a non-owner; and on join the snapshot sets
+      # switch 20 before we're on Scene_Map, so on_remote_toggle never fired. Idempotent.
+      def apply_persistent
+        return unless bsmp_network_running?
+        return unless SceneManager.scene.is_a?(Scene_Map)
+        return if $game_map.nil?
+        if $game_switches[SWITCH]
+          fx = ($game_map.effects rescue nil)
+          fx.set_tone(0, 0, 0, 180, 1) if fx
+          $game_system.rich_fog = true if $game_system.respond_to?(:rich_fog=)
+        elsif $game_system.respond_to?(:rich_fog) and $game_system.rich_fog
+          # stale fog carried over after the device was switched off elsewhere -> clear it
+          $game_system.rich_fog = false
+          $game_system.end_noise if $game_system.respond_to?(:end_noise)
         end
       end
 
@@ -156,6 +177,27 @@ class Game_Switches
        ((old ? true : false) != (value ? true : false))
       BSMP::BeaconFX.on_remote_toggle(value ? true : false)
     end
+  end
+end
+
+#==============================================================================
+# ■ Scene_Map — re-apply the persistent beacon fog on map entry
+#==============================================================================
+# Covers entering a map (or loading a save / syncing the host's world on join) while the
+# time-overlap device is already ON: the per-map autorun that would restore the fog is
+# suppressed on a non-owner, and on join switch 20 is set before we reach Scene_Map. start
+# fires on load / return-from-battle; post_transfer fires on walk-between-maps. Idempotent.
+class Scene_Map
+  alias bsmp_beaconfx_start start
+  def start
+    bsmp_beaconfx_start
+    BSMP::BeaconFX.apply_persistent
+  end
+
+  alias bsmp_beaconfx_post_transfer post_transfer
+  def post_transfer
+    bsmp_beaconfx_post_transfer
+    BSMP::BeaconFX.apply_persistent
   end
 end
 
