@@ -86,6 +86,24 @@ Decision shortcuts:
 world-affecting switch, variable, common-event and map-event that is NOT yet
 covered by the Config lists above, with a recommended bucket for each.
 
+**Method — iterate the NAMED switch/variable list, not the maps.** Walk
+`System\Switches.txt` / `Variables.txt` **id by id** (line = id = name). For each:
+1. Read the **name first** — it usually reveals intent on its own (a kill flag, a
+   story counter, a "device ON" toggle, vs an obviously local/scratch one), which
+   already suggests the bucket before any code is read.
+2. Then look at **how it's actually used**: grep that id's write-sites
+   (`ControlSwitches [N`, `ControlVariables [N`) and read-sites
+   (`ConditionalBranch [0, N` for switches, `[1, N` for vars) across the
+   decompiled `CommonEvents\*.txt` and `Maps\*.txt`. The usage confirms or
+   overrides the name (e.g. a "story" name that's only a scratch counter).
+
+This is preferred over walking every map and collecting the switches it touches:
+the name list is the **authoritative enumeration** (nothing is missed, each id is
+visited exactly once), the name gives intent up front, and a grep-by-id finds
+*all* usages directly instead of reconstructing them map by map. Map-by-map
+scanning is only needed for the things that are NOT a flag — embedded
+`BattleProcessing` and autorun cutscenes (items 3–4 below).
+
 Scan:
 1. **Switches & Variables** — for each id WRITTEN by an event (`ControlSwitches`,
    `ControlVariables`), decide: world progress (→ `SHARED_*`) or local/scratch
