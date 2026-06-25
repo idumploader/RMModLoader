@@ -107,6 +107,14 @@ module BSMP
 
       #--- Status -------------------------------------------------------------
       M.header("Status", :category => CAT)
+      M.toggle("Status plate", bind(:show_status_plate).merge(
+               :category => CAT, :on_text => "ON", :off_text => "OFF"))
+      M.slider("Plate X", bind(:status_plate_x).merge(
+               :category => CAT, :min => 0, :max => 100, :step => 5,
+               :gauge => [14, 6], :format => proc { |v| "#{v}%" }))
+      M.slider("Plate Y", bind(:status_plate_y).merge(
+               :category => CAT, :min => 0, :max => 100, :step => 5,
+               :gauge => [14, 6], :format => proc { |v| "#{v}%" }))
       M.action("Show co-op status", :category => CAT) do
         if BSMP.respond_to?(:host?) and ($bsmp_server or $bsmp_client)
           role = BSMP.host? ? "Host" : "Client"

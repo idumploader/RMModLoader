@@ -138,10 +138,21 @@ module BSMP
       @signature = nil
       super
       refresh
+      reposition
     end
 
     def window_width
       return 260
+    end
+
+    # Place the plate per the player's relative position settings (% across the free
+    # width / down the free height). Re-applied every frame so a live slider tweak moves
+    # it immediately; both are cheap assignments. Defaults (100/0) keep the top-right spot.
+    def reposition
+      px = (BSMP.settings.status_plate_x.to_i rescue 100)
+      py = (BSMP.settings.status_plate_y.to_i rescue 0)
+      self.x = ((Graphics.width  - width)  * px / 100.0).round
+      self.y = ((Graphics.height - height) * py / 100.0).round
     end
 
     # This game runs a larger-than-default font, so the engine's line_height (24)
@@ -170,6 +181,7 @@ module BSMP
     end
 
     def update
+      reposition
       sig = signature
       return if sig == @signature
       @signature = sig

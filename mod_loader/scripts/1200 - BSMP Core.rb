@@ -367,6 +367,13 @@ module BSMP
       # How long (frames) the host waits for a guest's battle command before auto-acting
       # for it; also the length of the guest's on-screen turn timer (6.4).
       :battle_input_timeout_frames => Config::BATTLE_INPUT_TIMEOUT,
+      # The top-corner "BSMP HOST/CLIENT - N online" status plate. Toggle it off, or slide
+      # it anywhere with the relative position (% across the free width / down the free
+      # height; 100/0 = the default top-right). Lets the player move it off a spot where it
+      # would cover on-screen text / descriptions.
+      :show_status_plate => true,
+      :status_plate_x    => 100,  # 0 = flush left, 100 = flush right
+      :status_plate_y    => 0,    # 0 = top,        100 = bottom
     }
 
     # Typed accessors over the backing store; setters edit the working copy only

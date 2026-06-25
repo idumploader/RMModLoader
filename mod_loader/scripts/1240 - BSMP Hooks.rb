@@ -122,8 +122,15 @@ class Spriteset_Map
   # server on/off mid-map works) and drop everything the moment networking stops.
   def update_bsmp_status
     if bsmp_network_running?
-      @bsmp_status_window ||= BSMP::Status_Window.new
-      @bsmp_status_window.update
+      # The plate is opt-out (BSMP.settings.show_status_plate); toggling it off mid-session
+      # disposes it live, on recreates it. The roster overlay is independent of the toggle.
+      if BSMP.settings.show_status_plate
+        @bsmp_status_window ||= BSMP::Status_Window.new
+        @bsmp_status_window.update
+      elsif @bsmp_status_window
+        @bsmp_status_window.dispose
+        @bsmp_status_window = nil
+      end
       update_bsmp_roster
     else
       dispose_bsmp_windows

@@ -292,6 +292,11 @@ module BSMP
       def ensure_guest_timer
         return if @guest_timer and not @guest_timer.disposed?
         @guest_timer = BSMP::Progress_Window.new
+        # Sit BELOW the battle help/description window (z 100) and the damage-pop viewport
+        # (z 100) so an open skill/item description reads over the timer instead of the timer
+        # covering it; still above the battlers/back (viewport z 0/50), so it shows normally
+        # during input (no pop-ups happen then). Default BSMP::Window z is 188 (over the map).
+        @guest_timer.z        = 90
         @guest_timer.text     = BSMP.t("bsmp.your_turn")
         @guest_timer.progress = 1.0
         @guest_timer.update
