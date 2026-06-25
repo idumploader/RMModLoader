@@ -86,15 +86,31 @@ module BSMP
         return if $bsmp_server.nil?
         client = $bsmp_server.find_client(proxy.bsmp_owner)
         if client
-          # Carry OUR (authoritative) input budget so the guest's turn timer counts down
-          # the same value we auto-resolve on — re-sent each request, so a mid-fight change
-          # propagates.
-          $bsmp_server.send_packet_to(client,
-            BasicNetworkPacket.new(BSMP::Events::BATTLE_INPUT_REQUEST, 0, "#{proxy.id};#{timeout_frames}"))
+          send_input_request(client, proxy)
         else
           fallback_auto(proxy)
           @advance = true
         end
+      end
+
+      # Emit one BATTLE_INPUT_REQUEST to the owning guest. Carries OUR (authoritative)
+      # input budget so the guest's turn timer counts down the same value we auto-resolve
+      # on — re-sent each request, so a mid-fight change propagates.
+      def send_input_request(client, proxy)
+        $bsmp_server.send_packet_to(client,
+          BasicNetworkPacket.new(BSMP::Events::BATTLE_INPUT_REQUEST, 0, "#{proxy.id};#{timeout_frames}"))
+      end
+
+      # Re-emit the parked request so a guest that MISSED or LOST the first one gets pulled
+      # back into its turn — the F12-reset-and-reload case (the guest auto-rejoins the battle
+      # but the host already sent its only request), or a brief drop. Only while still parked;
+      # a guest already choosing this same actor IGNORES the duplicate (on_battle_input_request),
+      # so an in-progress command/targeting selection is never wiped. Owner gone right now =>
+      # skip silently; the timeout still backstops it.
+      def host_resend_request(proxy)
+        return if $bsmp_server.nil?
+        client = $bsmp_server.find_client(proxy.bsmp_owner)
+        send_input_request(client, proxy) if client
       end
 
       # Host: the owner replied. Validate it's for the parked proxy, build its action, and
@@ -141,6 +157,10 @@ module BSMP
             @awaiting = nil
             @advance  = false
             scene.next_command
+          elsif @wait % BSMP::Config::BATTLE_REANNOUNCE_INTERVAL == 0
+            # Periodically re-ask so a guest that F12-reset and auto-rejoined (or briefly
+            # dropped) is pulled back into its turn instead of being auto-resolved.
+            host_resend_request(@awaiting)
           end
         end
       end
@@ -338,13 +358,19 @@ module BSMP
     def self.on_battle_input_request(packet)
       return if BSMP::Battle.host_session?  # the battle host doesn't get requests
       return if not BSMP::Battle.client_session?
-      # A fresh request supersedes any still-active input: the host re-asks (after its own
-      # turn timeout, or after an equip excursion left our input dangling), so re-arm rather
-      # than drop — otherwise a stuck guest_active? swallows every future turn (no window).
-      BSMP::BattleInput.guest_end if BSMP::BattleInput.guest_active?
       parts    = packet.data.to_s.split(';')
       actor_id = parts[0].to_i
       BSMP::BattleInput.host_timeout = parts[1] ? parts[1].to_i : nil  # host's turn budget
+      # The host now re-asks periodically (so a rejoined/dropped guest gets pulled back into
+      # its turn). If we're ALREADY choosing for this very actor, it's just that recurring
+      # re-send — ignore it so our open command/targeting window and timer aren't reset.
+      ga = BSMP::BattleInput.guest_actor
+      return if BSMP::BattleInput.guest_active? and ga and ga.id == actor_id
+      # Otherwise a genuinely fresh request supersedes any still-active input: the host
+      # re-asks for a DIFFERENT actor (after its own turn timeout, or an equip excursion left
+      # our input dangling), so re-arm rather than drop — otherwise a stuck guest_active?
+      # swallows every future turn (no window).
+      BSMP::BattleInput.guest_end if BSMP::BattleInput.guest_active?
       actor = $game_party.battle_members.find do |a|
         (not a.is_a?(Game_BSMPProxyActor)) and a.id == actor_id
       end

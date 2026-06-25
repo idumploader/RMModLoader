@@ -293,6 +293,15 @@ module BSMP
     # HP/MP/ATB rides BATTLE_PARTY_SYNC instead.
     BATTLE_ROSTER_INTERVAL = 30
 
+    # Auto-rejoin (shared-battle guarantee). The co-op battle is global — nobody should
+    # be running around the map while a fight is live. So the host re-announces its live
+    # battle (re-broadcasts BATTLE_START) every this many frames. Any peer that's on the
+    # map and NOT already in the battle (a fresh joiner, a guest that F12-reset and
+    # reloaded its save, or one the watchdog bailed) picks it up and gets pulled back in.
+    # A peer already a mute client ignores it (on_battle_start early-returns). Slow: this
+    # is a recovery net, not a hot path — ~1s is fine.
+    BATTLE_REANNOUNCE_INTERVAL = 60
+
     # Heartbeat watchdog: a mute guest that hasn't received ANY battle state from the
     # host for this many of its own frames assumes the host's battle is over / lost and
     # bails to the map. Catches a BATTLE_END missed during an F12 reset (the guest

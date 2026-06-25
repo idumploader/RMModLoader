@@ -212,6 +212,27 @@ module BSMP
         bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::BATTLE_SYNC, 0, parts.join(';')))
       end
 
+      # Host: re-announce the live battle so anyone on the map gets pulled back in — the
+      # shared-battle guarantee (nobody fights/wanders solo while a co-op battle runs). A
+      # peer joins a host battle exactly once, via BATTLE_START; if it then leaves the
+      # battle scene WITHOUT the host's battle ending — F12 reset + reload save, a late
+      # joiner who wasn't in the lobby at start, or a watchdog-starved guest — it's stranded
+      # on the map while the fight continues. Re-broadcasting BATTLE_START on a slow throttle
+      # heals all of those: a peer not yet in the battle re-enters (on_battle_start ->
+      # pending -> bsmp_consume_battle_start), one already a mute client ignores it
+      # (on_battle_start early-returns on client_session?), and the host ignores its own.
+      # Throttled separately from BATTLE_SYNC; runs only while WE host the battle.
+      def host_reannounce_battle
+        return if not BSMP.host?
+        return if not host_session?
+        return if not bsmp_network_running?
+        return if $game_troop.nil? or $game_troop.troop.nil?
+        @reannounce_tick = (@reannounce_tick || 0) + 1
+        return if @reannounce_tick % BSMP::Config::BATTLE_REANNOUNCE_INTERVAL != 0
+        data = "#{$game_map.map_id};#{$game_troop.troop.id};#{BattleManager.can_escape? ? 1 : 0}"
+        bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::BATTLE_START, 0, data))
+      end
+
       # Host: an action is about to play an animation on its targets — push it so the
       # mute guest plays the same (setting battler.animation_id, like the map balloon).
       # Enemy targets only (actor side is the guest's own party until 6.3). animation_id
@@ -630,7 +651,10 @@ class Scene_Battle
       end
     else
       bsmp_battle_scene_update
-      BSMP::Battle.host_broadcast_state if BSMP::Battle.host_session?
+      if BSMP::Battle.host_session?
+        BSMP::Battle.host_broadcast_state
+        BSMP::Battle.host_reannounce_battle # pull stragglers/late-joiners back into the fight
+      end
     end
   end
 
@@ -646,7 +670,10 @@ class Scene_Battle
     # Scene_Base#update, so without this the host ignores a joining guest's WORLD_REQUEST
     # for the whole "Появился …" message (the guest hangs until it's dismissed).
     bsmp_net_pump
-    BSMP::Battle.host_broadcast_state if BSMP::Battle.host_session?
+    if BSMP::Battle.host_session?
+      BSMP::Battle.host_broadcast_state
+      BSMP::Battle.host_reannounce_battle # re-pull stragglers even during blocking waits
+    end
   end
 
   # Host action replay (step 6.2 slice 2). The host plays the real visuals locally and
