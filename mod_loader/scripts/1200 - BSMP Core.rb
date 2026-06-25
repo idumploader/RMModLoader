@@ -107,7 +107,27 @@ module BSMP
     # Which switches / variables count as "shared progression" and sync live as
     # facts. self-switches are ALWAYS shared (no list). Start empty and grow as the
     # real flags are identified. Ranges are inclusive Ruby Ranges.
-    SHARED_SWITCH_RANGES   = []
+    SHARED_SWITCH_RANGES   = [
+      # Bonfires (System/Switches.txt 101-172, ~36 of them). Odd 101-171 =
+      # "<place> 篝火" (discovered/lit), even 102-172 = "<place> 篝火可用" (available to
+      # fast-travel). Set by GLOBAL ControlSwitches — on the map when the bonfire is
+      # reached (odd) and by CE503's story batch (even) — NOT a self-switch. The scout
+      # mis-flagged this block as "derived UI / real state is a self-switch / local";
+      # it is real shared world progress, so a bonfire one peer lights shows for all.
+      (101..172),
+      # Roaming invasions (System/Switches.txt 401-404, 441-450). Odd/appear =
+      # "<boss> 出没/出现/入侵" (Albert 401, Liz 403, Crying Angel 441, Thought-projection
+      # 443 +狂暴 frenzy 444, Rain-bride 445, Deep-sea-fear 447, Death-omen 449); even =
+      # "<boss> 消灭/击破" (defeated record). Set by GLOBAL ControlSwitches: armed on the
+      # boss's map (Map341->441, Map080->401, ...) and cleared at any bonfire by CE5/CE10;
+      # the kill flag (402/442/...) is set in the on-map win branch (443/444 has no kill
+      # flag — CE9 toggles it). NOT a self-switch. The appear switch gates whether the
+      # invader SPAWNS at all, so an unshared roll means the invader shows for one peer
+      # only (MOB_ERASE can't sync a mob that never spawned) — the scout mis-flagged this
+      # as local. Sharing makes the invader spawn AND die for everyone; a bonfire rest
+      # clears it world-wide (consistent shared-world reset).
+      (401..404), (441..450),
+    ]
     # Permanent NPC-removal world facts. BS2 gives each killable covenant NPC a named
     # switch block (System/Switches.txt 501-576): 誓约 (covenant) / 誓约解放 (covenant
     # release, transient) / 监禁 (imprisoned, "rape" route) / 杀害 (killed, "kill" route).
@@ -150,6 +170,88 @@ module BSMP
       568, 567,       # Duska: killed, imprisoned
       572, 571,       # Hecate: killed, imprisoned
       576, 575,       # Mary: killed, imprisoned
+
+      # === Scout pass — world-progress flags (high-confidence). See
+      # docs/bsmp-coop-sync-scout-report.md §1. Boss-defeat flags follow the same
+      # init-clear / set-on-defeat pattern as the kill roster above. ===
+      # -- Cross-map story gates --
+      60,             # 花海守护者击破 — Flower-sea Guardian defeated
+      64,             # 花海帐篷内信息获取 — tent info obtained
+      73,             # 解救小女孩 — rescued the little girl
+      75,             # 小女孩死亡 — little girl died
+      80,             # 咒缚之渊兽击破 — Cursed-abyss Beast defeated
+      88,             # 异色结晶石信息获取 — crystal-stone info obtained
+      89,             # 异色结晶石解密成功 — crystal puzzle solved (cross-map read)
+      68,             # 扭曲花海意志击破 — twisted-flower-sea will defeated (cross-map -> Map112)
+      82, 83,         # 艾因委托 开启/达成 — Ain commission opened / done
+      86,             # 击杀古代异鱼 — ancient fish killed (cross-map read -> Map126)
+      # -- Flower-sea (花海) "find the girl" arc: progress 1/2/3 unlock the passage and
+      # the boss pedestal. 63 is CROSS-MAP: set in Map072 but gates the Map111 boss
+      # event 13 (appears on 63, despawns on the already-shared kill flag 60). --
+      54,             # 花海封锁解除 — flower-sea blockade lifted (passage opens)
+      61, 62, 63,     # 花海进度1/2/3 — found-the-girl progress (63 gates Map111 boss)
+      72,             # 花海深处解锁 — flower-sea depths unlocked
+      # -- Ferry dock unlocks: 90-96 are the PERSISTENT "dock discovered" state. CE88
+      # builds the ferry menu by reading `if Switch[9N] ON -> grant that dock's travel
+      # key-item` (CE87 then offers those destinations). Set ON on first discovery (dock
+      # event Page 0); only flipped OFF for a split-second while standing AT that dock's
+      # own menu, then restored ON in the SAME event (both Yes/No branches) -> net durable.
+      # (Earlier wrongly dropped as "transient" off a misread of that OFF blip.) --
+      90, 91, 92, 93, 94, 95, 96,  # 乘船点: Freud/Cathedral/Tavern/NewEmerald-E/Nancy/Joliet/Bridge-E
+      # -- Bosses / story / area unlocks (mid block) --
+      306,            # 索斯塞拉击破 — Sothsera defeated
+      318,            # 斯科尔神父击破 — Father Skor defeated
+      322, 323, 324,  # 伊瓦诺拉: apprentice / final trial / trial passed
+      348,            # 湖之主击破 — Lake Lord defeated
+      373,            # 汲魂树击破 — Soul-Draining Tree defeated
+      378,            # 贪婪金银蛇戒指获得 — greed ring obtained (special item shown)
+      379,            # 仓库篝火点绳梯开启 — warehouse rope-ladder opened
+      393,            # 鱼头马击破 — Fish-Horse-Head defeated
+      396,            # 娜蒂雅解密卷轴 — Nadia scroll (cross-map; sibling of var272)
+      338, 342,       # 薇拉死亡 / 薇拉存活 — Vera dead / alive (NPC fate pair, cross-map)
+      341,            # 村庄教堂门开启 — village church door (cross-map geometry)
+      394, 395,       # V1结局达成 / 南希未得救收尾 — V1 ending / Nancy-not-saved ending
+      556,            # 塔米拉合作1 — Tamira cooperation 1 (quest gate)
+      # -- NG+ / unlocks / passages / doors --
+      1004,           # 多周目开启 — NG+ unlocked
+      1085,           # 联动职业解锁 — collab class unlocked
+      1041, 1042, 1043, 1044, 1045,  # area passages (W/E/S, Qicheng-E-down, port)
+      1081, 1082, 1083,              # warehouse gate / Blackhat HQ gate / pursuit
+      # -- Boss-defeat / story-route flags --
+      1097,           # 漆黑之兽击破 — Black Beast defeated
+      1110,           # 贪食龙全灭 — Gluttony Dragon annihilated
+      1116, 1117,     # 列车长 / 费提克 — Conductor / Fetik defeated
+      1123,           # 小矮人死亡 — dwarf death
+      1125, 1127, 1188,  # 贪婪乌鸦 / 鸦人 / 土拨鼠 defeated (1124 REMOVED: per-encounter respawn toggle, ON re-arm in parallel page)
+      1130,           # 异变之源消灭 — source-of-mutation destroyed
+      # 1138 坠落之屋剧情结束 REMOVED: transient "cutscene playing" toggle (~40 ON / ~20 OFF)
+      1149,           # 骸之狩猎者击破 — Bone Hunter defeated
+      1150, 1151,     # 狂化屠夫1/2击破 — Berserk Butchers defeated
+      1152,           # 地道钥匙出现 — tunnel key appears
+      1157,           # 教堂门魔物击破 — church-door monster defeated
+      1164,           # 希莉娅魔兽化击破 — Celia beast-form defeated
+      1165, 1166,     # 格劳杀害 / 魔兽化击破 — Grau killed / beast-form defeated
+      1167,           # 希莉娅救赎失败 — Celia redemption FAILED
+      1168,           # 格劳对话完毕 — Grau dialogue done
+      1175,           # 芒奇金首领击破 — Munchkin King defeated
+      1176,           # 湖港镇船修复 — lake-port boat repaired
+      # 1187 多萝西回忆剧情结束 REMOVED: cutscene step state-machine (~100 toggles in Map450)
+      1189, 1190,     # 胆小兔击破 / 门开启 — Timid Rabbit defeated / door open
+      1192,           # moko商人杀害 — Moko merchant killed
+      1194,           # 多萝西监禁事件 — Dorothy imprisonment (cross-map NPC fate)
+      1218, 1219,     # 地下新入口开启 / 警笛头击破 — underground entrance / Siren Head
+      1236,           # 受诅咒蛙击破 — Cursed Frog defeated
+      1409, 1411,     # 稻草人击破 / 奇特南戈城演出结束 — Scarecrow / Kitenango cutscene
+      1410,           # 魔化稻草人 — demonized scarecrow defeat-state (must agree)
+      1412,           # 杀害 — Celia killed (cross-map NPC death)
+      1436,           # 黑色扭曲击破 — black-distortion defeated (cross-map)
+      1413, 1415, 1416, 1430,  # 希莉娅支线: open / complete / redemption success / line open
+      1417, 1418, 1419, 1420,  # 圣堂支线: scene1 / scene2 / all-cleared / scene3
+      1431, 1432,     # 真父亲离开 / 父亲死亡 — true father leaves / father death
+      1433,           # 坠落之屋任务开启 — Fallen-House quest opened
+      1437,           # 黑渊之骸击破 — Black-Abyss Husk defeated
+      # -- Bonfires --
+      1438, 1442, 1443, 1444,  # 黑渊 / 坠落之屋 / 废镇西 / 地下入口 篝火 (bonfires)
     ]
     SHARED_VARIABLE_RANGES = []
     # Covenant rank (world progress): leveling at the covenant NPC (CE909) does
@@ -176,6 +278,48 @@ module BSMP
               #  so peers converge without double-counting the increment.
       272,    # "娜蒂雅演出1" — Map358: set to 1 on the fish-boss win (IfWin), then 2
               #  after the rope-ladder scene; gates the rope. Absolute set.
+
+      # === Scout pass — idempotent absolute story/scene/sidequest stage markers (same
+      # shape as var272). See docs/bsmp-coop-sync-scout-report.md §3. ===
+      36,     # ☆主线流程 — main-story progress (central counter, gates NPC dialogue)
+      59,     # ☆世界探索进度 — world-exploration progress
+      78, 79, 80,       # 克莱因演出 2-4 — Klein scenes (pure abs sets). 77 REMOVED:
+                        #  live cutscene step-sequencer (+= interleaved with animation) -> LOCAL
+      82, 84, 85, 86,   # 南希演出 1 / 2 / 3 / 2.5 — Nancy scenes
+      88, 89,           # 艾因演出 1 / 2 — Ain scenes
+      91,     # 绯红暴君状态 — Crimson Tyrant state
+      92,     # 楼演出进度1 — tower scene progress 1
+      93,     # 萨卡班甲鱼演出 — Sacaban-fish scene
+      99,     # 圣心教堂boss演出1 — Sacred-Heart boss scene 1
+      # 100 灼热之触召唤演出 REMOVED: live summon-cutscene step counter (Map221) -> LOCAL
+      210,    # 索斯赛拉finale — Sothothera finale
+      215,    # 魔女之家演出1 — Witch's House scene 1
+      217, 218, 219, 220,  # 薇拉演出 2.5 / 1 / 2 / 3 — Vera scenes
+      250,    # 试玩通关 — demo cleared
+      266,    # 神秘学者支线 — occultist sidequest
+      268,    # 灰猎犬小队支线 — Greyhound-Squad sidequest (VERIFIED: each += gated by
+              #  SelfSwitch[D] -> single-fire global, abs converges; safe)
+      270,    # 海神封印支线 — Sea-God Seal sidequest (VERIFIED: += behind SelfSwitch[D] one-shot)
+      271,    # 鱼头马演出 — Fish-head Horse scene
+      273,    # 卧底支线 — undercover sidequest
+      274,    # 花庭传送解锁 — Flower-Court teleport unlock
+      276,    # 教堂神职人员剧情 — cathedral cleric story
+      277,    # 塔米拉开启海德拉 — Tamira opens Hydra
+      281, 282,         # 葛特露演出 1 / 2 — Gertruda scenes
+      # 286 贪食龙进度 REMOVED: real-time chase/AI state (siblings 285/287 local); the
+      #  durable kill is switch 1110 (already shared). Owner-authority fix -> task #31
+      289,    # 贪婪与毁灭支线 — Greed & Destruction sidequest
+      290,    # 最后幸存者支线 — Last Survivor sidequest
+      297,    # 伊瓦诺拉刺杀血迹 — Evanora assassination bloodstain
+      298,    # 礼拜堂沉睡演出 — chapel sleeping scene
+      299,    # 伊瓦诺拉浇花 — Evanora watering flowers
+      1401,   # 八音盒支线进度 — Music-Box sidequest progress
+      1404,   # 圣域支线进度 — Sanctuary sidequest progress
+      1031,   # 商店进度 — shop progress (VERIFIED: absolute-SET state 1-6, cross-map read; not a counter despite the name)
+      203,    # 船送点数量 — ferry dock COUNT. CE87 gates the whole ferry on `203 < 2`
+              #  ("no new dock"), so the guest must have it or they're locked out even
+              #  with docks 90-96 shared. It's a +=1 counter (split risk) but converges in
+              #  practice; the real unlock authority is switches 90-96, this is just the gate.
     ]
 
     # --- Co-op "local" common events (step 6.5) ---
@@ -374,6 +518,15 @@ module BSMP
       :show_status_plate => true,
       :status_plate_x    => 100,  # 0 = flush left, 100 = flush right
       :status_plate_y    => 0,    # 0 = top,        100 = bottom
+      # World snapshot (join / resync) scope. Default applies ONLY the shared world
+      # (SHARED_* switches/variables, plus self-switches + spirits which are inherently
+      # world state) — a joiner adopts the host's world PROGRESS without its peer-LOCAL
+      # switches/vars getting overwritten (consistent with the live sync, which already
+      # filters by SHARED_*). Flip ON for the legacy WHOLESALE copy (every switch + every
+      # non-zero var) as an emergency hard re-sync if something desyncs badly. Host-side:
+      # the host's setting is stamped into the snapshot, so the receiver applies the right
+      # mode regardless of its own setting.
+      :world_snapshot_full => false,
     }
 
     # Typed accessors over the backing store; setters edit the working copy only
