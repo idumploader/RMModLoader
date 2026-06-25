@@ -101,6 +101,11 @@ module BSMP
       M.toggle("Packet trace", bind(:debug_packets).merge(:category => CAT))
       M.toggle("Log to file", bind(:log_to_file).merge(:category => CAT))
       M.action("Mark log (bug here)", :category => CAT) { BSMP.mark_log("from menu") }
+      # Host-side emergency: ON = the join/resync world snapshot copies EVERY switch+var
+      # wholesale (legacy). OFF (default) = only the shared world, so peer-local state
+      # doesn't leak. Flip ON to force a hard full re-sync if a desync needs it.
+      M.toggle("Full world sync", bind(:world_snapshot_full).merge(
+               :category => CAT, :on_text => "ON", :off_text => "OFF"))
 
       # Language lives in the loader's own "General" tab (12 - ModMenuDefaults),
       # not here — it's a global ModLoader setting, not a co-op one.

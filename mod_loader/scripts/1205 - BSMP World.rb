@@ -7,12 +7,17 @@
 #
 # Format (version-tagged, little bit-twiddling, all ints LEB128 varint):
 #   u8   FORMAT
-#   switches:     varint N, then ceil(N/8) packed bits (index 1..N)
-#   variables:    varint COUNT, then COUNT * [varint index, value]
+#   u8   MODE  (0 = filtered/shared-only, 1 = full/wholesale) — stamped by the host's
+#              BSMP.settings.world_snapshot_full, so the receiver applies the matching mode
+#   switches:   FULL     -> varint N, then ceil(N/8) packed bits (index 1..N)
+#               FILTERED -> varint COUNT, then COUNT * [varint shared_id, u8 value]
+#   variables:  FULL     -> varint COUNT, then COUNT * [varint index, value] (all non-zero)
+#               FILTERED -> same shape, but only the SHARED non-zero vars
 #                   value = u8 tag + payload; recursive. Tags: 0 int (zigzag),
 #                   1 string (len+bytes), 2 array (count + values), 3 true, 4 false,
 #                   5 nil, 6 float (8 B LE). Unknown classes -> logged, stored as nil.
 #   self-switches: varint COUNT, then COUNT * [varint map_id, varint event_id, u8 ch]
+#                   (always world state — same in both modes)
 #==============================================================================
 
 $imported ||= {}
@@ -26,7 +31,7 @@ module BSMP
   module World
 
     # Bump when the wire layout below changes incompatibly.
-    FORMAT = 3   # 3: added covenant spirits section
+    FORMAT = 4   # 3: added covenant spirits section. 4: MODE byte + filtered (shared-only) snapshot
 
     SELF_SWITCH_CHARS = "ABCD"
 
@@ -44,6 +49,23 @@ module BSMP
     def self.shared_variable?(id)
       Config::SHARED_VARIABLE_IDS.include?(id) or
         Config::SHARED_VARIABLE_RANGES.any? { |r| r.include?(id) }
+    end
+
+    # The concrete shared id sets (IDS + expanded RANGES), clamped to the live table size,
+    # unique + sorted — the FILTERED snapshot dump/load walks exactly these. Built per call
+    # (only at join/resync, so cheap) so a Config edit is picked up with no caching.
+    def self.shared_switch_id_list
+      ids = Config::SHARED_SWITCH_IDS.dup
+      Config::SHARED_SWITCH_RANGES.each { |r| ids.concat(r.to_a) }
+      n = switch_count
+      ids.select { |i| i >= 1 and i <= n }.uniq.sort
+    end
+
+    def self.shared_variable_id_list
+      ids = Config::SHARED_VARIABLE_IDS.dup
+      Config::SHARED_VARIABLE_RANGES.each { |r| ids.concat(r.to_a) }
+      n = variable_count
+      ids.select { |i| i >= 1 and i <= n }.uniq.sort
     end
 
     # An event page is "host-owned world progression" (a guest must not run its
@@ -290,8 +312,11 @@ module BSMP
     def self.dump
       w = "".force_encoding("ASCII-8BIT")
       w << [FORMAT].pack("C")
-      dump_switches(w)
-      dump_variables(w)
+      # Host-side scope choice, stamped into the blob so the receiver applies the same mode.
+      full = (BSMP.settings.world_snapshot_full rescue false) ? true : false
+      w << [full ? 1 : 0].pack("C")
+      dump_switches(w, full)
+      dump_variables(w, full)
       dump_self_switches(w)
       dump_spirits(w)
       w
@@ -305,18 +330,33 @@ module BSMP
       ids.each { |id| write_uint(w, id) }
     end
 
-    def self.dump_switches(w)
-      n = switch_count
-      write_uint(w, n)
-      bytes = Array.new((n + 7) / 8, 0)
-      (1..n).each do |i|
-        bytes[(i - 1) >> 3] |= (1 << ((i - 1) & 7)) if $game_switches[i]
+    def self.dump_switches(w, full)
+      if full
+        n = switch_count
+        write_uint(w, n)
+        bytes = Array.new((n + 7) / 8, 0)
+        (1..n).each do |i|
+          bytes[(i - 1) >> 3] |= (1 << ((i - 1) & 7)) if $game_switches[i]
+        end
+        w << bytes.pack("C*")
+      else
+        # Shared switches only: every shared id with its value (incl. false, so a host-OFF
+        # clears a guest's stale ON). Peer-local switches are left out entirely.
+        ids = shared_switch_id_list
+        write_uint(w, ids.size)
+        ids.each do |i|
+          write_uint(w, i)
+          w << [$game_switches[i] ? 1 : 0].pack("C")
+        end
       end
-      w << bytes.pack("C*")
     end
 
-    def self.dump_variables(w)
-      indices = (1..variable_count).select { |i| $game_variables[i] != 0 }
+    def self.dump_variables(w, full)
+      indices = if full
+        (1..variable_count).select { |i| $game_variables[i] != 0 }
+      else
+        shared_variable_id_list.select { |i| $game_variables[i] != 0 }
+      end
       write_uint(w, indices.size)
       indices.each do |i|
         write_uint(w, i)
@@ -346,12 +386,13 @@ module BSMP
         p "BSMP::World: snapshot format #{format} != #{FORMAT}, ignoring"
         return false
       end
+      full = (r.u8 == 1)  # host-stamped mode (0 = filtered/shared-only, 1 = full)
       # Applying the snapshot writes thousands of switches/vars; guard so the
       # live-sync setter hooks don't re-broadcast each one as a fact.
       $bsmp_applying_fact = true
       begin
-        load_switches(r)
-        load_variables(r)
+        load_switches(r, full)
+        load_variables(r, full)
         load_self_switches(r)
         load_spirits(r)
       ensure
@@ -361,19 +402,34 @@ module BSMP
       true
     end
 
-    def self.load_switches(r)
-      n = r.uint
-      raw = r.bytes((n + 7) / 8)
-      (1..n).each do |i|
-        bit = (raw.getbyte((i - 1) >> 3) >> ((i - 1) & 7)) & 1
-        $game_switches[i] = (bit == 1)
+    def self.load_switches(r, full)
+      if full
+        n = r.uint
+        raw = r.bytes((n + 7) / 8)
+        (1..n).each do |i|
+          bit = (raw.getbyte((i - 1) >> 3) >> ((i - 1) & 7)) & 1
+          $game_switches[i] = (bit == 1)
+        end
+      else
+        # Filtered: set only the shared ids the host sent; peer-local switches untouched.
+        count = r.uint
+        count.times do
+          i = r.uint
+          $game_switches[i] = (r.u8 == 1)
+        end
       end
     end
 
-    def self.load_variables(r)
-      # Reset to default first so a guest's stray non-zero vars don't survive the
-      # adoption of the host's world, then apply the host's non-zero set.
-      (1..variable_count).each { |i| $game_variables[i] = 0 }
+    def self.load_variables(r, full)
+      if full
+        # Reset to default first so a guest's stray non-zero vars don't survive the
+        # adoption of the host's world, then apply the host's non-zero set.
+        (1..variable_count).each { |i| $game_variables[i] = 0 }
+      else
+        # Filtered: clear only the SHARED vars (so a host-zero shared var clears the guest's
+        # stale value), leaving the guest's peer-local vars intact, then apply the host's set.
+        shared_variable_id_list.each { |i| $game_variables[i] = 0 }
+      end
       count = r.uint
       count.times do
         i = r.uint
