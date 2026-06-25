@@ -445,6 +445,10 @@ class Game_Switches
     return if $bsmp_applying_fact
     return if not bsmp_network_running?
     return if not BSMP::World.shared_switch?(switch_id)
+    # Per-map-event filter (set by command_121 below from Config::PERSONAL_MAP_EVENTS):
+    # :on_only keeps an OFF write LOCAL — the ferry dock's transient "I'm standing here"
+    # toggle, vs the ON write which carries the durable "dock discovered" world fact.
+    return if $bsmp_switch_filter == :on_only and not value
     bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::SWITCH_CHANGED, 0, "#{switch_id};#{value ? 1 : 0}"))
   end
 end
@@ -482,10 +486,32 @@ class Game_SelfSwitches
   end
 end
 
+# command_121 = "Control Switches". A MAP event listed in Config::PERSONAL_MAP_EVENTS gets
+# its switch broadcast filtered (see the dock note there): we set $bsmp_switch_filter for the
+# duration of this ONE command so Game_Switches#[]= above can drop the per-player direction.
+# command_121 is synchronous (no Fiber.yield, unlike a CE that ShowTexts), so the guard can't
+# leak across a yield; the ensure clears it even if the set raises. event_id 0 (common events)
+# never matches, so NG+'s CE18 mass reset is unaffected and its dock OFF still propagates.
+class Game_Interpreter
+  alias bsmp_orig_command_121 command_121
+  def command_121
+    mode = (defined?(BSMP) && $game_map) ?
+             BSMP.personal_map_event_mode($game_map.map_id, @event_id) : nil
+    return bsmp_orig_command_121 unless mode
+    $bsmp_switch_filter = mode
+    begin
+      bsmp_orig_command_121
+    ensure
+      $bsmp_switch_filter = nil
+    end
+  end
+end
+
 # --- BSMP globals + debug console commands ---
 
 $bsmp_applying_fact = false
 $bsmp_applying_loot = false
+$bsmp_switch_filter = nil
 
 $bsmp_client = BSMP::Client.new()
 $bsmp_server = BSMP::Server.new()

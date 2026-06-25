@@ -368,6 +368,30 @@ module BSMP
                      #  sets var272=2 + self-switch A. Pure idempotent story beat.
     }
 
+    # --- Per-map-event switch-broadcast filter (ControlSwitches command_121) ---
+    # Some MAP events toggle a SHARED switch in a way that is partly world progress and
+    # partly per-player. The ferry docks are the case: switch 90-96 ON = "dock discovered"
+    # (world, must sync), but the dock event also flips it OFF for a split-second while you
+    # stand AT that dock (so its own menu, CE88, omits "travel to where I am") then ON again.
+    # That transient OFF is per-player and must NOT leak. We can't bracket the map event
+    # (its OFF is the page's first command), so we filter at command_121 by (map, event).
+    #   :on_only -> broadcast the ON write (carries the discovery), keep OFF local. The ON
+    #     also delivers discovery to a peer who never ran the event's Page 0 (its self-switch
+    #     synced and flipped them to the menu page). NG+ clears docks via CE18's mass reset,
+    #     NOT these events, so the reset OFF still propagates.
+    #   :local   -> keep BOTH directions local (a fully per-player switch write). For future.
+    # The local set still happens; only the network broadcast is filtered.
+    # { map_id => [[event_id, mode], ...] }
+    PERSONAL_MAP_EVENTS = {
+      80  => [[197, :on_only]],  # ferry dock: New-Emerald East (switch 93)
+      82  => [[153, :on_only]],  # ferry dock: Cathedral (switch 91)
+      83  => [[20,  :on_only]],  # ferry dock: Freud commercial (switch 90)
+      85  => [[55,  :on_only]],  # ferry dock: Tavern (switch 92)
+      92  => [[103, :on_only]],  # ferry dock: Emerald-bridge East (switch 96)
+      137 => [[22,  :on_only]],  # ferry dock: Joliet port (switch 95)
+      210 => [[2,   :on_only]],  # ferry dock: Nancy hideout (switch 94)
+    }
+
     # --- Co-op battle scaling (step 6.6) ---
     # Enemies scale with the number of PLAYERS in the fight (1 = no scaling). co-op
     # battles are global, so "players" = lobby size; the value is stable for the whole
@@ -712,6 +736,17 @@ module BSMP
   # local_ce? — mirrored CEs also run loot-local on each peer. Drives MIRROR_CE.
   def self.shared_ce?(id)
     Config::SHARED_COMMON_EVENT_IDS.include?(id)
+  end
+
+  # Switch-broadcast filter mode for a running MAP event's ControlSwitches (command_121),
+  # or nil if unfiltered. See Config::PERSONAL_MAP_EVENTS. event_id 0 (a common event /
+  # no map event) is never matched, so CE-driven writes (e.g. NG+ CE18) are unaffected.
+  def self.personal_map_event_mode(map_id, event_id)
+    return nil if event_id.nil? or event_id == 0
+    list = Config::PERSONAL_MAP_EVENTS[map_id]
+    return nil unless list
+    pair = list.assoc(event_id)
+    pair && pair[1]
   end
 
   # Number of players in a co-op battle (6.6). co-op battles are global, so this is the
