@@ -241,7 +241,7 @@ module BSMP
       1194,           # 多萝西监禁事件 — Dorothy imprisonment (cross-map NPC fate)
       1218, 1219,     # 地下新入口开启 / 警笛头击破 — underground entrance / Siren Head
       1236,           # 受诅咒蛙击破 — Cursed Frog defeated
-      1409, 1411,     # 稻草人击破 / 奇特南戈城演出结束 — Scarecrow / Kitenango cutscene
+      1409, 1411, 1408,     # 稻草人击破 / 奇特南戈城演出结束 — Scarecrow / Kitenango cutscene / Scarecrow (Dorothy killed, left to other region)
       1410,           # 魔化稻草人 — demonized scarecrow defeat-state (must agree)
       1412,           # 杀害 — Celia killed (cross-map NPC death)
       1436,           # 黑色扭曲击破 — black-distortion defeated (cross-map)
