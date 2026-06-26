@@ -1,0 +1,211 @@
+#==============================================================================
+# ViewportFXTestMenu - a live ModMenu tab to poke the native ViewportEffects.
+#
+# DISABLED by default (.disabled extension -> the loader skips it). To use it,
+# drop the ".disabled" suffix and deploy to mod_loader/scripts, then open the
+# ModMenu (F10) and switch to the "ViewportFX" tab. Every slider/toggle drives
+# ModLoader::Viewport.map (the current map's @viewport1) in real time, so you can
+# eyeball each effect and calibrate the Zeus->native mapping (script 245).
+#
+# Notes:
+#   * Open it ON THE MAP - off-map there is no map viewport, so edits just cache
+#     and apply once you're back and nudge a control.
+#   * There are no native getters; we cache values here and re-push the whole set
+#     on any change (cheap). The menu freezes the game while open, so it never
+#     fights the per-frame ZeusNativeBackend bridge. When closed with Zeus idle
+#     the bridge leaves the viewport alone, so your test values persist; if a real
+#     Zeus map-effect is running it will reclaim the viewport next frame.
+#   * Requires "viewport_effects": true in mod_loader.json (native API present).
+#==============================================================================
+
+$imported ||= {}
+if not $imported["IDL-ViewportFXTestMenu"]
+$imported["IDL-ViewportFXTestMenu"] = "1.0"
+
+if defined?(ModLoader::ModMenu) && defined?(ModLoader::Viewport) && ModLoader::Viewport.available?
+
+module ViewportFXTest
+  CATEGORY = "ViewportFX"
+  DEFAULTS = { :zoom => 100, :angle => 0, :flipx => false, :flipy => false,
+               :blur => 0, :zblur => 0, :rblur => 0, :pix => 1,
+               :wamp => 0, :wlen => 120, :wspd => 10 }
+
+  class << self
+    def state; @state ||= DEFAULTS.dup; end
+    def vp;    ModLoader::Viewport.map; end
+
+    def get(key);      state[key]; end
+    def set(key, val); state[key] = val; apply; val; end
+
+    # Push the whole cached set onto the map viewport (no-op off the map).
+    def apply
+      v = vp
+      return unless v
+      v.zoom        = state[:zoom] / 100.0
+      v.angle       = state[:angle]
+      v.flip_x      = state[:flipx]
+      v.flip_y      = state[:flipy]
+      v.blur        = state[:blur]
+      v.zoom_blur   = state[:zblur]
+      v.radial_blur = state[:rblur]
+      v.pixelize    = state[:pix]
+      if state[:wamp] > 0
+        v.wave(state[:wamp], state[:wlen], state[:wspd] / 100.0)
+      else
+        v.wave_off
+      end
+    end
+
+    def reset
+      @state = DEFAULTS.dup
+      queue.clear
+      ModLoader::Viewport.clear if vp
+      eff = effects and eff.clear      # also stop any running Zeus-API effect
+    end
+
+    # The Zeus Game_Map_Effects object ($game_map.effects). Presets drive THIS (the
+    # public map_effects API) rather than the viewport directly, so they animate over
+    # a duration and -- with zeus_native_backend on -- get mirrored natively by the
+    # bridge (script 245). nil off the map / if Zeus isn't in this build.
+    def effects
+      ($game_map && $game_map.respond_to?(:effects)) ? $game_map.effects : nil
+    end
+
+    # --- tiny frame scheduler: replays a `script ... wait ... script` sequence ---
+    # steps = [[delay_frames_before_running, proc], ...]. Ticked once per frame from
+    # Scene_Map#update; the menu is closed by then, so the game (and effects.update
+    # twining) runs normally. Procs resolve `effects` fresh each call.
+    def queue; @queue ||= []; end
+
+    def run_sequence(steps)
+      queue.clear
+      steps.each { |delay, blk| queue << [delay, blk] }
+    end
+
+    def tick
+      return if queue.empty?
+      head = queue.first
+      if head[0] <= 0
+        queue.shift
+        head[1].call rescue nil
+      else
+        head[0] -= 1
+      end
+    end
+  end
+end
+
+M = ModLoader::ModMenu
+C = { :category => ViewportFXTest::CATEGORY }
+mk = lambda { |key| { :get => proc { ViewportFXTest.get(key) },
+                      :set => proc { |v| ViewportFXTest.set(key, v) } } }
+
+# Live backend A/B: flip the whole Zeus Map Effects pipeline between our native
+# renderer and Zeus' original snap_to_bitmap one, no restart. Fire a Zeus-API preset
+# below, then toggle this and watch the picture + FPS hud. Only shown when the shim
+# is installed (Zeus present + native API up).
+if defined?(ModLoader::ZeusNative) && ModLoader::ZeusNative.installed?
+  M.header("Backend (live A/B)", C)
+  M.toggle("Renderer", C.merge(
+    :get => proc { ModLoader::ZeusNative.native_on? },
+    :set => proc { |v| ModLoader::ZeusNative.native_on = v },
+    :on_text => "NATIVE", :off_text => "ZEUS"))
+end
+
+M.header("Geometry", C)
+M.slider("Zoom",        C.merge(mk[:zoom]).merge(:min => 100, :max => 400, :step => 5,
+         :format => proc { |v| format("x%.2f", v / 100.0) }))
+M.slider("Angle",       C.merge(mk[:angle]).merge(:min => 0, :max => 359, :step => 5,
+         :format => proc { |v| "#{v}\xC2\xB0" }))
+M.toggle("Flip X",      C.merge(mk[:flipx]))
+M.toggle("Flip Y",      C.merge(mk[:flipy]))
+
+M.header("Blur", C)
+M.slider("Box blur",    C.merge(mk[:blur]).merge(:min => 0, :max => 32,  :step => 1))
+M.slider("Zoom blur",   C.merge(mk[:zblur]).merge(:min => 0, :max => 100, :step => 5))
+M.slider("Radial blur", C.merge(mk[:rblur]).merge(:min => 0, :max => 100, :step => 5))
+M.slider("Pixelize",    C.merge(mk[:pix]).merge(:min => 1, :max => 32, :step => 1,
+         :format => proc { |v| v <= 1 ? "off" : "#{v}px" }))
+
+M.header("Wave", C)
+M.slider("Wave amp",    C.merge(mk[:wamp]).merge(:min => 0, :max => 40, :step => 1))
+M.slider("Wave length", C.merge(mk[:wlen]).merge(:min => 8, :max => 240, :step => 4))
+M.slider("Wave speed",  C.merge(mk[:wspd]).merge(:min => 0, :max => 50, :step => 1,
+         :format => proc { |v| format("%.2f rad/f", v / 100.0) }))
+
+M.header("Presets (viewport)", C)
+# Close the menu so the frozen overlay gets out of the way and you see the live
+# effect immediately (:close_after => window.request_close). Your slider values
+# stay applied on the viewport after close.
+M.action("Preview (close menu)", C.merge(:close_after => true)) { ViewportFXTest.apply }
+M.action("Dream (blur+zoom)",   C.merge(:close_after => true)) { ModLoader::Viewport.dream }
+
+# --- Zeus map_effects.* presets ---------------------------------------------------
+# These drive the public Zeus API ($game_map.effects) exactly like an event's
+# `script("map_effects.set_zoom_blur(...)")`. With zeus_native_backend on they run
+# natively via the bridge -- so they double as a check that the backend mirrors Zeus.
+# All :close_after so the sequence plays while you watch. Off the map they no-op.
+V = ViewportFXTest
+M.header("Presets (Zeus API)", C)
+
+M.action("Radial+Zoom blur on", C.merge(:close_after => true)) {
+  if e = V.effects
+    e.set_radial_blur(50, 60); e.set_zoom_blur(50, 60); e.setup_blur(4, 50, 5, 60)
+  end
+}
+M.action("Zoom blur strong", C.merge(:close_after => true)) {
+  if e = V.effects
+    e.set_radial_blur(0, 60); e.set_zoom_blur(100, 60); e.setup_blur(4, 0, 0, 60)
+  end
+}
+# The two-phase script/wait/script example: phase 1, wait 60f, then phase 2.
+M.action("Sequence demo (2 phases)", C.merge(:close_after => true)) {
+  V.run_sequence([
+    [0,  proc { if e = V.effects
+      e.set_radial_blur(50, 60); e.set_zoom_blur(50, 60); e.setup_blur(4, 50, 5, 60)
+    end }],
+    [60, proc { if e = V.effects
+      e.set_radial_blur(0, 60); e.set_zoom_blur(100, 60); e.setup_blur(4, 0, 0, 60)
+    end }],
+  ])
+}
+M.action("Zeus zoom x2 (1s)", C.merge(:close_after => true)) {
+  e = V.effects and e.set_zoom(200, 60)
+}
+M.action("Zeus wave", C.merge(:close_after => true)) {
+  e = V.effects and e.set_wave(8, 120, 360, 30)
+}
+# Tone tests. "Gray tone" alone exercises the NATIVE viewport tone (walker not
+# involved -> should desaturate fine). "Blur + gray" sets tone AND a blur at once:
+# if the gray doesn't apply over the blur, that's the predicted walker-bypass of the
+# engine's tone pass (fix = tint the backbuffer in C++).
+M.action("Gray tone (grayscale)", C.merge(:close_after => true)) {
+  e = V.effects and e.set_tone(0, 0, 0, 255, 30)
+}
+M.action("Blur + gray tone", C.merge(:close_after => true)) {
+  if e = V.effects
+    e.set_tone(0, 0, 0, 255, 30)
+    e.set_zoom_blur(50, 30); e.setup_blur(4, 50, 5, 30)
+  end
+}
+M.action("Clear tone", C.merge(:close_after => true)) {
+  e = V.effects and e.set_tone(0, 0, 0, 0, 20)
+}
+
+M.header("Reset", C)
+M.action("Reset all", C) { ViewportFXTest.reset }
+
+# Per-frame scheduler tick (drives run_sequence). Map-only, so hook Scene_Map. This
+# file loads at 246 (before BSMP's 1240/1271 Spriteset hooks and any later Scene_Map
+# wrap), so the alias chain stays intact.
+class Scene_Map
+  alias vfxtest_orig_update update
+  def update
+    vfxtest_orig_update
+    ViewportFXTest.tick
+  end
+end
+
+end # defined?(ModMenu) && Viewport.available?
+
+end # not $imported["IDL-ViewportFXTestMenu"]

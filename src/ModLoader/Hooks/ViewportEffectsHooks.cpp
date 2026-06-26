@@ -122,9 +122,10 @@ namespace rm_modloader {
             int    blur = 0;                   // box-blur radius in px (0 = none)
             int    zoom_blur = 0;              // zoom/"warp" blur strength 0..100 (0 = none)
             int    radial_blur = 0;            // radial/spin blur strength 0..100 (0 = none)
+            int    pixelize = 1;               // mosaic block size in px (1 = off, >1 = blockify)
             bool wave_on() const { return wave_amp != 0.0 && wave_length > 0.0; }
             bool rotates() const { return angle != 0.0 || flip_x || flip_y; }
-            bool active() const { return zoom > 1.0 || flip_x || flip_y || wave_on() || angle != 0.0 || blur > 0 || zoom_blur > 0 || radial_blur > 0; }
+            bool active() const { return zoom > 1.0 || flip_x || flip_y || wave_on() || angle != 0.0 || blur > 0 || zoom_blur > 0 || radial_blur > 0 || pixelize > 1; }
         };
 
         // Per-viewport effects, keyed by Sprite::sprite_id (unique forever). Touched only from
@@ -376,6 +377,28 @@ namespace rm_modloader {
             }
             directional_blur(base, stride, x0, y0, x1, y1, cx, cy, m, BLUR_TAPS);
         }
+
+        // Mosaic / pixelize: nearest-neighbour downscale done in place -- collapse each
+        // `block`x`block` cell to one sampled pixel (its centre) and flood-fill the cell. No taps,
+        // no temp buffer; this is just the STEP grid with STEP=block and a block paint instead of
+        // an avg2 upsample. Zeus does it via a half-size stretch_blt round-trip on a copy; the
+        // visual result (blocky downsample-then-upsample-nearest) is identical.
+        void pixelize_blur(uint32_t* base, int stride, int x0, int y0, int x1, int y1, int block) {
+            if (block < 2) return;
+            for (int by = y0; by < y1; by += block) {
+                int ey = by + block > y1 ? y1 : by + block;
+                int sy = by + block / 2; if (sy >= y1) sy = y1 - 1;
+                for (int bx = x0; bx < x1; bx += block) {
+                    int ex = bx + block > x1 ? x1 : bx + block;
+                    int sx = bx + block / 2; if (sx >= x1) sx = x1 - 1;
+                    uint32_t p = base[sy * stride + sx];
+                    for (int y = by; y < ey; ++y) {
+                        uint32_t* row = base + y * stride;
+                        for (int x = bx; x < ex; ++x) row[x] = p;
+                    }
+                }
+            }
+        }
     }
 
     struct WalkerHook : Sprite {
@@ -411,7 +434,7 @@ namespace rm_modloader {
 
             // Blur the captured region in place (before any zoom/rotate blit), so it composes
             // with every other effect. Engine has no blur -> our own CPU pass (the heaviest bit).
-            if ((eff->blur > 0 || eff->zoom_blur > 0 || eff->radial_blur > 0) && e_img_off8 && e_stride) {
+            if ((eff->blur > 0 || eff->zoom_blur > 0 || eff->radial_blur > 0 || eff->pixelize > 1) && e_img_off8 && e_stride) {
                 uint32_t* px = e_img_off8(g_backbuffer);
                 int stride_px = e_stride(g_backbuffer) / 4;   // SIGNED: negative for a bottom-up DIB
                 if (px && stride_px != 0) {                   // base is the top row, so -stride walks down
@@ -422,6 +445,8 @@ namespace rm_modloader {
                     if (eff->zoom_blur > 0 || eff->radial_blur > 0)   // fused: one pass for both
                         motion_blur(px, stride_px, vr.left, vr.top, vr.right, vr.bottom, bcx, bcy,
                                     eff->zoom_blur, eff->radial_blur);
+                    if (eff->pixelize > 1)                            // blockify last (after blur)
+                        pixelize_blur(px, stride_px, vr.left, vr.top, vr.right, vr.bottom, eff->pixelize);
                 }
             }
 
@@ -657,6 +682,16 @@ namespace rm_modloader {
             }
             return v;
         }
+        RubyValue __cdecl vp_set_pixelize(RubyValue self, RubyValue v) {
+            RxViewport* vp = rgss_native<RxViewport>(self);
+            if (vp) {
+                int b = rb_parse_int(v);
+                if (b < 1) b = 1; else if (b > 256) b = 256;   // clamp (1 = off)
+                g_effects[vp->sprite_id].pixelize = b;
+                reclaim_if_inert(g_effects.find(vp->sprite_id));
+            }
+            return v;
+        }
         RubyValue __cdecl vp_wave_off(RubyValue self) {
             RxViewport* vp = rgss_native<RxViewport>(self);
             if (vp) {
@@ -729,6 +764,7 @@ namespace rm_modloader {
             rb_define_method(*viewport_klass, "blur=",            vp_set_blur,   1);
             rb_define_method(*viewport_klass, "zoom_blur=",       vp_set_zoom_blur, 1);
             rb_define_method(*viewport_klass, "radial_blur=",     vp_set_radial_blur, 1);
+            rb_define_method(*viewport_klass, "pixelize=",        vp_set_pixelize, 1);
 
             // Global default for the auto-detected map viewport.
             mod_loader->register_ruby_method("viewport_zoom=",       ve_set_zoom);
