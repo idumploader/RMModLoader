@@ -43,6 +43,12 @@ module BSMP
     "bsmp.ready_gate_wait"    => "Waiting for party  %d/%d", # here / needed
     "bsmp.battle_wait_others" => "Waiting for other players...",
     "bsmp.your_turn"          => "Your turn",
+    # --- players menu overlay (1267) ---
+    "bsmp.menu_teleport"      => "Teleport to",
+    "bsmp.menu_kick"          => "Kick",
+    "bsmp.menu_cancel"        => "Cancel",
+    "bsmp.menu_close"         => "Close",
+    "bsmp.menu_you"           => "(you)",
   }
 
   # Register every default up front so dump_template can enumerate the keys.

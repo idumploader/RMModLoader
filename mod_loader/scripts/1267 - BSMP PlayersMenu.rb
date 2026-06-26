@@ -174,10 +174,10 @@ class PlayersMenu_ListWindow < Window_Command
   def make_command_list
     @rows ||= BSMP::PlayersMenu.rows
     @rows.each do |row|
-      label = row[:is_self] ? "#{row[:name]}  (you)" : row[:name]
+      label = row[:is_self] ? "#{row[:name]}  #{BSMP.t('bsmp.menu_you')}" : row[:name]
       add_command(label, :player, !row[:is_self], row)   # self row is a disabled info line
     end
-    add_command("Close", :close, true)
+    add_command(BSMP.t("bsmp.menu_close"), :close, true)
   end
 
   # name in a left column, location greyed in its own right column (each clipped to its
@@ -312,9 +312,9 @@ class PlayersMenu_ActionWindow < Window_Command
   def window_width; 260; end
 
   def make_command_list
-    add_command("Teleport to", :teleport, teleport_ok?)
-    add_command("Kick",        :kick) if kick_available?
-    add_command("Cancel",      :cancel)
+    add_command(BSMP.t("bsmp.menu_teleport"), :teleport, teleport_ok?)
+    add_command(BSMP.t("bsmp.menu_kick"),     :kick) if kick_available?
+    add_command(BSMP.t("bsmp.menu_cancel"),   :cancel)
   end
 
   def teleport_ok?
