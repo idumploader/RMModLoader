@@ -66,6 +66,7 @@ add_library(ModLoader SHARED
   "src/ModLoader/Hooks/SpriteDisposeFixHooks.cpp"
   "src/ModLoader/Hooks/HttpServerHooks.cpp"
   "src/ModLoader/Hooks/FocusPauseHooks.cpp"
+  "src/ModLoader/Hooks/ViewportEffectsHooks.cpp"
 
   "src/ModLoader/SteamOverlay/DLLResolver.cpp"
   "src/ModLoader/SteamOverlay/IPCStreams.cpp"
