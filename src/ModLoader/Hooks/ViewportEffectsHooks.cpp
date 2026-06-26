@@ -44,6 +44,20 @@ namespace rm_modloader {
         constexpr ptrdiff_t op_new_offset              = 0x17E979;
         constexpr ptrdiff_t num2dbl_offset             = 0x034DD0;   // rb_num2dbl (RGSS NUM2DBL)
         constexpr ptrdiff_t float_new_offset           = 0x05A250;   // rb_float_new(double)
+        // Engine transform kernel (RxSprite::render) + its ctor/set_surface, for native rotation.
+        constexpr ptrdiff_t rxsprite_ctor_offset       = 0x01CE40;   // RxSprite_ctx(this, ancestor) -- true entry (prologue); 0x1CE50 lands mid-SEH
+        constexpr ptrdiff_t rxsprite_render_offset     = 0x01E780;   // RxSprite::render(this, dest, clip)
+        constexpr ptrdiff_t rxsprite_setsurf_offset    = 0x01D180;   // RxSprite_set_surface(this, Surface*, a3)
+        // RxSprite field offsets (from IDA CRxSprite layout):
+        constexpr int SP_RECT     = 0x08;    // base Sprite::rect = dest rect (sprite_copy_rect src)
+        constexpr int SP_SRCRECT  = 0xCC;    // which region of the surface to sample
+        constexpr int SP_COORD    = 0xDC;    // POINT: rotation pivot in DEST coords
+        constexpr int SP_ORIGIN   = 0xE4;    // POINT ox/oy: rotation pivot in SRC coords
+        constexpr int SP_ZOOMX    = 0xF0;    // double
+        constexpr int SP_ZOOMY    = 0xF8;    // double
+        constexpr int SP_ANGLE    = 0x100;   // double (radians)
+        constexpr int SP_MIRROR   = 0x120;   // BOOL (horizontal mirror)
+        constexpr int SP_ROTDIRTY = 0x150;   // gap140[4]: re-rotate flag, set on any change
         constexpr ptrdiff_t rxviewport_vtable_offset   = 0x1A9220;   // &CRxViewport::vftable
         constexpr ptrdiff_t leaf_vtable_offsets[4]     = { 0x1A8B78, 0x22F3CC, 0x1A8B40, 0x1A91EC };
 
@@ -58,6 +72,9 @@ namespace rm_modloader {
         using draw_t      = int (__thiscall*)(Surface*, RECT*, Surface*, RECT*, void*);
         using num2dbl_t   = double (__cdecl*)(RubyValue);
         using float_new_t = RubyValue (__cdecl*)(double);
+        using sp_ctor_t   = void* (__thiscall*)(void* self, void* ancestor);
+        using sp_render_t = int   (__thiscall*)(void* self, Surface* dest, RECT* clip);
+        using sp_setsurf_t= Surface* (__thiscall*)(void* self, Surface* surf, int a3);
 
         op_new_t    e_op_new    = nullptr;
         surf_ctor_t e_surf_ctor = nullptr;
@@ -67,6 +84,10 @@ namespace rm_modloader {
         draw_t      e_draw      = nullptr;
         num2dbl_t   e_num2dbl   = nullptr;
         float_new_t e_float_new = nullptr;
+        sp_ctor_t    e_sp_ctor    = nullptr;
+        sp_render_t  e_sp_render  = nullptr;
+        sp_setsurf_t e_sp_setsurf = nullptr;
+        void*        g_sprite     = nullptr;   // standalone RxSprite (ancestor=null), built lazily
         const void* g_vp_vtable = nullptr;
         const void* g_leaf_vt[4] = { nullptr, nullptr, nullptr, nullptr };
 
@@ -82,8 +103,10 @@ namespace rm_modloader {
             double wave_length = 180.0;        // vertical period in px
             double wave_speed = 0.0;           // phase advance per frame (rad)
             double wave_phase = 0.0;           // running phase (advanced by the walker)
+            double angle = 0.0;                // rotation in degrees (0 = none)
             bool wave_on() const { return wave_amp != 0.0 && wave_length > 0.0; }
-            bool active() const { return zoom > 1.0 || flip_x || flip_y || wave_on(); }
+            bool rotates() const { return angle != 0.0 || flip_x || flip_y; }
+            bool active() const { return zoom > 1.0 || flip_x || flip_y || wave_on() || angle != 0.0; }
         };
 
         // Per-viewport effects, keyed by Sprite::sprite_id (unique forever). Touched only from
@@ -178,6 +201,21 @@ namespace rm_modloader {
             mod_loader->log_info("ViewportEffects: backbuffer grown to {}x{}\n", nw, nh);
             return true;
         }
+
+        // Lazily build one standalone RxSprite (ancestor=null, so it is in NO drawlist and the
+        // scene walk never visits it). We reuse it every frame as the engine's transform kernel:
+        // point it at the backbuffer, set angle/zoom/mirror, call RxSprite::render onto the screen.
+        void* ensure_sprite() {
+            if (g_sprite) return g_sprite;
+            if (!e_op_new || !e_sp_ctor) return nullptr;
+            void* mem = e_op_new(0x2C0);                 // sizeof(RxSprite)
+            if (!mem) return nullptr;
+            g_sprite = e_sp_ctor(mem, nullptr);          // full ctor chain; ancestor=null is guarded
+            return g_sprite;
+        }
+        template<typename T> inline void sp_set(void* obj, int off, const T& v) {
+            *reinterpret_cast<T*>(reinterpret_cast<char*>(obj) + off) = v;
+        }
     }
 
     struct WalkerHook : Sprite {
@@ -256,6 +294,38 @@ namespace rm_modloader {
             dest->rect.top    = 0;
             dest->rect.right  = vr.right;
             dest->rect.bottom = vr.bottom;
+
+            // Rotation / flip path: hand the captured backbuffer to the engine's own transform
+            // kernel (RxSprite::render). It rotates the source into an internal buffer (angle),
+            // honors the mirror bit (its default 0x80000810 blend routes to a mirror-aware
+            // kernel, unlike our 0x10000 path), and zooms via the src->dst rect ratio. We keep
+            // zoom/wave on the hand-rolled path; this branch only triggers when angle/flip is set.
+            if (eff->rotates() && e_sp_render) {
+                void* spr = ensure_sprite();
+                if (spr) {
+                    e_sp_setsurf(spr, g_backbuffer, 0);
+                    RECT srcr = src;                       // zoom sub-rect of the backbuffer
+                    sp_set<RECT>(spr, SP_RECT, vr);        // dest rect on screen
+                    sp_set<RECT>(spr, SP_SRCRECT, srcr);
+                    POINT dst_pivot = { (vr.left + vr.right) / 2, (vr.top + vr.bottom) / 2 };
+                    POINT src_pivot = { (srcr.left + srcr.right) / 2, (srcr.top + srcr.bottom) / 2 };
+                    sp_set<POINT>(spr, SP_COORD, dst_pivot);   // pivot in dest space (was 0 -> off-screen)
+                    sp_set<POINT>(spr, SP_ORIGIN, src_pivot);  // matching pivot in src space
+                    sp_set<double>(spr, SP_ZOOMX, 1.0);    // zoom already baked into src/dst sizes
+                    sp_set<double>(spr, SP_ZOOMY, 1.0);
+                    sp_set<double>(spr, SP_ANGLE, eff->angle);   // engine field is DEGREES (it does deg->rad itself)
+                    sp_set<int>(spr, SP_MIRROR, eff->flip_x ? 1 : 0);
+                    // Use our proven alpha-stretch blend (0x10000). The sprite's default opaque
+                    // dynamic_draw (0x80000810) drew nothing from our synthetic backbuffer (black
+                    // screen). Caveat: 0x10000 ignores the mirror bit, so flip_x won't mirror here
+                    // yet -- that needs a mirror-aware blend (separate). Rotation works regardless.
+                    sp_set<DWORD>(spr, attrs_at, 0x10000);
+                    sp_set<int>(spr, SP_ROTDIRTY, 1);
+                    RECT clip = vr;
+                    e_sp_render(spr, dest, &clip);
+                    return this;
+                }
+            }
 
             if (!eff->wave_on()) {
                 e_draw(dest, &vr, g_backbuffer, &src, attrs);  // single stretch blit
@@ -373,6 +443,11 @@ namespace rm_modloader {
             reclaim_if_inert(g_effects.find(vp->sprite_id));
             return ruby_nil;
         }
+        RubyValue __cdecl vp_set_angle(RubyValue self, RubyValue v) {
+            RxViewport* vp = rgss_native<RxViewport>(self);
+            if (vp) { g_effects[vp->sprite_id].angle = rb_value_to_double(v); reclaim_if_inert(g_effects.find(vp->sprite_id)); }
+            return v;
+        }
         RubyValue __cdecl vp_wave_off(RubyValue self) {
             RxViewport* vp = rgss_native<RxViewport>(self);
             if (vp) {
@@ -418,6 +493,9 @@ namespace rm_modloader {
         e_draw      = mod_loader->at_base_offset_as<draw_t>(draw_on_surface_offset);
         e_num2dbl   = mod_loader->at_base_offset_as<num2dbl_t>(num2dbl_offset);
         e_float_new = mod_loader->at_base_offset_as<float_new_t>(float_new_offset);
+        e_sp_ctor    = mod_loader->at_base_offset_as<sp_ctor_t>(rxsprite_ctor_offset);
+        e_sp_render  = mod_loader->at_base_offset_as<sp_render_t>(rxsprite_render_offset);
+        e_sp_setsurf = mod_loader->at_base_offset_as<sp_setsurf_t>(rxsprite_setsurf_offset);
         g_vp_vtable = mod_loader->at_base_offset(rxviewport_vtable_offset);
         for (int i = 0; i < 4; ++i) g_leaf_vt[i] = mod_loader->at_base_offset(leaf_vtable_offsets[i]);
 
@@ -435,6 +513,7 @@ namespace rm_modloader {
             rb_define_method(*viewport_klass, "flip_y=",          vp_set_flip_y, 1);
             rb_define_method(*viewport_klass, "wave",             vp_set_wave,   3);
             rb_define_method(*viewport_klass, "wave_off",         vp_wave_off,   0);
+            rb_define_method(*viewport_klass, "angle=",           vp_set_angle,  1);
 
             // Global default for the auto-detected map viewport.
             mod_loader->register_ruby_method("viewport_zoom=",       ve_set_zoom);
