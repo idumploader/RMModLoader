@@ -1137,6 +1137,12 @@ module BSMP
     # both pay out (see 1246). data = "type;id;amount;map_id;event_id".
     LOOT_CLAIM          = 55
 
+    # Host -> one guest: "you've been kicked." Point-to-point (NOT relayed, NOT in
+    # HANDLERS) — the guest's Client#on_packet_read leaves the lobby. Enforcement is
+    # host-side (a session ban-list): even a guest that ignores this is dropped, has its
+    # packets ignored, and is REJECTed if it tries to re-handshake. data = "".
+    KICK                = 56
+
     # World-unique covenant token ("spirit"): granted via $game_party.add_spirit (a
     # Script call, NOT ChangeItems, so LOOT_GAIN misses it). When one player earns it
     # (covenant level-up, CE817) every peer gets their own copy. data = "spirit_id".

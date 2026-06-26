@@ -113,6 +113,16 @@ module BSMP
         $game_player.reserve_transfer(row[:map].to_i, row[:x].to_i, row[:y].to_i, 0)
         true
       end
+
+      # Host kick (Stage 2). Hands off to the server, which bans the id for the session
+      # (ignores its packets + REJECTs a rejoin), drops it, and sends a courtesy KICK.
+      def kick(row)
+        return false unless BSMP.respond_to?(:host?) and BSMP.host?
+        return false if row.nil? or row[:is_self]
+        return false unless $bsmp_server and $bsmp_server.respond_to?(:kick_player)
+        $bsmp_server.kick_player(row[:id])
+        true
+      end
     end
   end
 end
@@ -303,11 +313,17 @@ class PlayersMenu_ActionWindow < Window_Command
 
   def make_command_list
     add_command("Teleport to", :teleport, teleport_ok?)
+    add_command("Kick",        :kick) if kick_available?
     add_command("Cancel",      :cancel)
   end
 
   def teleport_ok?
     not ($game_party and $game_party.in_battle)
+  end
+
+  # Host only, and never on the self row.
+  def kick_available?
+    BSMP.respond_to?(:host?) and BSMP.host? and @row and not @row[:is_self]
   end
 
   def vk_down?(*vks);    vks.any? { |vk| ModLoader.input_repeat?(vk) }; end
@@ -337,6 +353,13 @@ class PlayersMenu_ActionWindow < Window_Command
         @list_window.request_close   # close the whole menu -> the queued transfer runs
       else
         Sound.play_buzzer            # in battle / unknown map
+      end
+    when :kick
+      if BSMP::PlayersMenu.kick(@row)
+        Sound.play_ok
+        @list_window.request_close
+      else
+        Sound.play_buzzer
       end
     when :cancel
       on_cancel

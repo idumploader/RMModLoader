@@ -349,6 +349,13 @@ module BSMP
       leave_lobby
     end
 
+    # Host kicked us mid-session (point-to-point KICK). Leave the lobby cleanly; the host
+    # also bans our id, so a re-join would just get REJECTed this session.
+    def handle_kicked(packet)
+      p "You were kicked by the host."
+      leave_lobby
+    end
+
     def on_lobby_chat_update(lobby_id, update_enum, user_id, failure)
       return if failure or not connected?
       return if update_enum <= 1 or user_id != @server_user_id
@@ -364,6 +371,12 @@ module BSMP
     end
 
     def on_packet_read(user_id, packet)
+      # Host-relay model: ONLY the host talks to us. Every legit packet (relayed peer data,
+      # WELCOME / SNAPSHOT / KICK, ownership replies) arrives with the host as the Steam-level
+      # sender. Drop anything a peer P2Ps to us directly — otherwise a malicious client could
+      # forge a KICK (force us out), world facts, or battle packets straight to us, bypassing
+      # the host. @server_user_id is the lobby owner, set on lobby-enter before any packet.
+      return unless user_id == @server_user_id
       packet.data = Wire.unpack(packet.data)
       case packet.type
       when Events::HANDSHAKE_WELCOME
@@ -372,6 +385,8 @@ module BSMP
         return handle_reject(packet)
       when Events::WORLD_SNAPSHOT
         return handle_world_snapshot(packet) # binary blob — don't log its data
+      when Events::KICK
+        return handle_kicked(packet)         # host kicked us: leave the lobby
       end
       BSMP.debug_packet_log { "Client got packet from #{packet.from_id}, type=#{packet.type}, data=#{packet.data}" }
       Events.on_packet(packet)
@@ -408,6 +423,7 @@ module BSMP
       @channel_id = 0
       @server_user_id = nil
       @clients = []
+      @kicked = []   # steam ids kicked this session: packets ignored + REJECTed on rejoin
       @max_read_packets = 10
       @running = false
     end
@@ -424,6 +440,7 @@ module BSMP
       @server_user_id = nil
       @running = false
       @clients.clear
+      @kicked = []   # ban-list is per lobby session
       $bsmp_players.clear
     end
 
@@ -480,6 +497,11 @@ module BSMP
     # Validate a guest's HELLO and either onboard it (WELCOME + world snapshot +
     # normal join) or reject it with a reason. Never relayed to other clients.
     def handle_hello(user_id, packet)
+      if banned?(user_id)
+        BSMP.debug_log { "Rejecting kicked #{user_id}" }
+        send_control(user_id, Events::HANDSHAKE_REJECT, "kicked")
+        return
+      end
       peer = Handshake.parse(packet.data)
       ok, reason = Handshake.validate(peer)
       if not ok
@@ -567,6 +589,24 @@ module BSMP
       Events.on_packet(packet)
     end
 
+    # Host kick (from the Players menu). Steam has no forcible lobby eject, so we enforce
+    # it ourselves: ban the id for this session (its packets are ignored and a re-HELLO is
+    # REJECTed), drop it locally + tell the other peers. The courtesy KICK lets a
+    # cooperating client leave the lobby cleanly; a non-cooperating one is still cut off.
+    def kick_player(user_id)
+      return unless running?
+      return if user_id.nil? or user_id == @server_user_id
+      @kicked ||= []
+      @kicked << user_id unless @kicked.include?(user_id)
+      send_control(user_id, Events::KICK, "")
+      client = find_client(user_id)
+      delete_client(client) if client
+    end
+
+    def banned?(user_id)
+      @kicked and @kicked.include?(user_id)
+    end
+
     private
 
     def on_lobby_created(result, lobby_id, failure)
@@ -613,8 +653,10 @@ module BSMP
       packet.from_id = user_id
       packet.data = Wire.unpack(packet.data)
       if packet.type == Events::HANDSHAKE_HELLO
-        return handle_hello(user_id, packet) # control message: validate, never relay
+        return handle_hello(user_id, packet) # validates; REJECTs a kicked id
       end
+      return if banned?(user_id)   # kicked this session: ignore all non-HELLO traffic
+                                   #  (HELLO is handled above so we still send the REJECT)
       if packet.type == Events::WORLD_REQUEST
         # A guest that just loaded in wants the current world. Point-to-point, never relayed.
         send_world_snapshot(user_id) if find_client(user_id)
