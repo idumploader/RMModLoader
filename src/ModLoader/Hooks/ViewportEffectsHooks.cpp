@@ -254,15 +254,9 @@ namespace rm_modloader {
             // source pixels as black (that black-screen over the HUD). The non-fast path does
             // per-pixel alpha so the transparent parts of this map layer show the HUD beneath.
             // (Plain 0x80000000 -> dynamic_draw = 1:1 no stretch; blend 0 -> opaque, blacks.)
-            // Bits 0x4000 / 0x8000 are the engine's mirror flags: M_draw_on_surface swaps the dst
-            // rect's L/R (or T/B) at the top -- BUT our 0x10000 alpha-stretch kernel (custom_draw
-            // vtable slot +0x10) ignores the swapped rect, so these don't actually flip. Kept
-            // wired for completeness; real flip will come as a negative scale in the affine/
-            // rotozoom path (TODO: rotation). For now flip_x/flip_y are effectively no-ops here.
-            DWORD blend = 0x10000;
-            if (eff->flip_x) blend |= 0x4000;
-            if (eff->flip_y) blend |= 0x8000;
-            *reinterpret_cast<DWORD*>(attrs) = blend;
+            // This path handles pure zoom/wave; flip and rotation go through the RxSprite kernel
+            // below (the mirror bit 0x4000 is ignored by this 0x10000 kernel anyway).
+            *reinterpret_cast<DWORD*>(attrs) = 0x10000;
 
             // 2) zoom about the focus by SAMPLING a sub-rect of the backbuffer and stretching it
             // over the full viewport. (Enlarging the dest rect past the surface instead just gets
@@ -297,28 +291,32 @@ namespace rm_modloader {
 
             // Rotation / flip path: hand the captured backbuffer to the engine's own transform
             // kernel (RxSprite::render). It rotates the source into an internal buffer (angle),
-            // honors the mirror bit (its default 0x80000810 blend routes to a mirror-aware
-            // kernel, unlike our 0x10000 path), and zooms via the src->dst rect ratio. We keep
-            // zoom/wave on the hand-rolled path; this branch only triggers when angle/flip is set.
+            // scales via zoom_x/zoom_y and flips by their sign. Only triggers when angle/flip is
+            // set; pure zoom/wave stay on the hand-rolled path above.
             if (eff->rotates() && e_sp_render) {
                 void* spr = ensure_sprite();
                 if (spr) {
                     e_sp_setsurf(spr, g_backbuffer, 0);
-                    RECT srcr = src;                       // zoom sub-rect of the backbuffer
-                    sp_set<RECT>(spr, SP_RECT, vr);        // dest rect on screen
-                    sp_set<RECT>(spr, SP_SRCRECT, srcr);
-                    POINT dst_pivot = { (vr.left + vr.right) / 2, (vr.top + vr.bottom) / 2 };
-                    POINT src_pivot = { (srcr.left + srcr.right) / 2, (srcr.top + srcr.bottom) / 2 };
-                    sp_set<POINT>(spr, SP_COORD, dst_pivot);   // pivot in dest space (was 0 -> off-screen)
-                    sp_set<POINT>(spr, SP_ORIGIN, src_pivot);  // matching pivot in src space
-                    sp_set<double>(spr, SP_ZOOMX, 1.0);    // zoom already baked into src/dst sizes
-                    sp_set<double>(spr, SP_ZOOMY, 1.0);
-                    sp_set<double>(spr, SP_ANGLE, eff->angle);   // engine field is DEGREES (it does deg->rad itself)
-                    sp_set<int>(spr, SP_MIRROR, eff->flip_x ? 1 : 0);
-                    // Use our proven alpha-stretch blend (0x10000). The sprite's default opaque
-                    // dynamic_draw (0x80000810) drew nothing from our synthetic backbuffer (black
-                    // screen). Caveat: 0x10000 ignores the mirror bit, so flip_x won't mirror here
-                    // yet -- that needs a mirror-aware blend (separate). Rotation works regardless.
+                    // The rotate kernel scales via zoom_x/zoom_y (it divides the mapped source
+                    // coord by them), NOT via the src->dst rect ratio. So here we sample the FULL
+                    // captured region and let zoom_x/zoom_y do the zoom -- mixing both (a pre-
+                    // shrunk src AND zoom_x) double-counts and reads out of bounds (crash). Flip
+                    // is the SIGN of the scale; the engine mirrors the axis about the pivot.
+                    RECT full = { vr.left, vr.top, vr.right, vr.bottom };
+                    int px = eff->center_active ? eff->center_x : (vr.left + vr.right) / 2;
+                    int py = eff->center_active ? eff->center_y : (vr.top + vr.bottom) / 2;
+                    POINT pivot = { px, py };               // same point in dest and src (full region)
+                    sp_set<RECT>(spr, SP_RECT, vr);
+                    sp_set<RECT>(spr, SP_SRCRECT, full);
+                    sp_set<POINT>(spr, SP_COORD, pivot);
+                    sp_set<POINT>(spr, SP_ORIGIN, pivot);
+                    sp_set<double>(spr, SP_ZOOMX, eff->flip_x ? -z : z);   // z = zoom magnitude (>=1)
+                    sp_set<double>(spr, SP_ZOOMY, eff->flip_y ? -z : z);
+                    // Pure flip (angle 0) still needs the rotate branch; nudge to a full turn.
+                    sp_set<double>(spr, SP_ANGLE, eff->angle != 0.0 ? eff->angle : 360.0);
+                    sp_set<int>(spr, SP_MIRROR, 0);
+                    // Our proven alpha-stretch blend; the sprite's default opaque dynamic_draw
+                    // (0x80000810) drew nothing from our synthetic backbuffer (black screen).
                     sp_set<DWORD>(spr, attrs_at, 0x10000);
                     sp_set<int>(spr, SP_ROTDIRTY, 1);
                     RECT clip = vr;
