@@ -28,26 +28,34 @@ class Game_Interpreter
 
   alias bsmp_orig_command_125 command_125
   def command_125
+    amount = operate_value(@params[0], @params[1], @params[2])
+    return if bsmp_loot_claim_handled?(3, 0, amount)
     bsmp_orig_command_125
-    bsmp_broadcast_loot(3, 0, operate_value(@params[0], @params[1], @params[2]))
+    bsmp_broadcast_loot(3, 0, amount)
   end
 
   alias bsmp_orig_command_126 command_126
   def command_126
+    amount = operate_value(@params[1], @params[2], @params[3])
+    return if bsmp_loot_claim_handled?(0, @params[0], amount)
     bsmp_orig_command_126
-    bsmp_broadcast_loot(0, @params[0], operate_value(@params[1], @params[2], @params[3]))
+    bsmp_broadcast_loot(0, @params[0], amount)
   end
 
   alias bsmp_orig_command_127 command_127
   def command_127
+    amount = operate_value(@params[1], @params[2], @params[3])
+    return if bsmp_loot_claim_handled?(1, @params[0], amount)
     bsmp_orig_command_127
-    bsmp_broadcast_loot(1, @params[0], operate_value(@params[1], @params[2], @params[3]))
+    bsmp_broadcast_loot(1, @params[0], amount)
   end
 
   alias bsmp_orig_command_128 command_128
   def command_128
+    amount = operate_value(@params[1], @params[2], @params[3])
+    return if bsmp_loot_claim_handled?(2, @params[0], amount)
     bsmp_orig_command_128
-    bsmp_broadcast_loot(2, @params[0], operate_value(@params[1], @params[2], @params[3]))
+    bsmp_broadcast_loot(2, @params[0], amount)
   end
 
   # A fresh command list starts non-local; command_117 (or an explicit caller)
@@ -95,6 +103,36 @@ class Game_Interpreter
     bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::LOOT_GAIN, 0, "#{type};#{id};#{amount}"))
   end
 
+  # Claimable loot = a real chest/pickup we can arbitrate: networked, NOT mid-apply of a
+  # received gain, NOT a personal/death CE, tied to a map event, out of battle (battle
+  # rewards are already host-authoritative). Doors/NPCs carry no 12X grant command so they
+  # never reach here — the personal-vs-world split falls out for free.
+  def bsmp_claimable_loot?
+    return false unless bsmp_network_running?
+    return false if $bsmp_applying_loot or @bsmp_local_ce
+    return false if @event_id.nil? or @event_id <= 0
+    return false if $game_party and $game_party.in_battle
+    true
+  end
+
+  # Route a claimable grant through the host arbiter to kill the same-chest dupe race
+  # (two players open one chest within an RTT window, before its self-switch propagates).
+  # Returns true if HANDLED (caller must NOT grant locally): the host LOST the claim (another
+  # peer already took this chest this window), or a non-host DEFERRED to the host. Returns
+  # false to grant + broadcast normally (not claimable, or the host WON the claim).
+  def bsmp_loot_claim_handled?(type, id, amount)
+    return false unless bsmp_claimable_loot?
+    return false if amount <= 0
+    if BSMP.host?
+      return false if BSMP::Loot.host_claim($game_map.map_id, @event_id, :host)  # won -> grant+broadcast
+      true                                                                        # lost -> drop
+    else
+      bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::LOOT_CLAIM, 0,
+        "#{type};#{id};#{amount};#{$game_map.map_id};#{@event_id}"))
+      true   # deferred: the host applies it and echoes one LOOT_GAIN back to us
+    end
+  end
+
   # Apply a received loot gain by running the real command on this (throwaway)
   # interpreter, with @params shaped as a constant increase. Honors the game's own
   # command_* hooks (popup etc.). The re-broadcast is suppressed by $bsmp_applying_loot.
@@ -104,6 +142,62 @@ class Game_Interpreter
   end
 
 end
+
+#==============================================================================
+# ■ BSMP::Loot — host-side chest-claim arbiter (item-dupe guard)
+#==============================================================================
+# Two players can open the SAME chest within one RTT window — before either's self-switch
+# propagates to gate the other's page — and each grants + broadcasts, doubling the loot.
+# The host serializes by (map, event): the first claimer wins and the host emits ONE
+# LOOT_GAIN to everyone; later claims for that key are dropped. Entries self-expire after a
+# few seconds (the window only needs to outlast self-switch propagation), keeping it
+# cross-map / NG+ safe with no reset hook. Key is the chest's placement (map, event) — NOT
+# the loot contents — so hundreds of chests with identical loot stay independent.
+module BSMP
+  module Loot
+    TTL_FRAMES = 300   # ~5s @ 60fps
+    @owner = {}        # { [map, event] => claimer (a peer id, or :host for the host's own open) }
+    @stamp = {}        # { [map, event] => Graphics.frame_count at first claim }
+
+    class << self
+      # First claimer of (map,event) wins; that same claimer's later calls (a multi-item
+      # chest fires 12X several times) also pass; a DIFFERENT claimer is rejected. Expired
+      # entries are pruned first so a respawn / NG+ re-open isn't wrongly blocked.
+      def host_claim(map_id, event_id, claimer)
+        key = [map_id, event_id]
+        prune
+        return @owner[key] == claimer if @owner.key?(key)
+        @owner[key] = claimer
+        @stamp[key] = Graphics.frame_count
+        true
+      end
+
+      def prune
+        now = Graphics.frame_count
+        @stamp.keys.each do |k|
+          t = @stamp[k]
+          if t.nil? or now - t > TTL_FRAMES or now < t  # expired, or frame counter reset
+            @owner.delete(k); @stamp.delete(k)
+          end
+        end
+      end
+
+      # A non-host asked us to open a chest. Win the claim once -> grant on the host AND echo
+      # a single LOOT_GAIN so every peer (incl. the claimer) grants exactly one copy.
+      def on_loot_claim(packet)
+        return unless BSMP.host?
+        return unless bsmp_network_running?
+        type, id, amount, map_id, event_id = packet.data.to_s.split(';').map { |s| s.to_i }
+        return if amount.nil? or amount <= 0
+        return unless host_claim(map_id, event_id, packet.from_id)
+        bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::LOOT_GAIN, 0, "#{type};#{id};#{amount}"))
+        BSMP::Events.apply_loot_gain(type, id, amount)
+      end
+    end
+  end
+end
+
+BSMP::Events::HANDLERS[BSMP::Events::LOOT_CLAIM] = BSMP::Loot.method(:on_loot_claim)
 
 #==============================================================================
 # ■ Game_Party — broadcast world-unique covenant tokens (spirits)

@@ -972,8 +972,16 @@ module BSMP
     # granted it here. @params mimics a constant increase: see operate_value.
     # Guarded so the command's own broadcast hook doesn't re-broadcast.
     def self.on_loot_gain(packet)
-      type, id, amount = packet.data.split(';')
-      type = type.to_i; id = id.to_i; amount = amount.to_i
+      type, id, amount = packet.data.split(';').map { |s| s.to_i }
+      apply_loot_gain(type, id, amount)
+    end
+
+    # Grant one copy of a loot gain on THIS peer (type 0=item 1=weapon 2=armor 3=gold).
+    # Factored out of on_loot_gain so the host's loot-claim arbiter (1246) can apply a
+    # winning claim locally with the same item-get popup / command hooks. Runs on a
+    # throwaway interpreter (event_id 0, so it never re-enters the claim path);
+    # $bsmp_applying_loot suppresses the command's own re-broadcast.
+    def self.apply_loot_gain(type, id, amount)
       return if amount <= 0
       $bsmp_applying_loot = true
       begin
@@ -1122,6 +1130,12 @@ module BSMP
     # Instanced loot: an event gave someone an item/gold; each peer grants its own
     # copy. data = "type;id;amount" (type 0=item 1=weapon 2=armor 3=gold).
     LOOT_GAIN           = 19
+
+    # Item-dupe guard: a non-host opening a chest sends this INSTEAD of granting locally;
+    # the host arbitrates by (map,event) and replies with one LOOT_GAIN, so two players
+    # hitting the same chest within one RTT window (before its self-switch propagates) don't
+    # both pay out (see 1246). data = "type;id;amount;map_id;event_id".
+    LOOT_CLAIM          = 55
 
     # World-unique covenant token ("spirit"): granted via $game_party.add_spirit (a
     # Script call, NOT ChangeItems, so LOOT_GAIN misses it). When one player earns it
