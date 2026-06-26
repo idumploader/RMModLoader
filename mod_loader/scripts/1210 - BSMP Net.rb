@@ -329,7 +329,10 @@ module BSMP
       # Now that we're an acknowledged guest, (re)claim our current map's ownership.
       # Covers the load-game-then-join path where Game_Map.setup ran offline and so
       # didn't send a request, and the in-game-then-join path where we never re-setup.
-      BSMP::World.on_map_setup($game_map.map_id) if $game_map and not BSMP::World.owned_map_id
+      # Do NOT gate on owned_map_id: the offline Game_Map.setup already set it (under the
+      # then-offline role, so no MAP_OWNERSHIP_REQUEST was ever sent). on_map_setup is
+      # idempotent on the same map, so this just fires the now-correct guest request.
+      BSMP::World.on_map_setup($game_map.map_id) if $game_map
     end
 
     def handle_world_snapshot(packet)
@@ -575,8 +578,11 @@ module BSMP
       # We may already be in-game (host started playing before opening the lobby); in
       # that case Game_Map.setup ran while offline and the ownership table never got
       # our own claim. Re-claim the current map so its mobs/battles stream to guests.
-      # (World logic — this is just the trigger from the network layer.)
-      if $game_map and BSMP::World.owned_map_id.nil?
+      # (World logic — this is just the trigger from the network layer.) Do NOT gate on
+      # owned_map_id being nil: the offline Game_Map.setup already set it (under the
+      # then-offline role, so host_claim_map never ran), so it's non-nil here even though
+      # the registrar has no entry for us. on_map_setup is idempotent on the same map.
+      if $game_map
         BSMP::World.on_map_setup($game_map.map_id)
       end
     end
