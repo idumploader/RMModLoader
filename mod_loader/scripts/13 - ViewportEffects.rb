@@ -110,6 +110,9 @@ module ModLoader
         vp = map
         return unless vp
         vp.blur = 0
+        vp.zoom_blur = 0 if vp.respond_to?(:zoom_blur=)
+        vp.radial_blur = 0 if vp.respond_to?(:radial_blur=)
+        vp.pixelize = 1 if vp.respond_to?(:pixelize=)
         vp.zoom = 1.0
         vp.angle = 0
         vp.flip_x = false
