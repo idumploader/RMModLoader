@@ -99,6 +99,15 @@ module BSMP
                :category => CAT,
                :values => [:hold, :toggle],
                :labels => ["Hold", "Toggle"]))
+      # Opens the interactive Players overlay (1267): teleport to a peer (host can also
+      # kick — Stage 2). Closes this menu first, then the overlay opens next frame.
+      M.action("Players (teleport)", :category => CAT, :close_after => true) do
+        if bsmp_network_running?
+          BSMP::PlayersMenu.request_open
+        else
+          msgbox("BSMP: not connected.")
+        end
+      end
 
       #--- Diagnostics --------------------------------------------------------
       M.header("Diagnostics", :category => CAT)
