@@ -5,6 +5,7 @@
 
 #include <mutex>
 #include <cstring>
+#include <cmath>
 #include <unordered_map>
 
 namespace rm_modloader {
@@ -71,12 +72,18 @@ namespace rm_modloader {
 
         // One viewport's effect. center_* is the zoom focus in screen pixels (the captured
         // content lands at absolute coords in the backbuffer); inactive -> focus on the
-        // viewport centre. zoom <= 1.0 means "no visible effect" (skipped by the walker).
+        // viewport centre. All fields default to "no-op"; the walker skips an inert effect.
         struct VPEffect {
-            double zoom = 1.0;
+            double zoom = 1.0;                 // >1 zooms in about the focus
             bool   center_active = false;
             int    center_x = 0, center_y = 0;
-            bool   active() const { return zoom > 1.0; }
+            bool   flip_x = false, flip_y = false;   // mirror (engine attr bits 0x4000 / 0x8000)
+            double wave_amp = 0.0;             // horizontal ripple amplitude in px
+            double wave_length = 180.0;        // vertical period in px
+            double wave_speed = 0.0;           // phase advance per frame (rad)
+            double wave_phase = 0.0;           // running phase (advanced by the walker)
+            bool wave_on() const { return wave_amp != 0.0 && wave_length > 0.0; }
+            bool active() const { return zoom > 1.0 || flip_x || flip_y || wave_on(); }
         };
 
         // Per-viewport effects, keyed by Sprite::sprite_id (unique forever). Touched only from
@@ -124,20 +131,22 @@ namespace rm_modloader {
             return false;
         }
 
-        // Decide whether this node gets a zoom this frame and with what params. Explicit
-        // per-viewport effect wins; otherwise the global map default if this is the map viewport.
-        inline bool resolve_effect(const Sprite* n, VPEffect& out) {
-            if (!is_viewport(n)) return false;
+        // Decide which effect applies to this node this frame, or nullptr. Returns a pointer to
+        // the live effect so the walker can advance its wave phase. Explicit per-viewport effect
+        // wins; otherwise the global map default (kept in a persistent struct so its phase runs).
+        VPEffect g_map_effect;
+        inline VPEffect* resolve_effect(const Sprite* n) {
+            if (!is_viewport(n)) return nullptr;
             auto it = g_effects.find(n->sprite_id);
-            if (it != g_effects.end() && it->second.active()) { out = it->second; return true; }
+            if (it != g_effects.end() && it->second.active()) return &it->second;
             if (g_map_capture && g_map_zoom > 1.0 && has_tilemap(n, 0)) {
-                out.zoom = g_map_zoom;
-                out.center_active = g_map_center_active;
-                out.center_x = g_map_center_x;
-                out.center_y = g_map_center_y;
-                return true;
+                g_map_effect.zoom = g_map_zoom;
+                g_map_effect.center_active = g_map_center_active;
+                g_map_effect.center_x = g_map_center_x;
+                g_map_effect.center_y = g_map_center_y;
+                return &g_map_effect;
             }
-            return false;
+            return nullptr;
         }
 
         // Copy a valid 0x38 attribute block (blend + opacity etc.) from the first leaf
@@ -177,8 +186,8 @@ namespace rm_modloader {
         static void* (__thiscall Sprite::* orig)(Surface*, DWORD*, int*, RECT*);
 
         void* __thiscall walk_hook(Surface* dest, DWORD* origin, int* off, RECT* clip) {
-            VPEffect eff;
-            if (g_in_capture || !resolve_effect(this, eff)) {
+            VPEffect* eff = resolve_effect(this);
+            if (g_in_capture || !eff) {
                 return (this->*orig)(dest, origin, off, clip);
             }
 
@@ -207,19 +216,27 @@ namespace rm_modloader {
             // source pixels as black (that black-screen over the HUD). The non-fast path does
             // per-pixel alpha so the transparent parts of this map layer show the HUD beneath.
             // (Plain 0x80000000 -> dynamic_draw = 1:1 no stretch; blend 0 -> opaque, blacks.)
-            *reinterpret_cast<DWORD*>(attrs) = 0x10000;
+            // Bits 0x4000 / 0x8000 are the engine's mirror flags: M_draw_on_surface swaps the dst
+            // rect's L/R (or T/B) at the top -- BUT our 0x10000 alpha-stretch kernel (custom_draw
+            // vtable slot +0x10) ignores the swapped rect, so these don't actually flip. Kept
+            // wired for completeness; real flip will come as a negative scale in the affine/
+            // rotozoom path (TODO: rotation). For now flip_x/flip_y are effectively no-ops here.
+            DWORD blend = 0x10000;
+            if (eff->flip_x) blend |= 0x4000;
+            if (eff->flip_y) blend |= 0x8000;
+            *reinterpret_cast<DWORD*>(attrs) = blend;
 
             // 2) zoom about the focus by SAMPLING a sub-rect of the backbuffer and stretching it
             // over the full viewport. (Enlarging the dest rect past the surface instead just gets
             // clamped -> the zoom is lost.) z>=1 zooms in; z<1 would need a sub-region larger than
             // the buffer, so we never store zoom<=1 as active.
-            double z = eff.zoom;
+            double z = eff->zoom < 1.0 ? 1.0 : eff->zoom;
             int sw = static_cast<int>(w / z), sh = static_cast<int>(h / z);
             // Centre the sampled sub-rect on the focus point (viewport centre by default, or a
             // script-set screen pixel for follow-cam). Clamp inside the viewport so we never
             // sample outside the captured layer (which would smear the edge / show 0s).
-            int cx = eff.center_active ? eff.center_x : (vr.left + w / 2);
-            int cy = eff.center_active ? eff.center_y : (vr.top + h / 2);
+            int cx = eff->center_active ? eff->center_x : (vr.left + w / 2);
+            int cy = eff->center_active ? eff->center_y : (vr.top + h / 2);
             int sx = cx - sw / 2, sy = cy - sh / 2;
             if (sx < vr.left) sx = vr.left;
             if (sy < vr.top)  sy = vr.top;
@@ -239,7 +256,38 @@ namespace rm_modloader {
             dest->rect.top    = 0;
             dest->rect.right  = vr.right;
             dest->rect.bottom = vr.bottom;
-            e_draw(dest, &vr, g_backbuffer, &src, attrs);
+
+            if (!eff->wave_on()) {
+                e_draw(dest, &vr, g_backbuffer, &src, attrs);  // single stretch blit
+                return this;
+            }
+
+            // 3) wave: slice the source into horizontal strips and shift each by
+            // amp*sin(phase + y/length). The engine has no wave primitive, so we compose it from
+            // per-strip stretch blits. To avoid black edges where the content slides away, we
+            // OVERSCAN: inset the sampled region by the amplitude and keep every dst strip full
+            // width, shifting the SOURCE within the captured region (clamped). Costs a ~amplitude
+            // px zoom-in but never exposes the cleared background. STRIP trades quality for cost
+            // (smaller = smoother + more blits/frame; software renderer -> keep modest).
+            eff->wave_phase += eff->wave_speed;
+            constexpr int STRIP = 6;
+            const double two_pi = 6.283185307179586;
+            int margin = static_cast<int>(std::ceil(std::fabs(eff->wave_amp))) * sw / w;
+            if (margin < 1) margin = 1;
+            int isx = sx + margin, isw = sw - 2 * margin;   // inset sample window
+            if (isw < 1) { isx = sx; isw = sw; }            // viewport too small to overscan
+            for (int dy = vr.top; dy < vr.bottom; dy += STRIP) {
+                int dh = (dy + STRIP > vr.bottom) ? (vr.bottom - dy) : STRIP;
+                int ssy = sy + (dy - vr.top) * sh / h;
+                int ssh = dh * sh / h; if (ssh < 1) ssh = 1;
+                double off = eff->wave_amp * std::sin(eff->wave_phase + (double)(dy - vr.top) * two_pi / eff->wave_length);
+                int ssx = isx - static_cast<int>(off * sw / w);   // shift source opposite the visual move
+                if (ssx < sx) ssx = sx;                            // clamp inside captured region
+                if (ssx + isw > sx + sw) ssx = sx + sw - isw;
+                RECT srcS = { ssx, ssy, ssx + isw, ssy + ssh };
+                RECT dstS = { vr.left, dy, vr.right, dy + dh };    // full width -> no black gap
+                e_draw(dest, &dstS, g_backbuffer, &srcS, attrs);
+            }
             return this;
         }
     };
@@ -268,18 +316,16 @@ namespace rm_modloader {
         inline bool rb_truthy(RubyValue v) { return v != ruby_nil && v != ruby_false; }
 
         // -- Viewport instance methods (self = a Ruby Viewport) --
+        // Drop a now-inert entry so the map doesn't accumulate no-op effects.
+        inline void reclaim_if_inert(std::unordered_map<DWORD, VPEffect>::iterator it) {
+            if (it != g_effects.end() && !it->second.active()) g_effects.erase(it);
+        }
         RubyValue __cdecl vp_set_zoom(RubyValue self, RubyValue v) {
             RxViewport* vp = rgss_native<RxViewport>(self);
             if (!vp) return v;
             double z = rb_value_to_double(v);
-            auto it = g_effects.find(vp->sprite_id);
-            if (z > 1.0) {
-                g_effects[vp->sprite_id].zoom = z;
-            } else if (it != g_effects.end()) {
-                // back to 1x: drop the entry unless a custom centre is still pinned to it.
-                if (it->second.center_active) it->second.zoom = 1.0;
-                else g_effects.erase(it);
-            }
+            g_effects[vp->sprite_id].zoom = z > 0.0 ? z : 1.0;
+            reclaim_if_inert(g_effects.find(vp->sprite_id));
             return v;
         }
         RubyValue __cdecl vp_get_zoom(RubyValue self) {
@@ -301,10 +347,37 @@ namespace rm_modloader {
             RxViewport* vp = rgss_native<RxViewport>(self);
             if (vp) {
                 auto it = g_effects.find(vp->sprite_id);
-                if (it != g_effects.end()) {
-                    it->second.center_active = false;
-                    if (it->second.zoom <= 1.0) g_effects.erase(it);   // fully inert -> reclaim
-                }
+                if (it != g_effects.end()) { it->second.center_active = false; reclaim_if_inert(it); }
+            }
+            return ruby_nil;
+        }
+        RubyValue __cdecl vp_set_flip_x(RubyValue self, RubyValue v) {
+            RxViewport* vp = rgss_native<RxViewport>(self);
+            if (vp) { g_effects[vp->sprite_id].flip_x = rb_truthy(v); reclaim_if_inert(g_effects.find(vp->sprite_id)); }
+            return v;
+        }
+        RubyValue __cdecl vp_set_flip_y(RubyValue self, RubyValue v) {
+            RxViewport* vp = rgss_native<RxViewport>(self);
+            if (vp) { g_effects[vp->sprite_id].flip_y = rb_truthy(v); reclaim_if_inert(g_effects.find(vp->sprite_id)); }
+            return v;
+        }
+        // wave(amplitude_px, length_px, speed_rad_per_frame). amplitude 0 turns it off.
+        RubyValue __cdecl vp_set_wave(RubyValue self, RubyValue amp, RubyValue length, RubyValue speed) {
+            RxViewport* vp = rgss_native<RxViewport>(self);
+            if (!vp) return ruby_nil;
+            VPEffect& e = g_effects[vp->sprite_id];
+            e.wave_amp = rb_value_to_double(amp);
+            double len = rb_value_to_double(length);
+            if (len > 0.0) e.wave_length = len;
+            e.wave_speed = rb_value_to_double(speed);
+            reclaim_if_inert(g_effects.find(vp->sprite_id));
+            return ruby_nil;
+        }
+        RubyValue __cdecl vp_wave_off(RubyValue self) {
+            RxViewport* vp = rgss_native<RxViewport>(self);
+            if (vp) {
+                auto it = g_effects.find(vp->sprite_id);
+                if (it != g_effects.end()) { it->second.wave_amp = 0.0; reclaim_if_inert(it); }
             }
             return ruby_nil;
         }
@@ -358,6 +431,10 @@ namespace rm_modloader {
             rb_define_method(*viewport_klass, "zoom",             vp_get_zoom,   0);
             rb_define_method(*viewport_klass, "zoom_center",      vp_set_center, 2);
             rb_define_method(*viewport_klass, "zoom_auto_center", vp_auto_center, 0);
+            rb_define_method(*viewport_klass, "flip_x=",          vp_set_flip_x, 1);
+            rb_define_method(*viewport_klass, "flip_y=",          vp_set_flip_y, 1);
+            rb_define_method(*viewport_klass, "wave",             vp_set_wave,   3);
+            rb_define_method(*viewport_klass, "wave_off",         vp_wave_off,   0);
 
             // Global default for the auto-detected map viewport.
             mod_loader->register_ruby_method("viewport_zoom=",       ve_set_zoom);
