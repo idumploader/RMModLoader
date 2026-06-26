@@ -192,6 +192,19 @@ M.action("Clear tone", C.merge(:close_after => true)) {
   e = V.effects and e.set_tone(0, 0, 0, 0, 20)
 }
 
+# Live blur thread count - the #44 perf knob. Slide 1 (single-threaded) up to all
+# cores and watch the FPS hud on a heavy full-res blur. Bands are independent so the
+# picture is bit-identical at any setting; only speed changes. Shown only when the
+# native blur-thread API is present.
+if ModLoader.respond_to?(:viewport_blur_threads=)
+  M.header("Perf (#44)", C)
+  M.slider("Blur threads", C.merge(
+    :get => proc { ModLoader.viewport_blur_threads rescue 1 },
+    :set => proc { |v| ModLoader.viewport_blur_threads = v },
+    :min => 1, :max => (ModLoader.viewport_blur_max_threads rescue 8), :step => 1,
+    :format => proc { |v| v <= 1 ? "1 (off)" : "#{v}" }))
+end
+
 M.header("Reset", C)
 M.action("Reset all", C) { ViewportFXTest.reset }
 

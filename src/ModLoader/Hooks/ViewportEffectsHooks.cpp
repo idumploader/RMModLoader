@@ -9,6 +9,9 @@
 #include <cstdint>
 #include <vector>
 #include <unordered_map>
+#include <thread>
+#include <condition_variable>
+#include <functional>
 
 namespace rm_modloader {
 
@@ -236,37 +239,118 @@ namespace rm_modloader {
             *reinterpret_cast<T*>(reinterpret_cast<char*>(obj) + off) = v;
         }
 
+        // Persistent worker pool for the per-pixel blur passes. Created ONCE (spawning
+        // threads per frame would cost more than it saves); workers sit on a condvar and
+        // only ever touch the private g_backbuffer + scratch vectors (never Ruby/RGSS/GDI),
+        // and the game thread barriers on them before the blit -- so this is data-parallel
+        // pixel math with no engine reentrancy. The split is by row/column band, and every
+        // band is independent, so the output is bit-identical to the single-threaded path
+        // (threads change speed, not result). g_blur_threads = how many bands to split into
+        // (1 = run inline on the game thread; live-tunable from Ruby to A/B the FPS).
+        struct BlurPool {
+            std::vector<std::thread> workers;
+            std::mutex m;
+            std::condition_variable cv_go, cv_done;
+            std::function<void(int)> job;
+            int njobs = 0, next = 0, remaining = 0, max_workers = 0;
+            bool stop = false, started = false;
+
+            void worker_loop() {
+                for (;;) {
+                    int idx;
+                    {
+                        std::unique_lock<std::mutex> lk(m);
+                        cv_go.wait(lk, [this] { return stop || next < njobs; });
+                        if (stop) return;
+                        idx = next++;
+                    }
+                    job(idx);
+                    { std::lock_guard<std::mutex> lk(m); if (--remaining == 0) cv_done.notify_all(); }
+                }
+            }
+            void ensure(int n) {
+                if (started) return;
+                started = true;
+                max_workers = n < 0 ? 0 : n;
+                for (int i = 0; i < max_workers; ++i) workers.emplace_back([this] { worker_loop(); });
+            }
+            // Run fn(0..chunks-1) across the workers AND the caller (work-stealing), block
+            // until all chunks finish. chunks==1 short-circuits to a plain inline call.
+            void run(int chunks, const std::function<void(int)>& fn) {
+                if (chunks <= 1 || max_workers == 0) { for (int i = 0; i < chunks; ++i) fn(i); return; }
+                { std::lock_guard<std::mutex> lk(m); job = fn; njobs = chunks; next = 0; remaining = chunks; }
+                cv_go.notify_all();
+                for (;;) {                                  // caller pulls chunks too
+                    int idx;
+                    { std::unique_lock<std::mutex> lk(m); if (next >= njobs) break; idx = next++; }
+                    fn(idx);
+                    { std::lock_guard<std::mutex> lk(m); if (--remaining == 0) cv_done.notify_all(); }
+                }
+                std::unique_lock<std::mutex> lk(m);
+                cv_done.wait(lk, [this] { return remaining == 0; });
+            }
+            ~BlurPool() {                                   // stop+join at process exit (idle by then)
+                if (!started) return;
+                { std::lock_guard<std::mutex> lk(m); stop = true; }
+                cv_go.notify_all();
+                for (auto& t : workers) if (t.joinable()) t.join();
+            }
+        };
+        BlurPool g_pool;
+        int g_blur_threads = 1;   // bands to split each pass into (1 = single-threaded)
+
+        // Split [0,n) into bands and run fn(begin,end) per band across the pool. Falls back
+        // to a single inline call when threading is off or the range is too small to bother.
+        template<class F>
+        inline void parallel_range(int n, F&& fn) {
+            int chunks = g_blur_threads;
+            if (chunks > g_pool.max_workers + 1) chunks = g_pool.max_workers + 1;
+            if (chunks < 1) chunks = 1;
+            if (chunks == 1 || n < 2 * chunks) { fn(0, n); return; }
+            if (chunks > n) chunks = n;
+            g_pool.run(chunks, [&](int c) {
+                int a = static_cast<int>(static_cast<long long>(c)     * n / chunks);
+                int b = static_cast<int>(static_cast<long long>(c + 1) * n / chunks);
+                fn(a, b);
+            });
+        }
+
         // Separable box blur of a BGRA region in place, via the engine's pixel pointer
         // (surface_get_image_off8 = top-row, top-down y*stride+x like the engine itself uses).
         // Two O(1)-per-pixel sliding-window passes (horizontal -> packed tmp -> vertical). The
         // engine has no blur primitive, so this is the one genuinely hand-rolled per-pixel cost.
+        // Each pass is parallelised over independent rows (then columns) via the pool.
         void box_blur(uint32_t* base, int stride, int x0, int y0, int x1, int y1, int r) {
             int W = x1 - x0, H = y1 - y0;
             if (W <= 0 || H <= 0 || r < 1) return;
             if (static_cast<int>(g_blur_tmp.size()) < W * H) g_blur_tmp.resize(W * H);
             uint32_t* tmp = g_blur_tmp.data();
-            for (int y = 0; y < H; ++y) {                       // horizontal: region -> packed tmp
-                uint32_t* row = base + (y0 + y) * stride + x0;
-                uint32_t* trow = tmp + y * W;
-                int sB = 0, sG = 0, sR = 0, sA = 0, lo = 0, hi = -1, cnt = 0;
-                for (int x = 0; x < W; ++x) {
-                    int nh = x + r > W - 1 ? W - 1 : x + r;
-                    int nl = x - r < 0 ? 0 : x - r;
-                    for (; hi < nh; ) { uint32_t p = row[++hi]; sB += p & 0xFF; sG += (p >> 8) & 0xFF; sR += (p >> 16) & 0xFF; sA += (p >> 24) & 0xFF; ++cnt; }
-                    for (; lo < nl; ++lo) { uint32_t p = row[lo]; sB -= p & 0xFF; sG -= (p >> 8) & 0xFF; sR -= (p >> 16) & 0xFF; sA -= (p >> 24) & 0xFF; --cnt; }
-                    trow[x] = (sB / cnt) | ((sG / cnt) << 8) | ((sR / cnt) << 16) | ((sA / cnt) << 24);
+            parallel_range(H, [&](int ya, int yb) {             // horizontal: region -> packed tmp
+                for (int y = ya; y < yb; ++y) {
+                    uint32_t* row = base + (y0 + y) * stride + x0;
+                    uint32_t* trow = tmp + y * W;
+                    int sB = 0, sG = 0, sR = 0, sA = 0, lo = 0, hi = -1, cnt = 0;
+                    for (int x = 0; x < W; ++x) {
+                        int nh = x + r > W - 1 ? W - 1 : x + r;
+                        int nl = x - r < 0 ? 0 : x - r;
+                        for (; hi < nh; ) { uint32_t p = row[++hi]; sB += p & 0xFF; sG += (p >> 8) & 0xFF; sR += (p >> 16) & 0xFF; sA += (p >> 24) & 0xFF; ++cnt; }
+                        for (; lo < nl; ++lo) { uint32_t p = row[lo]; sB -= p & 0xFF; sG -= (p >> 8) & 0xFF; sR -= (p >> 16) & 0xFF; sA -= (p >> 24) & 0xFF; --cnt; }
+                        trow[x] = (sB / cnt) | ((sG / cnt) << 8) | ((sR / cnt) << 16) | ((sA / cnt) << 24);
+                    }
                 }
-            }
-            for (int x = 0; x < W; ++x) {                       // vertical: packed tmp -> region
-                int sB = 0, sG = 0, sR = 0, sA = 0, lo = 0, hi = -1, cnt = 0;
-                for (int y = 0; y < H; ++y) {
-                    int nh = y + r > H - 1 ? H - 1 : y + r;
-                    int nl = y - r < 0 ? 0 : y - r;
-                    for (; hi < nh; ) { uint32_t p = tmp[(++hi) * W + x]; sB += p & 0xFF; sG += (p >> 8) & 0xFF; sR += (p >> 16) & 0xFF; sA += (p >> 24) & 0xFF; ++cnt; }
-                    for (; lo < nl; ++lo) { uint32_t p = tmp[lo * W + x]; sB -= p & 0xFF; sG -= (p >> 8) & 0xFF; sR -= (p >> 16) & 0xFF; sA -= (p >> 24) & 0xFF; --cnt; }
-                    base[(y0 + y) * stride + x0 + x] = (sB / cnt) | ((sG / cnt) << 8) | ((sR / cnt) << 16) | ((sA / cnt) << 24);
+            });
+            parallel_range(W, [&](int xa, int xb) {             // vertical: packed tmp -> region
+                for (int x = xa; x < xb; ++x) {
+                    int sB = 0, sG = 0, sR = 0, sA = 0, lo = 0, hi = -1, cnt = 0;
+                    for (int y = 0; y < H; ++y) {
+                        int nh = y + r > H - 1 ? H - 1 : y + r;
+                        int nl = y - r < 0 ? 0 : y - r;
+                        for (; hi < nh; ) { uint32_t p = tmp[(++hi) * W + x]; sB += p & 0xFF; sG += (p >> 8) & 0xFF; sR += (p >> 16) & 0xFF; sA += (p >> 24) & 0xFF; ++cnt; }
+                        for (; lo < nl; ++lo) { uint32_t p = tmp[lo * W + x]; sB -= p & 0xFF; sG -= (p >> 8) & 0xFF; sR -= (p >> 16) & 0xFF; sA -= (p >> 24) & 0xFF; --cnt; }
+                        base[(y0 + y) * stride + x0 + x] = (sB / cnt) | ((sG / cnt) << 8) | ((sR / cnt) << 16) | ((sA / cnt) << 24);
+                    }
                 }
-            }
+            });
         }
 
         // Directional multi-tap blur about (cx,cy). Each output pixel averages `taps` samples,
@@ -297,12 +381,16 @@ namespace rm_modloader {
             if (g_zb_hq) {                                   // debug: full-res, no grid
                 if (static_cast<int>(g_blur_tmp.size()) < W * H) g_blur_tmp.resize(W * H);
                 uint32_t* tmp = g_blur_tmp.data();
-                for (int y = 0; y < H; ++y)
-                    for (int x = 0; x < W; ++x)
-                        tmp[y * W + x] = sample(x0 + x - cx, y0 + y - cy);
-                for (int y = 0; y < H; ++y)
-                    for (int x = 0; x < W; ++x)
-                        base[(y0 + y) * stride + x0 + x] = tmp[y * W + x];
+                parallel_range(H, [&](int ya, int yb) {     // compute into tmp (sample reads base)
+                    for (int y = ya; y < yb; ++y)
+                        for (int x = 0; x < W; ++x)
+                            tmp[y * W + x] = sample(x0 + x - cx, y0 + y - cy);
+                });
+                parallel_range(H, [&](int ya, int yb) {     // copy tmp -> base
+                    for (int y = ya; y < yb; ++y)
+                        for (int x = 0; x < W; ++x)
+                            base[(y0 + y) * stride + x0 + x] = tmp[y * W + x];
+                });
                 return;
             }
 
@@ -310,13 +398,15 @@ namespace rm_modloader {
             int gw = W / STEP + 2, gh = H / STEP + 2;
             if (static_cast<int>(g_zb_grid.size()) < gw * gh) g_zb_grid.resize(gw * gh);
             uint32_t* grid = g_zb_grid.data();
-            for (int gy = 0; gy < gh; ++gy) {
-                int y = gy * STEP; if (y > H - 1) y = H - 1;
-                for (int gx = 0; gx < gw; ++gx) {
-                    int x = gx * STEP; if (x > W - 1) x = W - 1;
-                    grid[gy * gw + gx] = sample(x0 + x - cx, y0 + y - cy);
+            parallel_range(gh, [&](int gya, int gyb) {      // coarse grid (each row independent)
+                for (int gy = gya; gy < gyb; ++gy) {
+                    int y = gy * STEP; if (y > H - 1) y = H - 1;
+                    for (int gx = 0; gx < gw; ++gx) {
+                        int x = gx * STEP; if (x > W - 1) x = W - 1;
+                        grid[gy * gw + gx] = sample(x0 + x - cx, y0 + y - cy);
+                    }
                 }
-            }
+            });
             // crisp central box at full res (stashed before the upsample overwrites base).
             int Rx = W * 18 / 100, Ry = H * 18 / 100;
             int bx0 = cx - Rx < x0 ? x0 : cx - Rx, by0 = cy - Ry < y0 ? y0 : cy - Ry;
@@ -325,36 +415,42 @@ namespace rm_modloader {
             if (bw > 0 && bh > 0) {
                 if (static_cast<int>(g_blur_tmp.size()) < bw * bh) g_blur_tmp.resize(bw * bh);
                 uint32_t* bt = g_blur_tmp.data();
-                for (int yy = 0; yy < bh; ++yy)
-                    for (int xx = 0; xx < bw; ++xx)
-                        bt[yy * bw + xx] = sample(bx0 + xx - cx, by0 + yy - cy);
+                parallel_range(bh, [&](int ya, int yb) {
+                    for (int yy = ya; yy < yb; ++yy)
+                        for (int xx = 0; xx < bw; ++xx)
+                            bt[yy * bw + xx] = sample(bx0 + xx - cx, by0 + yy - cy);
+                });
             }
             // avg2 upsample: average of two packed BGRA pixels in one branchless bit-trick.
             auto avg2 = [](uint32_t a, uint32_t b) { return (a & b) + (((a ^ b) >> 1) & 0x7F7F7F7Fu); };
-            for (int y = 0; y < H; ++y) {
-                int gy = y >> 1, wy = y & 1;
-                uint32_t* drow = base + (y0 + y) * stride + x0;
-                const uint32_t* g0 = grid + gy * gw;
-                const uint32_t* g1 = grid + (gy + 1) * gw;
-                if (!wy) {
-                    for (int x = 0; x < W; x += 2) {
-                        int gx = x >> 1; uint32_t c00 = g0[gx];
-                        drow[x] = c00;
-                        if (x + 1 < W) drow[x + 1] = avg2(c00, g0[gx + 1]);
-                    }
-                } else {
-                    for (int x = 0; x < W; x += 2) {
-                        int gx = x >> 1; uint32_t c00 = g0[gx], c01 = g1[gx];
-                        drow[x] = avg2(c00, c01);
-                        if (x + 1 < W) drow[x + 1] = avg2(avg2(c00, g0[gx + 1]), avg2(c01, g1[gx + 1]));
+            parallel_range(H, [&](int ya, int yb) {         // grid -> base (each row independent)
+                for (int y = ya; y < yb; ++y) {
+                    int gy = y >> 1, wy = y & 1;
+                    uint32_t* drow = base + (y0 + y) * stride + x0;
+                    const uint32_t* g0 = grid + gy * gw;
+                    const uint32_t* g1 = grid + (gy + 1) * gw;
+                    if (!wy) {
+                        for (int x = 0; x < W; x += 2) {
+                            int gx = x >> 1; uint32_t c00 = g0[gx];
+                            drow[x] = c00;
+                            if (x + 1 < W) drow[x + 1] = avg2(c00, g0[gx + 1]);
+                        }
+                    } else {
+                        for (int x = 0; x < W; x += 2) {
+                            int gx = x >> 1; uint32_t c00 = g0[gx], c01 = g1[gx];
+                            drow[x] = avg2(c00, c01);
+                            if (x + 1 < W) drow[x + 1] = avg2(avg2(c00, g0[gx + 1]), avg2(c01, g1[gx + 1]));
+                        }
                     }
                 }
-            }
+            });
             if (bw > 0 && bh > 0) {                       // paste the crisp full-res centre back
                 uint32_t* bt = g_blur_tmp.data();
-                for (int yy = 0; yy < bh; ++yy)
-                    for (int xx = 0; xx < bw; ++xx)
-                        base[(by0 + yy) * stride + bx0 + xx] = bt[yy * bw + xx];
+                parallel_range(bh, [&](int ya, int yb) {
+                    for (int yy = ya; yy < yb; ++yy)
+                        for (int xx = 0; xx < bw; ++xx)
+                            base[(by0 + yy) * stride + bx0 + xx] = bt[yy * bw + xx];
+                });
             }
         }
 
@@ -717,6 +813,17 @@ namespace rm_modloader {
         }
         RubyValue __cdecl ve_auto_center(RubyValue) { g_map_center_active = false; return ruby_nil; }
         RubyValue __cdecl ve_set_zb_hq(RubyValue, RubyValue v) { g_zb_hq = rb_truthy(v); return v; }
+
+        // Live blur thread count (bands to split each pass into; 1 = single-threaded). Lets
+        // you A/B the FPS in-game. Clamped to the pool's worker count + the caller thread.
+        RubyValue __cdecl ve_set_threads(RubyValue, RubyValue v) {
+            int n = rb_parse_int(v), hi = g_pool.max_workers + 1;
+            if (n < 1) n = 1; else if (n > hi) n = hi;
+            g_blur_threads = n;
+            return rb_make_number(n);
+        }
+        RubyValue __cdecl ve_get_threads(RubyValue)     { return rb_make_number(g_blur_threads); }
+        RubyValue __cdecl ve_get_max_threads(RubyValue) { return rb_make_number(g_pool.max_workers + 1); }
     }
 
     void apply_viewport_effects() {
@@ -729,6 +836,16 @@ namespace rm_modloader {
         g_map_capture = cap && cap->get<bool>();
         g_map_zoom    = zc ? zc->get<double>() : 1.0;
         if (g_map_zoom <= 0.0) g_map_zoom = 1.0;
+
+        // Spin up the blur worker pool (once). Default split = all cores; "viewport_blur_
+        // _threads" in config overrides the startup band count (1 = single-threaded).
+        int pool_max = static_cast<int>(std::thread::hardware_concurrency()) - 1;
+        if (pool_max < 0) pool_max = 0; else if (pool_max > 8) pool_max = 8;
+        g_pool.ensure(pool_max);
+        const auto* th = mod_loader->get_config().get("viewport_blur_threads");
+        int want = th ? static_cast<int>(th->get<double>()) : (pool_max + 1);
+        if (want < 1) want = 1; else if (want > pool_max + 1) want = pool_max + 1;
+        g_blur_threads = want;
 
         e_op_new    = mod_loader->at_base_offset_as<op_new_t>(op_new_offset);
         e_surf_ctor = mod_loader->at_base_offset_as<surf_ctor_t>(surface_ctor_offset);
@@ -773,6 +890,9 @@ namespace rm_modloader {
             mod_loader->register_ruby_method("viewport_set_center",  ve_set_center);
             mod_loader->register_ruby_method("viewport_auto_center", ve_auto_center);
             mod_loader->register_ruby_method("viewport_zoom_blur_hq=", ve_set_zb_hq);   // debug A/B
+            mod_loader->register_ruby_method("viewport_blur_threads=",     ve_set_threads);
+            mod_loader->register_ruby_method("viewport_blur_threads",      ve_get_threads);
+            mod_loader->register_ruby_method("viewport_blur_max_threads",  ve_get_max_threads);
         });
 
         mod_loader->log_info("Applied ViewportEffects (per-viewport zoom; map default capture={}, zoom={})\n",
