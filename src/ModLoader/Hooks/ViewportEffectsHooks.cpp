@@ -30,7 +30,12 @@ namespace rm_modloader {
         constexpr ptrdiff_t surface_init_bitmap_offset = 0x10B3B0;
         constexpr ptrdiff_t op_new_offset              = 0x17E979;
         constexpr ptrdiff_t screen_vtable_offset       = 0x22F24C;   // &CNxScreen::vftable
+        constexpr ptrdiff_t rxviewport_vtable_offset   = 0x1A9220;   // &CRxViewport::vftable
         constexpr ptrdiff_t leaf_vtable_offsets[4]     = { 0x1A8B78, 0x22F3CC, 0x1A8B40, 0x1A91EC };
+
+        // Map-only: target the big map viewport (the Spriteset_Map main viewport, ~507 kids)
+        // rather than the whole Screen. Small HUD viewports (<this) are left alone.
+        constexpr int target_min_children = 200;
         constexpr int   attrs_size = 0x38;      // SurfaceSpriteAttributes
         constexpr int   attrs_at   = 0x94;      // its offset inside a SurfaceSprite
 
@@ -45,7 +50,7 @@ namespace rm_modloader {
         surf_init_t e_surf_init = nullptr;
         fill_rect_t e_fill_rect = nullptr;
         draw_t      e_draw      = nullptr;
-        const void* g_screen_vtable = nullptr;
+        const void* g_vp_vtable = nullptr;
         const void* g_leaf_vt[4] = { nullptr, nullptr, nullptr, nullptr };
 
         bool   g_capture = false;
@@ -55,11 +60,23 @@ namespace rm_modloader {
         int      g_bb_w = 0, g_bb_h = 0;
         bool     g_in_capture = false;
 
+        inline int child_count(const Sprite* n) {
+            if (!n->child_begin || !n->child_end || n->child_end < n->child_begin) return 0;
+            return static_cast<int>(n->child_end - n->child_begin);
+        }
+        // The real map viewport is the one whose subtree contains the tilemap (RxTilemapSprite,
+        // g_leaf_vt[3]). Child COUNT is a bad proxy: the 507-child viewport was the event/sprite
+        // layer (mostly off-screen -> drew nothing -> empty capture).
+        inline bool has_tilemap(const Sprite* n, int depth) {
+            if (!n || depth > 3) return false;
+            for (Sprite** it = n->child_begin; it && it < n->child_end; ++it) {
+                if (*reinterpret_cast<void* const*>(*it) == g_leaf_vt[3]) return true;
+                if (has_tilemap(*it, depth + 1)) return true;
+            }
+            return false;
+        }
         inline bool is_target(const Sprite* n) {
-            // Whole-frame zoom (proof of pipeline): target the root Screen node. Its render is
-            // opaque (clears to bg then draws everything), so a single capture+blit needs no
-            // alpha compositing. Map-only zoom is a refinement (a specific viewport + alpha).
-            return *reinterpret_cast<const void* const*>(n) == g_screen_vtable;
+            return *reinterpret_cast<const void* const*>(n) == g_vp_vtable && has_tilemap(n, 0);
         }
         inline bool is_leaf(const Sprite* n) {
             const void* vt = *reinterpret_cast<const void* const*>(n);
@@ -101,7 +118,7 @@ namespace rm_modloader {
         static void* (__thiscall Sprite::* orig)(Surface*, DWORD*, int*, RECT*);
 
         void* __thiscall walk_hook(Surface* dest, DWORD* origin, int* off, RECT* clip) {
-            if (!g_capture || g_in_capture || !is_target(this)) {
+            if (g_in_capture || !g_capture || !is_target(this)) {
                 return (this->*orig)(dest, origin, off, clip);
             }
 
@@ -113,18 +130,24 @@ namespace rm_modloader {
             }
 
             // 1) composite the subtree into our backbuffer via the engine's own walker.
+            // Reset the backbuffer's draw-offset/clip to full first: when capturing the whole
+            // Screen its slot9 sets these up, but a mid-walk viewport node does not -- left
+            // stale, the viewport's children clip to nothing (empty/black capture).
             RECT bbfull = { 0, 0, g_bb_w, g_bb_h };
+            g_backbuffer->left_offset = 0;
+            g_backbuffer->top_offset  = 0;
+            g_backbuffer->rect = bbfull;
             e_fill_rect(g_backbuffer, &bbfull, 0);
             g_in_capture = true;
             (this->*orig)(g_backbuffer, origin, off, clip);
             g_in_capture = false;
 
-            // Force a plain blend (0) so M_draw_on_surface falls through to the general
-            // custom_draw blitter (CNxCustomDraw32 +16 = sub_101238E0), which calls
-            // blit_stretch_setup and honours differing src/dst rect sizes. Any blend with a
-            // special bit (notably 0x80000000 -> dynamic_draw) takes a 1:1 fast path that
-            // ignores the dest size. Opacity/colour/tone bytes of the donor are kept.
-            *reinterpret_cast<DWORD*>(attrs) = 0;
+            // Blend 0x10000: routes to the general custom_draw blitter (stretches) AND skips
+            // its opacity==255 fast path -- which is an opaque copy that writes transparent
+            // source pixels as black (that black-screen over the HUD). The non-fast path does
+            // per-pixel alpha so the transparent parts of this map layer show the HUD beneath.
+            // (Plain 0x80000000 -> dynamic_draw = 1:1 no stretch; blend 0 -> opaque, blacks.)
+            *reinterpret_cast<DWORD*>(attrs) = 0x10000;
 
             // 2) zoom about the centre by SAMPLING a centred sub-rect of the backbuffer and
             // stretching it over the full viewport. (Enlarging the dest rect past the surface
@@ -169,7 +192,7 @@ namespace rm_modloader {
         e_surf_init = mod_loader->at_base_offset_as<surf_init_t>(surface_init_bitmap_offset);
         e_fill_rect = mod_loader->at_base_offset_as<fill_rect_t>(fill_rect_offset);
         e_draw      = mod_loader->at_base_offset_as<draw_t>(draw_on_surface_offset);
-        g_screen_vtable = mod_loader->at_base_offset(screen_vtable_offset);
+        g_vp_vtable = mod_loader->at_base_offset(rxviewport_vtable_offset);
         for (int i = 0; i < 4; ++i) g_leaf_vt[i] = mod_loader->at_base_offset(leaf_vtable_offsets[i]);
 
         mod_loader->hook_method(walker_offset, &WalkerHook::walk_hook, &WalkerHook::orig);
