@@ -314,6 +314,14 @@ module BSMP
       298,    # 礼拜堂沉睡演出 — chapel sleeping scene
       299,    # 伊瓦诺拉浇花 — Evanora watering flowers
       1401,   # 八音盒支线进度 — Music-Box sidequest progress
+      1402,   # Map053 boss-path progress — SEQUENTIAL counter, += inside Player-Touch
+              #  cutscenes (EV047 etc.); the boss path opens at >= 8. Safe to share: linear
+              #  (each step gated by a `>= N` page) and one-shot via the var itself (the
+              #  increment page deactivates once the count crosses), so the absolute broadcast
+              #  converges with no double / lost count. CAVEAT: the += lives inside a cutscene,
+              #  so a peer that didn't physically trigger it gets the PROGRESS but not the
+              #  VISUAL (and can't re-trigger once the value syncs). Playing the scene for
+              #  everyone is a separate planned feature — shared map-event mirror, task #37.
       1404,   # 圣域支线进度 — Sanctuary sidequest progress
       1031,   # 商店进度 — shop progress (VERIFIED: absolute-SET state 1-6, cross-map read; not a counter despite the name)
       203,    # 船送点数量 — ferry dock COUNT. CE87 gates the whole ferry on `203 < 2`
