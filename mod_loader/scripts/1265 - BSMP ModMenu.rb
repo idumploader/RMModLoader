@@ -87,6 +87,11 @@ module BSMP
                :category => CAT, :min => 0, :max => 3600, :step => 60,
                :gauge => [14, 6],
                :format => proc { |f| f <= 0 ? "off" : "#{f / 60}s" }))
+      # Per-peer kill switch for the double-battle dedup (a slow reader re-fighting a
+      # cutscene battle the group already won). Local only — turning it off just makes
+      # THIS peer re-fight; no desync.
+      M.toggle("Double-battle dedup", bind(:battle_dedup).merge(
+               :category => CAT, :on_text => "ON", :off_text => "OFF"))
 
       #--- Roster -------------------------------------------------------------
       M.header("Roster", :category => CAT)
