@@ -6,6 +6,8 @@
 #include <mutex>
 #include <cstring>
 #include <cmath>
+#include <cstdint>
+#include <vector>
 #include <unordered_map>
 
 namespace rm_modloader {
@@ -48,6 +50,8 @@ namespace rm_modloader {
         constexpr ptrdiff_t rxsprite_ctor_offset       = 0x01CE40;   // RxSprite_ctx(this, ancestor) -- true entry (prologue); 0x1CE50 lands mid-SEH
         constexpr ptrdiff_t rxsprite_render_offset     = 0x01E780;   // RxSprite::render(this, dest, clip)
         constexpr ptrdiff_t rxsprite_setsurf_offset    = 0x01D180;   // RxSprite_set_surface(this, Surface*, a3)
+        constexpr ptrdiff_t img_off8_offset            = 0x11F9F0;   // surface_get_image_off8 (top-row px ptr)
+        constexpr ptrdiff_t stride_offset              = 0x007E30;   // surface_get_stride_bytes
         // RxSprite field offsets (from IDA CRxSprite layout):
         constexpr int SP_RECT     = 0x08;    // base Sprite::rect = dest rect (sprite_copy_rect src)
         constexpr int SP_SRCRECT  = 0xCC;    // which region of the surface to sample
@@ -75,6 +79,8 @@ namespace rm_modloader {
         using sp_ctor_t   = void* (__thiscall*)(void* self, void* ancestor);
         using sp_render_t = int   (__thiscall*)(void* self, Surface* dest, RECT* clip);
         using sp_setsurf_t= Surface* (__thiscall*)(void* self, Surface* surf, int a3);
+        using img_off8_t  = uint32_t* (__thiscall*)(Surface*);   // top-row pixel pointer
+        using stride_t    = int (__thiscall*)(Surface*);         // row stride in bytes
 
         op_new_t    e_op_new    = nullptr;
         surf_ctor_t e_surf_ctor = nullptr;
@@ -87,7 +93,10 @@ namespace rm_modloader {
         sp_ctor_t    e_sp_ctor    = nullptr;
         sp_render_t  e_sp_render  = nullptr;
         sp_setsurf_t e_sp_setsurf = nullptr;
+        img_off8_t   e_img_off8   = nullptr;
+        stride_t     e_stride     = nullptr;
         void*        g_sprite     = nullptr;   // standalone RxSprite (ancestor=null), built lazily
+        std::vector<uint32_t> g_blur_tmp;      // scratch for the separable box blur
         const void* g_vp_vtable = nullptr;
         const void* g_leaf_vt[4] = { nullptr, nullptr, nullptr, nullptr };
 
@@ -104,9 +113,10 @@ namespace rm_modloader {
             double wave_speed = 0.0;           // phase advance per frame (rad)
             double wave_phase = 0.0;           // running phase (advanced by the walker)
             double angle = 0.0;                // rotation in degrees (0 = none)
+            int    blur = 0;                   // box-blur radius in px (0 = none)
             bool wave_on() const { return wave_amp != 0.0 && wave_length > 0.0; }
             bool rotates() const { return angle != 0.0 || flip_x || flip_y; }
-            bool active() const { return zoom > 1.0 || flip_x || flip_y || wave_on() || angle != 0.0; }
+            bool active() const { return zoom > 1.0 || flip_x || flip_y || wave_on() || angle != 0.0 || blur > 0; }
         };
 
         // Per-viewport effects, keyed by Sprite::sprite_id (unique forever). Touched only from
@@ -216,6 +226,39 @@ namespace rm_modloader {
         template<typename T> inline void sp_set(void* obj, int off, const T& v) {
             *reinterpret_cast<T*>(reinterpret_cast<char*>(obj) + off) = v;
         }
+
+        // Separable box blur of a BGRA region in place, via the engine's pixel pointer
+        // (surface_get_image_off8 = top-row, top-down y*stride+x like the engine itself uses).
+        // Two O(1)-per-pixel sliding-window passes (horizontal -> packed tmp -> vertical). The
+        // engine has no blur primitive, so this is the one genuinely hand-rolled per-pixel cost.
+        void box_blur(uint32_t* base, int stride, int x0, int y0, int x1, int y1, int r) {
+            int W = x1 - x0, H = y1 - y0;
+            if (W <= 0 || H <= 0 || r < 1) return;
+            if (static_cast<int>(g_blur_tmp.size()) < W * H) g_blur_tmp.resize(W * H);
+            uint32_t* tmp = g_blur_tmp.data();
+            for (int y = 0; y < H; ++y) {                       // horizontal: region -> packed tmp
+                uint32_t* row = base + (y0 + y) * stride + x0;
+                uint32_t* trow = tmp + y * W;
+                int sB = 0, sG = 0, sR = 0, sA = 0, lo = 0, hi = -1, cnt = 0;
+                for (int x = 0; x < W; ++x) {
+                    int nh = x + r > W - 1 ? W - 1 : x + r;
+                    int nl = x - r < 0 ? 0 : x - r;
+                    for (; hi < nh; ) { uint32_t p = row[++hi]; sB += p & 0xFF; sG += (p >> 8) & 0xFF; sR += (p >> 16) & 0xFF; sA += (p >> 24) & 0xFF; ++cnt; }
+                    for (; lo < nl; ++lo) { uint32_t p = row[lo]; sB -= p & 0xFF; sG -= (p >> 8) & 0xFF; sR -= (p >> 16) & 0xFF; sA -= (p >> 24) & 0xFF; --cnt; }
+                    trow[x] = (sB / cnt) | ((sG / cnt) << 8) | ((sR / cnt) << 16) | ((sA / cnt) << 24);
+                }
+            }
+            for (int x = 0; x < W; ++x) {                       // vertical: packed tmp -> region
+                int sB = 0, sG = 0, sR = 0, sA = 0, lo = 0, hi = -1, cnt = 0;
+                for (int y = 0; y < H; ++y) {
+                    int nh = y + r > H - 1 ? H - 1 : y + r;
+                    int nl = y - r < 0 ? 0 : y - r;
+                    for (; hi < nh; ) { uint32_t p = tmp[(++hi) * W + x]; sB += p & 0xFF; sG += (p >> 8) & 0xFF; sR += (p >> 16) & 0xFF; sA += (p >> 24) & 0xFF; ++cnt; }
+                    for (; lo < nl; ++lo) { uint32_t p = tmp[lo * W + x]; sB -= p & 0xFF; sG -= (p >> 8) & 0xFF; sR -= (p >> 16) & 0xFF; sA -= (p >> 24) & 0xFF; --cnt; }
+                    base[(y0 + y) * stride + x0 + x] = (sB / cnt) | ((sG / cnt) << 8) | ((sR / cnt) << 16) | ((sA / cnt) << 24);
+                }
+            }
+        }
     }
 
     struct WalkerHook : Sprite {
@@ -248,6 +291,15 @@ namespace rm_modloader {
             g_in_capture = true;
             (this->*orig)(g_backbuffer, origin, off, clip);
             g_in_capture = false;
+
+            // Blur the captured region in place (before any zoom/rotate blit), so it composes
+            // with every other effect. Engine has no blur -> our own CPU pass (the heaviest bit).
+            if (eff->blur > 0 && e_img_off8 && e_stride) {
+                uint32_t* px = e_img_off8(g_backbuffer);
+                int stride_px = e_stride(g_backbuffer) / 4;   // SIGNED: negative for a bottom-up DIB
+                if (px && stride_px != 0)                     // base is the top row, so -stride walks down
+                    box_blur(px, stride_px, vr.left, vr.top, vr.right, vr.bottom, eff->blur);
+            }
 
             // Blend 0x10000: routes to the general custom_draw blitter (stretches) AND skips
             // its opacity==255 fast path -- which is an opaque copy that writes transparent
@@ -446,6 +498,16 @@ namespace rm_modloader {
             if (vp) { g_effects[vp->sprite_id].angle = rb_value_to_double(v); reclaim_if_inert(g_effects.find(vp->sprite_id)); }
             return v;
         }
+        RubyValue __cdecl vp_set_blur(RubyValue self, RubyValue v) {
+            RxViewport* vp = rgss_native<RxViewport>(self);
+            if (vp) {
+                int r = rb_parse_int(v);
+                if (r < 0) r = 0; else if (r > 64) r = 64;   // clamp (cost + sanity)
+                g_effects[vp->sprite_id].blur = r;
+                reclaim_if_inert(g_effects.find(vp->sprite_id));
+            }
+            return v;
+        }
         RubyValue __cdecl vp_wave_off(RubyValue self) {
             RxViewport* vp = rgss_native<RxViewport>(self);
             if (vp) {
@@ -494,6 +556,8 @@ namespace rm_modloader {
         e_sp_ctor    = mod_loader->at_base_offset_as<sp_ctor_t>(rxsprite_ctor_offset);
         e_sp_render  = mod_loader->at_base_offset_as<sp_render_t>(rxsprite_render_offset);
         e_sp_setsurf = mod_loader->at_base_offset_as<sp_setsurf_t>(rxsprite_setsurf_offset);
+        e_img_off8   = mod_loader->at_base_offset_as<img_off8_t>(img_off8_offset);
+        e_stride     = mod_loader->at_base_offset_as<stride_t>(stride_offset);
         g_vp_vtable = mod_loader->at_base_offset(rxviewport_vtable_offset);
         for (int i = 0; i < 4; ++i) g_leaf_vt[i] = mod_loader->at_base_offset(leaf_vtable_offsets[i]);
 
@@ -512,6 +576,7 @@ namespace rm_modloader {
             rb_define_method(*viewport_klass, "wave",             vp_set_wave,   3);
             rb_define_method(*viewport_klass, "wave_off",         vp_wave_off,   0);
             rb_define_method(*viewport_klass, "angle=",           vp_set_angle,  1);
+            rb_define_method(*viewport_klass, "blur=",            vp_set_blur,   1);
 
             // Global default for the auto-detected map viewport.
             mod_loader->register_ruby_method("viewport_zoom=",       ve_set_zoom);

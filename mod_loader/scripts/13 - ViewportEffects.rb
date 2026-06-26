@@ -89,6 +89,35 @@ module ModLoader
         end
         nil
       end
+
+      # Demo "dream" effect on the map viewport: a soft blur plus a touch of
+      # zoom. Just type `ModLoader::Viewport.dream` in the console; pass false
+      # (or call .clear) to turn it off.
+      #   ModLoader::Viewport.dream        # on
+      #   ModLoader::Viewport.dream(false) # off
+      def dream(on = true)
+        return unless available?
+        vp = map
+        return unless vp
+        vp.blur = on ? 5   : 0
+        vp.zoom = on ? 1.1 : 1.0
+        on
+      end
+
+      # Reset every effect on the map viewport back to normal.
+      def clear
+        return unless available?
+        vp = map
+        return unless vp
+        vp.blur = 0
+        vp.zoom = 1.0
+        vp.angle = 0
+        vp.flip_x = false
+        vp.flip_y = false
+        vp.wave_off
+        vp.zoom_auto_center
+        nil
+      end
     end
   end
 end
