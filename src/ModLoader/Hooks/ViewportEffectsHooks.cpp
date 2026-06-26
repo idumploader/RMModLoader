@@ -120,10 +120,11 @@ namespace rm_modloader {
             double wave_phase = 0.0;           // running phase (advanced by the walker)
             double angle = 0.0;                // rotation in degrees (0 = none)
             int    blur = 0;                   // box-blur radius in px (0 = none)
-            int    zoom_blur = 0;              // radial/motion blur strength 0..100 (0 = none)
+            int    zoom_blur = 0;              // zoom/"warp" blur strength 0..100 (0 = none)
+            int    radial_blur = 0;            // radial/spin blur strength 0..100 (0 = none)
             bool wave_on() const { return wave_amp != 0.0 && wave_length > 0.0; }
             bool rotates() const { return angle != 0.0 || flip_x || flip_y; }
-            bool active() const { return zoom > 1.0 || flip_x || flip_y || wave_on() || angle != 0.0 || blur > 0 || zoom_blur > 0; }
+            bool active() const { return zoom > 1.0 || flip_x || flip_y || wave_on() || angle != 0.0 || blur > 0 || zoom_blur > 0 || radial_blur > 0; }
         };
 
         // Per-viewport effects, keyed by Sprite::sprite_id (unique forever). Touched only from
@@ -267,72 +268,55 @@ namespace rm_modloader {
             }
         }
 
-        // Radial / zoom motion blur about (cx,cy): each output pixel averages TAPS samples taken
-        // along the ray from the centre, contracting toward it -> streaks that radiate outward
-        // (the "warp speed" look). strength 0..100 maps to up to ~40% contraction. Reads the
-        // captured region, writes via the packed tmp, then copies back (taps must read the
-        // unmodified source). N-tap per pixel -> heavier than the box blur (no O(1) shortcut).
-        void zoom_blur(uint32_t* base, int stride, int x0, int y0, int x1, int y1, int cx, int cy, int strength) {
+        // Directional multi-tap blur about (cx,cy). Each output pixel averages `taps` samples,
+        // each read at C + M_k*(p-C) for a per-tap 2x2 matrix M_k. Contracting matrices (uniform
+        // scale <1) give a zoom/"warp" blur; rotation matrices give a radial/spin blur. Shared
+        // structure for both: compute on a STEP=2 grid (4x fewer tap loops) + branchless avg2
+        // upsample, with the central box recomputed at full res (streaks vanish toward the centre,
+        // so the grid would blockify the sharp player sprite there).
+        struct TapMat { double a, b, c, d; };   // sx = cx + a*dx + b*dy ; sy = cy + c*dx + d*dy
+        void directional_blur(uint32_t* base, int stride, int x0, int y0, int x1, int y1,
+                              int cx, int cy, const TapMat* m, int taps) {
             int W = x1 - x0, H = y1 - y0;
-            if (W <= 0 || H <= 0 || strength <= 0) return;
-            constexpr int TAPS = 10;
-            double spread_hq = (strength > 100 ? 100 : strength) / 100.0 * 0.40;
+            if (W <= 0 || H <= 0 || taps < 1) return;
+            // one pixel's averaged sample (dx,dy are relative to the centre).
+            auto sample = [&](int dx, int dy) -> uint32_t {
+                int sB = 0, sG = 0, sR = 0, sA = 0;
+                for (int k = 0; k < taps; ++k) {
+                    int sx = cx + static_cast<int>(m[k].a * dx + m[k].b * dy);
+                    int sy = cy + static_cast<int>(m[k].c * dx + m[k].d * dy);
+                    if (sx < x0) sx = x0; else if (sx >= x1) sx = x1 - 1;
+                    if (sy < y0) sy = y0; else if (sy >= y1) sy = y1 - 1;
+                    uint32_t p = base[sy * stride + sx];
+                    sB += p & 0xFF; sG += (p >> 8) & 0xFF; sR += (p >> 16) & 0xFF; sA += (p >> 24) & 0xFF;
+                }
+                return (sB / taps) | ((sG / taps) << 8) | ((sR / taps) << 16) | ((sA / taps) << 24);
+            };
 
-            // Debug HQ path: full-res, every pixel runs its own taps (best quality, ~4x cost).
-            // Toggle from Ruby (ModLoader.viewport_zoom_blur_hq=) to A/B against the STEP grid.
-            if (g_zb_hq) {
+            if (g_zb_hq) {                                   // debug: full-res, no grid
                 if (static_cast<int>(g_blur_tmp.size()) < W * H) g_blur_tmp.resize(W * H);
                 uint32_t* tmp = g_blur_tmp.data();
-                for (int y = 0; y < H; ++y) {
-                    int py = y0 + y, dy = py - cy;
-                    for (int x = 0; x < W; ++x) {
-                        int px = x0 + x, dx = px - cx;
-                        int sB = 0, sG = 0, sR = 0, sA = 0;
-                        for (int k = 0; k < TAPS; ++k) {
-                            double f = 1.0 - spread_hq * k / (TAPS - 1);
-                            int sx = cx + static_cast<int>(dx * f), sy = cy + static_cast<int>(dy * f);
-                            if (sx < x0) sx = x0; else if (sx >= x1) sx = x1 - 1;
-                            if (sy < y0) sy = y0; else if (sy >= y1) sy = y1 - 1;
-                            uint32_t p = base[sy * stride + sx];
-                            sB += p & 0xFF; sG += (p >> 8) & 0xFF; sR += (p >> 16) & 0xFF; sA += (p >> 24) & 0xFF;
-                        }
-                        tmp[y * W + x] = (sB / TAPS) | ((sG / TAPS) << 8) | ((sR / TAPS) << 16) | ((sA / TAPS) << 24);
-                    }
-                }
+                for (int y = 0; y < H; ++y)
+                    for (int x = 0; x < W; ++x)
+                        tmp[y * W + x] = sample(x0 + x - cx, y0 + y - cy);
                 for (int y = 0; y < H; ++y)
                     for (int x = 0; x < W; ++x)
                         base[(y0 + y) * stride + x0 + x] = tmp[y * W + x];
                 return;
             }
-            constexpr int STEP = 2;   // run the heavy tap loop on a STEP grid (~STEP^2 cheaper),
-                                      // then bilinearly upsample so the sharp centre (no streak,
-                                      // nothing to hide nearest-fill blockiness) stays smooth.
-            double spread = (strength > 100 ? 100 : strength) / 100.0 * 0.40;  // max contraction
+
+            constexpr int STEP = 2;
             int gw = W / STEP + 2, gh = H / STEP + 2;
             if (static_cast<int>(g_zb_grid.size()) < gw * gh) g_zb_grid.resize(gw * gh);
             uint32_t* grid = g_zb_grid.data();
             for (int gy = 0; gy < gh; ++gy) {
                 int y = gy * STEP; if (y > H - 1) y = H - 1;
-                int py = y0 + y, dy = py - cy;
                 for (int gx = 0; gx < gw; ++gx) {
                     int x = gx * STEP; if (x > W - 1) x = W - 1;
-                    int px = x0 + x, dx = px - cx;
-                    int sB = 0, sG = 0, sR = 0, sA = 0;
-                    for (int k = 0; k < TAPS; ++k) {
-                        double f = 1.0 - spread * k / (TAPS - 1);          // 1.0 .. 1-spread
-                        int sx = cx + static_cast<int>(dx * f);
-                        int sy = cy + static_cast<int>(dy * f);
-                        if (sx < x0) sx = x0; else if (sx >= x1) sx = x1 - 1;
-                        if (sy < y0) sy = y0; else if (sy >= y1) sy = y1 - 1;
-                        uint32_t p = base[sy * stride + sx];
-                        sB += p & 0xFF; sG += (p >> 8) & 0xFF; sR += (p >> 16) & 0xFF; sA += (p >> 24) & 0xFF;
-                    }
-                    grid[gy * gw + gx] = (sB / TAPS) | ((sG / TAPS) << 8) | ((sR / TAPS) << 16) | ((sA / TAPS) << 24);
+                    grid[gy * gw + gx] = sample(x0 + x - cx, y0 + y - cy);
                 }
             }
-            // Crisp centre: the streaks vanish toward (cx,cy), so the grid's blockiness shows there
-            // (worst on the player sprite). Recompute the central box at full res from the still-
-            // original pixels, stash it, and paste it back after the upsample overwrites everything.
+            // crisp central box at full res (stashed before the upsample overwrites base).
             int Rx = W * 18 / 100, Ry = H * 18 / 100;
             int bx0 = cx - Rx < x0 ? x0 : cx - Rx, by0 = cy - Ry < y0 ? y0 : cy - Ry;
             int bx1 = cx + Rx > x1 ? x1 : cx + Rx, by1 = cy + Ry > y1 ? y1 : cy + Ry;
@@ -340,29 +324,11 @@ namespace rm_modloader {
             if (bw > 0 && bh > 0) {
                 if (static_cast<int>(g_blur_tmp.size()) < bw * bh) g_blur_tmp.resize(bw * bh);
                 uint32_t* bt = g_blur_tmp.data();
-                for (int yy = 0; yy < bh; ++yy) {
-                    int py = by0 + yy, dy = py - cy;
-                    for (int xx = 0; xx < bw; ++xx) {
-                        int px = bx0 + xx, dx = px - cx;
-                        int sB = 0, sG = 0, sR = 0, sA = 0;
-                        for (int k = 0; k < TAPS; ++k) {
-                            double f = 1.0 - spread * k / (TAPS - 1);
-                            int sx = cx + static_cast<int>(dx * f), sy = cy + static_cast<int>(dy * f);
-                            if (sx < x0) sx = x0; else if (sx >= x1) sx = x1 - 1;
-                            if (sy < y0) sy = y0; else if (sy >= y1) sy = y1 - 1;
-                            uint32_t p = base[sy * stride + sx];
-                            sB += p & 0xFF; sG += (p >> 8) & 0xFF; sR += (p >> 16) & 0xFF; sA += (p >> 24) & 0xFF;
-                        }
-                        bt[yy * bw + xx] = (sB / TAPS) | ((sG / TAPS) << 8) | ((sR / TAPS) << 16) | ((sA / TAPS) << 24);
-                    }
-                }
+                for (int yy = 0; yy < bh; ++yy)
+                    for (int xx = 0; xx < bw; ++xx)
+                        bt[yy * bw + xx] = sample(bx0 + xx - cx, by0 + yy - cy);
             }
-            // Upsample grid -> region. STEP==2, so a bilinear sample is just neighbour averaging,
-            // and the average of two packed BGRA pixels is one branchless bit-trick (no per-channel
-            // split, no divide) -- the divide-heavy general form was the real cost (-20 fps). Even
-            // rows: x even = grid as-is (sharp centre stays sharp), x odd = avg of horizontal pair.
-            // Odd rows: vertical avg, and the diagonal 4-average for the odd-odd corner.
-            static_assert(STEP == 2, "fast upsample path assumes STEP == 2");
+            // avg2 upsample: average of two packed BGRA pixels in one branchless bit-trick.
             auto avg2 = [](uint32_t a, uint32_t b) { return (a & b) + (((a ^ b) >> 1) & 0x7F7F7F7Fu); };
             for (int y = 0; y < H; ++y) {
                 int gy = y >> 1, wy = y & 1;
@@ -371,15 +337,13 @@ namespace rm_modloader {
                 const uint32_t* g1 = grid + (gy + 1) * gw;
                 if (!wy) {
                     for (int x = 0; x < W; x += 2) {
-                        int gx = x >> 1;
-                        uint32_t c00 = g0[gx];
+                        int gx = x >> 1; uint32_t c00 = g0[gx];
                         drow[x] = c00;
                         if (x + 1 < W) drow[x + 1] = avg2(c00, g0[gx + 1]);
                     }
                 } else {
                     for (int x = 0; x < W; x += 2) {
-                        int gx = x >> 1;
-                        uint32_t c00 = g0[gx], c01 = g1[gx];
+                        int gx = x >> 1; uint32_t c00 = g0[gx], c01 = g1[gx];
                         drow[x] = avg2(c00, c01);
                         if (x + 1 < W) drow[x + 1] = avg2(avg2(c00, g0[gx + 1]), avg2(c01, g1[gx + 1]));
                     }
@@ -391,6 +355,26 @@ namespace rm_modloader {
                     for (int xx = 0; xx < bw; ++xx)
                         base[(by0 + yy) * stride + bx0 + xx] = bt[yy * bw + xx];
             }
+        }
+
+        constexpr int BLUR_TAPS = 10;
+        // Combined motion blur: zoom ("warp", contract toward the centre) and radial (spin) fuse
+        // into ONE directional pass -- the per-tap matrix is scale * rotation (a spiral). zoom
+        // alone = pure scale, radial alone = pure rotation, both = spiral, all at one pass. (This
+        // is why stacking the two need not cost 2x: Zeus reuses its sprite copies, we reuse taps.)
+        void motion_blur(uint32_t* base, int stride, int x0, int y0, int x1, int y1,
+                         int cx, int cy, int zoom_s, int radial_s) {
+            if (zoom_s <= 0 && radial_s <= 0) return;
+            double sp   = (zoom_s   > 100 ? 100 : zoom_s)   / 100.0 * 0.40;   // up to 40% contraction
+            double maxr = (radial_s > 100 ? 100 : radial_s) / 100.0 * 0.25;   // half-arc, radians
+            TapMat m[BLUR_TAPS];
+            for (int k = 0; k < BLUR_TAPS; ++k) {
+                double f = 1.0 - sp * k / (BLUR_TAPS - 1);
+                double ang = -maxr + 2.0 * maxr * k / (BLUR_TAPS - 1);
+                double c = std::cos(ang), s = std::sin(ang);
+                m[k] = { f * c, -f * s, f * s, f * c };
+            }
+            directional_blur(base, stride, x0, y0, x1, y1, cx, cy, m, BLUR_TAPS);
         }
     }
 
@@ -427,17 +411,17 @@ namespace rm_modloader {
 
             // Blur the captured region in place (before any zoom/rotate blit), so it composes
             // with every other effect. Engine has no blur -> our own CPU pass (the heaviest bit).
-            if ((eff->blur > 0 || eff->zoom_blur > 0) && e_img_off8 && e_stride) {
+            if ((eff->blur > 0 || eff->zoom_blur > 0 || eff->radial_blur > 0) && e_img_off8 && e_stride) {
                 uint32_t* px = e_img_off8(g_backbuffer);
                 int stride_px = e_stride(g_backbuffer) / 4;   // SIGNED: negative for a bottom-up DIB
                 if (px && stride_px != 0) {                   // base is the top row, so -stride walks down
+                    int bcx = eff->center_active ? eff->center_x : (vr.left + vr.right) / 2;
+                    int bcy = eff->center_active ? eff->center_y : (vr.top + vr.bottom) / 2;
                     if (eff->blur > 0)
                         box_blur(px, stride_px, vr.left, vr.top, vr.right, vr.bottom, eff->blur);
-                    if (eff->zoom_blur > 0) {
-                        int bcx = eff->center_active ? eff->center_x : (vr.left + vr.right) / 2;
-                        int bcy = eff->center_active ? eff->center_y : (vr.top + vr.bottom) / 2;
-                        zoom_blur(px, stride_px, vr.left, vr.top, vr.right, vr.bottom, bcx, bcy, eff->zoom_blur);
-                    }
+                    if (eff->zoom_blur > 0 || eff->radial_blur > 0)   // fused: one pass for both
+                        motion_blur(px, stride_px, vr.left, vr.top, vr.right, vr.bottom, bcx, bcy,
+                                    eff->zoom_blur, eff->radial_blur);
                 }
             }
 
@@ -663,6 +647,16 @@ namespace rm_modloader {
             }
             return v;
         }
+        RubyValue __cdecl vp_set_radial_blur(RubyValue self, RubyValue v) {
+            RxViewport* vp = rgss_native<RxViewport>(self);
+            if (vp) {
+                int s = rb_parse_int(v);
+                if (s < 0) s = 0; else if (s > 100) s = 100;
+                g_effects[vp->sprite_id].radial_blur = s;
+                reclaim_if_inert(g_effects.find(vp->sprite_id));
+            }
+            return v;
+        }
         RubyValue __cdecl vp_wave_off(RubyValue self) {
             RxViewport* vp = rgss_native<RxViewport>(self);
             if (vp) {
@@ -734,6 +728,7 @@ namespace rm_modloader {
             rb_define_method(*viewport_klass, "angle=",           vp_set_angle,  1);
             rb_define_method(*viewport_klass, "blur=",            vp_set_blur,   1);
             rb_define_method(*viewport_klass, "zoom_blur=",       vp_set_zoom_blur, 1);
+            rb_define_method(*viewport_klass, "radial_blur=",     vp_set_radial_blur, 1);
 
             // Global default for the auto-detected map viewport.
             mod_loader->register_ruby_method("viewport_zoom=",       ve_set_zoom);
