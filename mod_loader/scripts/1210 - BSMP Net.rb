@@ -449,9 +449,20 @@ module BSMP
       return SteamAPI.get_lobby_owner(@lobby_id)
     end
 
+    # Our steam id (= lobby owner). SteamAPI.get_lobby_owner can briefly return nil right
+    # after a lobby is created (Steam timing); a host broadcast fired in that window (e.g. a
+    # parallel map event) would otherwise build a packet with a nil from_id and crash. Re-
+    # resolve lazily so a later frame fills it in.
+    def owner_id
+      @server_user_id ||= (SteamAPI.get_lobby_owner(@lobby_id) rescue nil) if @lobby_id
+      @server_user_id
+    end
+
     def send_packet(packet)
       return if not initted? or not running?
-      packet.from_id = @server_user_id
+      oid = owner_id
+      return unless oid.is_a?(Integer)   # owner not resolved yet -> skip (no clients yet anyway)
+      packet.from_id = oid
       send_packet_to_all(packet)
     end
 
@@ -530,8 +541,10 @@ module BSMP
     # Send a point-to-point control packet to a user that may not be a client yet.
     def send_control(user_id, type, data)
       return if not running?
+      oid = owner_id
+      return unless oid.is_a?(Integer)
       target = ServerClient.new(user_id, @channel_id)
-      send_packet_to(target, BasicNetworkPacket.new(type, @server_user_id, data))
+      send_packet_to(target, BasicNetworkPacket.new(type, oid, data))
     end
 
     def send_world_snapshot(user_id)
