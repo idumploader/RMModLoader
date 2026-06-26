@@ -232,7 +232,10 @@ class Sprite_Character
     @nickname_sprite.bitmap.font.size = 21
     @nickname_sprite.x = self.x - nickname_width / 2
     @nickname_sprite.y = self.y - 32 - nickname_height
-    @nickname_sprite.z = 100
+    # Above ALL map content in this viewport — character sprites (screen_z up to ~200) and
+    # "above-priority" / star tiles (tree tops, roofs, signs) that otherwise drew over the
+    # nick. Still below scene windows (those live in a separate viewport).
+    @nickname_sprite.z = 1000
   end
 
   def nickname_changed?
@@ -242,6 +245,9 @@ class Sprite_Character
   def update
     bsmp_orig_update
     update_nickname if nickname_changed?
+    # Only show the floating nickname while in a co-op session — hide it in single-player
+    # (the local player still carries a nickname, so the sprite would otherwise show solo).
+    @nickname_sprite.visible = bsmp_network_running? if @nickname_sprite
   end
 
   def update_nickname
