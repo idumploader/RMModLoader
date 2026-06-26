@@ -46,6 +46,8 @@ module BSMP
     @sync_tick   = 0      # frame counter for throttling the host's BATTLE_SYNC
     @starve      = 0      # guest frames since the last host state update (heartbeat watchdog)
     @pending_mirror_ce = nil # a received MIRROR_CE id to run on the map (death/loss outcome)
+    @battle_wins = {}     # double-battle dedup: { [map_id, event_id] => true } won this run
+    @battle_origin = nil  # host only: [map, event] trigger of the current battle (stamped into BATTLE_END)
 
     class << self
       # True on a guest whose current battle is the host's (so its scene is mute).
@@ -103,6 +105,36 @@ module BSMP
         r = @result
         @result = nil
         r
+      end
+
+      # --- Double-battle dedup (cache-by-origin) ---
+      # When a scripted battle is won, its result is cached keyed by the TRIGGERING event's
+      # (map, event_id). A peer whose slower cutscene later reaches the SAME command_301 sees
+      # the cached win and takes IfWin instead of re-fighting (the double-battle bug: a long
+      # co-op cutscene with a battle at the end, where a slow reader re-triggers it). The
+      # signal is synchronous (every participant learns the result at BATTLE_END, before its
+      # interpreter resumes), so no timing window. battle_origin is the host's record of the
+      # current battle's trigger; on guests the origin rides in on the BATTLE_END packet.
+      attr_accessor :battle_origin
+
+      # Cache a win for the trigger AND its sibling copies (Config::BATTLE_EVENT_GROUPS) so
+      # three identical events of one battle (e.g. Map54) all skip off any one win.
+      def cache_battle_win(map_id, event_id)
+        return if event_id.nil? or event_id.to_i <= 0
+        BSMP.battle_event_group(map_id, event_id.to_i).each { |e| @battle_wins[[map_id, e]] = true }
+      end
+
+      def battle_won?(map_id, event_id)
+        return false if event_id.nil? or event_id.to_i <= 0
+        @battle_wins[[map_id, event_id]] ? true : false
+      end
+
+      # Dropped when an event STARTS a fresh interpreter run (Game_Interpreter#setup, depth 0):
+      # a respawn / re-trigger then fights again, while a still-running cutscene (no re-setup)
+      # keeps its cached win until its own command_301.
+      def clear_battle_win(map_id, event_id)
+        return if event_id.nil? or event_id.to_i <= 0
+        @battle_wins.delete([map_id, event_id])
       end
 
       # Heartbeat watchdog. note_sync resets the starvation counter on every received
@@ -339,7 +371,13 @@ module BSMP
     # fast start->end race), just drop the queued start.
     def self.on_battle_end(packet)
       return if BSMP::Battle.host_session?  # the owner's own end already ran locally
-      result = packet.data.to_i
+      # data = "result[;origin_map;origin_event]". Cache the win for the double-battle dedup
+      # (origin absent on the terminate-fallback / old hosts -> just no dedup for that end).
+      parts = packet.data.to_s.split(';')
+      result = parts[0].to_i
+      if result == 0 and parts[1] and parts[2]
+        BSMP::Battle.cache_battle_win(parts[1].to_i, parts[2].to_i)
+      end
       BSMP::Battle.pending = nil
       BSMP::Battle.request_end(result) if BSMP::Battle.client_session?
     end
@@ -570,11 +608,15 @@ module BSMP
       # (e.g. several gated peers fired command_301 at once — the host's own start wins,
       #  the redundant requests are dropped; everyone joins via the one BATTLE_START)
       header, *roster = packet.data.to_s.split("\n")
-      troop_id, can_escape, can_lose = header.split(';').map { |s| s.to_i }
+      troop_id, can_escape, can_lose, omap, oevent = header.split(';').map { |s| s.to_i }
       return unless $data_troops[troop_id]
       # Remember the requester's full party (snapshots) so Scene_Battle#start can build
       # proxies of its event-added temp allies — see the start hook below.
       BSMP::Battle.pending_roster = [packet.from_id, roster]
+      # Trigger origin (map, event) for the double-battle dedup: stamped into BATTLE_END so
+      # every participant caches the win under the same key. nil if the requester didn't send
+      # one (old client / map-encounter), which just disables dedup for this battle.
+      BSMP::Battle.battle_origin = (oevent and oevent > 0) ? [omap, oevent] : nil
       BattleManager.setup(troop_id, can_escape != 0, can_lose != 0)
       $game_player.make_encounter_count
       SceneManager.call(Scene_Battle)
@@ -777,7 +819,14 @@ module BattleManager
     def battle_end(result)
       if BSMP.host? and bsmp_network_running?
         BSMP::Battle.result = result
-        bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::BATTLE_END, 0, result.to_s))
+        # Stamp the trigger origin so guests cache the win under the same (map,event) key
+        # for the double-battle dedup; cache it locally too (the host may itself be the slow
+        # reader whose cutscene re-reaches this 301). Only wins are cached.
+        origin = BSMP::Battle.battle_origin
+        data   = origin ? "#{result};#{origin[0]};#{origin[1]}" : result.to_s
+        bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::BATTLE_END, 0, data))
+        BSMP::Battle.cache_battle_win(origin[0], origin[1]) if result == 0 and origin
+        BSMP::Battle.battle_origin = nil
       end
       BSMP::Battle.end_host_session # stop streaming troop state
       bsmp_battle_end(result)
@@ -977,7 +1026,17 @@ class Game_Interpreter
   alias bsmp_battle_command_301 command_301
   def command_301
     return bsmp_battle_command_301 if not bsmp_network_running?
+    # Double-battle dedup: this scripted battle was already won by the group (cached under
+    # its (map, event_id) at BATTLE_END, incl. sibling copies). Take the IfWin branch and
+    # don't re-fight. We DON'T arm the post-battle transfer here: we're not the winner, our
+    # own IfWin runs its TransferPlayer locally — mirroring it would double-broadcast.
+    if bsmp_battle_dedup_skip?
+      @branch[@indent] = 0
+      return
+    end
     if BSMP.host?
+      # Record the trigger so battle_end can cache/stamp the win under it.
+      BSMP::Battle.battle_origin = [$game_map.map_id, @event_id]
       bsmp_battle_command_301      # runs the co-op battle; returns once it's over
       bsmp_arm_post_battle_xfer    # so the IfWin TransferPlayer mirrors to the others
       return
@@ -985,6 +1044,28 @@ class Game_Interpreter
     return if $game_party.in_battle
     bsmp_battle_request_remote     # parks until the host's battle ends, then resumes
     bsmp_arm_post_battle_xfer
+  end
+
+  # True if the group already won this scripted battle and dedup is enabled. event_id 0
+  # (a battle in an autonomous common event, not tied to a map event) is never deduped.
+  def bsmp_battle_dedup_skip?
+    return false unless (BSMP.settings.battle_dedup rescue true)
+    return false if @event_id.nil? or @event_id <= 0
+    return false unless $game_map
+    BSMP::Battle.battle_won?($game_map.map_id, @event_id)
+  end
+
+  # Drop a stale cached battle-win when an event STARTS a fresh run. depth 0 = a map event
+  # page being set up (NOT a called common-event child, which reuses the parent's event_id
+  # at depth > 0 and must keep the cache so a nested 301 still skips). A still-running
+  # cutscene isn't re-set-up, so it keeps its win until its own command_301; a respawn /
+  # re-trigger gets a clean slate and fights again.
+  alias bsmp_battlededup_setup setup
+  def setup(list, event_id = 0)
+    bsmp_battlededup_setup(list, event_id)
+    if @depth == 0 and event_id and event_id > 0 and $game_map
+      BSMP::Battle.clear_battle_win($game_map.map_id, event_id)
+    end
   end
 
   def bsmp_battle_request_remote
@@ -1010,7 +1091,9 @@ class Game_Interpreter
     roster = $game_party.battle_members.
       reject { |a| a.is_a?(Game_BSMPProxyActor) }.
       map { |a| BSMP::BattleParty.snapshot(a) }
-    data = "#{troop_id};#{can_escape};#{can_lose}\n#{roster.join("\n")}"
+    # Header carries the trigger origin (map, event_id) after can_lose so the host can stamp
+    # the won battle's cache key (double-battle dedup) into BATTLE_END for every peer.
+    data = "#{troop_id};#{can_escape};#{can_lose};#{$game_map.map_id};#{@event_id}\n#{roster.join("\n")}"
     bsmp_send_packet(BasicNetworkPacket.new(BSMP::Events::BATTLE_REQUEST, 0, data))
     # Wait for the host's BATTLE_START to arrive. The host may take a frame or two
     # (the packet is read on the next Scene_Base#update), so yield until pending.

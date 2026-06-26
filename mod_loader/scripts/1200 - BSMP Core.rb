@@ -392,6 +392,19 @@ module BSMP
       210 => [[2,   :on_only]],  # ferry dock: Nancy hideout (switch 94)
     }
 
+    # --- Co-op double-battle sibling groups (cache-by-origin dedup) ---
+    # The dedup keys a won battle by its triggering event's (map, event_id). That covers
+    # the common case (one cutscene event, slow reader re-reaches its own command_301).
+    # It does NOT cover several DIFFERENT events that are copies of the SAME battle placed
+    # side by side (e.g. Map54 has three identical scarecrow-fight events on one path): a
+    # win on event 10 wouldn't skip a peer standing on event 43. List such copies here as
+    # one group; a win on ANY member is cached for ALL members, so the others skip too.
+    # ONLY group events that are genuinely the SAME one-shot battle (same troop, shared
+    # win-switch) — never distinct fights that merely reuse a troop. { map_id => [[ev,...]] }
+    BATTLE_EVENT_GROUPS = {
+      # 54 => [[10, 43, 51]],  # Map54: three adjacent scarecrow-fight copies (troop 716)
+    }
+
     # --- Co-op battle scaling (step 6.6) ---
     # Enemies scale with the number of PLAYERS in the fight (1 = no scaling). co-op
     # battles are global, so "players" = lobby size; the value is stable for the whole
@@ -551,6 +564,13 @@ module BSMP
       # the host's setting is stamped into the snapshot, so the receiver applies the right
       # mode regardless of its own setting.
       :world_snapshot_full => false,
+      # Co-op double-battle dedup (cache-by-origin). When a scripted battle is won, every
+      # participant caches the result keyed by the triggering event's (map, event_id); a
+      # peer whose own (slower) cutscene later reaches the SAME command_301 takes the IfWin
+      # branch instead of re-fighting. ON by default; a per-peer kill switch (purely local —
+      # disabling it just makes THIS peer re-fight, no desync). The sibling grouping for
+      # "different events, same battle" lives in Config::BATTLE_EVENT_GROUPS (game data).
+      :battle_dedup => true,
     }
 
     # Typed accessors over the backing store; setters edit the working copy only
@@ -747,6 +767,19 @@ module BSMP
     return nil unless list
     pair = list.assoc(event_id)
     pair && pair[1]
+  end
+
+  # Sibling event_ids that share ONE battle with event_id on map_id (incl. itself), per
+  # Config::BATTLE_EVENT_GROUPS — so a win cached on any copy applies to all. Returns
+  # [event_id] when it isn't grouped. event_id 0 (common event) is never grouped.
+  def self.battle_event_group(map_id, event_id)
+    return [] if event_id.nil? or event_id == 0
+    groups = Config::BATTLE_EVENT_GROUPS[map_id]
+    if groups
+      g = groups.find { |grp| grp.include?(event_id) }
+      return g if g
+    end
+    [event_id]
   end
 
   # Number of players in a co-op battle (6.6). co-op battles are global, so this is the
