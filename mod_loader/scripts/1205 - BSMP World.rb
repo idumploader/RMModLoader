@@ -307,6 +307,59 @@ module BSMP
       $game_switches and $game_variables and $game_self_switches and $data_system
     end
 
+    # --- generic extension points (game-agnostic) ----------------------------
+    # Other modules attach a game-specific payload to the world snapshot and react
+    # once it's applied, WITHOUT World knowing what the payload means. Each extra is
+    # keyed and length-framed, so receivers dispatch by key (registration order is
+    # irrelevant) and skip unknown keys cleanly; an older host that writes no extras
+    # is tolerated (the section is simply absent at EOF). First user: 1280 (BS2
+    # bonfire respawn). KEEP game-specific knowledge OUT of here.
+    def self.register_extra(key, dumper, loader)
+      (@extras ||= {})[key.to_sym] = [dumper, loader]
+    end
+
+    # Run blk after a snapshot is fully applied (AFTER the fact-guard is released, so
+    # a handler may touch game state — e.g. reserve a player transfer — without its
+    # writes being re-broadcast as facts).
+    def self.after_apply(&blk)
+      (@after_apply ||= []) << blk
+    end
+
+    # Length-prefixed (LEB128 count + raw bytes) opaque blob — the framing that makes
+    # the extras section order- and version-independent.
+    def self.write_blob(w, s)
+      s = s.to_s.dup.force_encoding("ASCII-8BIT")
+      write_uint(w, s.bytesize)
+      w << s
+    end
+
+    def self.read_blob(r)
+      r.bytes(r.uint)
+    end
+
+    def self.dump_extras(w)
+      ex = @extras || {}
+      write_uint(w, ex.size)
+      ex.each do |k, (dumper, _loader)|
+        write_blob(w, k.to_s)
+        write_blob(w, (dumper.call rescue ""))
+      end
+    end
+
+    def self.load_extras(r)
+      return if r.eof?           # older host: no extras section -> leave defaults
+      r.uint.times do
+        key  = read_blob(r).to_sym
+        data = read_blob(r)      # consumed by length regardless of whether we know it
+        e = @extras && @extras[key]
+        (e[1].call(data) rescue nil) if e   # unknown key already skipped
+      end
+    end
+
+    def self.fire_after_apply
+      (@after_apply || []).each { |b| b.call rescue nil }
+    end
+
     # --- serialize -----------------------------------------------------------
 
     def self.dump
@@ -319,6 +372,7 @@ module BSMP
       dump_variables(w, full)
       dump_self_switches(w)
       dump_spirits(w)
+      dump_extras(w)            # game-specific payloads (length-framed, appended last)
       w
     end
 
@@ -395,10 +449,12 @@ module BSMP
         load_variables(r, full)
         load_self_switches(r)
         load_spirits(r)
+        load_extras(r)          # stash game-specific payloads (handlers run post-guard)
       ensure
         $bsmp_applying_fact = false
       end
       $game_map.need_refresh = true if $game_map
+      fire_after_apply          # now safe for handlers to touch game state
       true
     end
 
