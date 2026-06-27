@@ -7,8 +7,9 @@
 #
 # Format (version-tagged, little bit-twiddling, all ints LEB128 varint):
 #   u8   FORMAT
-#   u8   MODE  (0 = filtered/shared-only, 1 = full/wholesale) — stamped by the host's
-#              BSMP.settings.world_snapshot_full, so the receiver applies the matching mode
+#   u8   MODE  (0 = :whitelist/shared-only, 1 = :blacklist/all-minus-personal) — stamped
+#              by the host's BSMP.settings.world_sync_mode; the receiver applies the host's
+#              mode. PERSONAL_* ids are excluded in BOTH modes.
 #   switches:   FULL     -> varint N, then ceil(N/8) packed bits (index 1..N)
 #               FILTERED -> varint COUNT, then COUNT * [varint shared_id, u8 value]
 #   variables:  FULL     -> varint COUNT, then COUNT * [varint index, value] (all non-zero)
@@ -41,14 +42,48 @@ module BSMP
     # snapshot dump/load, which walks the same Config shared-id sets. self-switches
     # are always shared, so they have no predicate.
 
+    # Per-peer PERSONAL state — never copied by the snapshot, in EITHER mode (the safety
+    # blacklist). See Config::PERSONAL_*.
+    def self.personal_switch?(id)
+      Config::PERSONAL_SWITCH_IDS.include?(id) or
+        Config::PERSONAL_SWITCH_RANGES.any? { |r| r.include?(id) }
+    end
+
+    def self.personal_variable?(id)
+      Config::PERSONAL_VARIABLE_IDS.include?(id) or
+        Config::PERSONAL_VARIABLE_RANGES.any? { |r| r.include?(id) }
+    end
+
+    # Effective sync model. Host-authoritative: a guest adopts the mode stamped into the
+    # last applied snapshot (set in load); the host (never loads one) uses its own setting.
+    # Any unrecognised setting value falls back to :whitelist.
+    def self.own_sync_mode
+      (BSMP.settings.world_sync_mode rescue :whitelist) == :blacklist ? :blacklist : :whitelist
+    end
+
+    def self.sync_mode
+      @applied_mode || own_sync_mode
+    end
+
+    # "Shared progression" predicate, used for event-page ownership (world_owned_condition?).
+    #   :whitelist -> only the explicit SHARED_* allowlist.
+    #   :blacklist -> everything that isn't PERSONAL_*.
     def self.shared_switch?(id)
-      Config::SHARED_SWITCH_IDS.include?(id) or
-        Config::SHARED_SWITCH_RANGES.any? { |r| r.include?(id) }
+      if sync_mode == :blacklist
+        not personal_switch?(id)
+      else
+        Config::SHARED_SWITCH_IDS.include?(id) or
+          Config::SHARED_SWITCH_RANGES.any? { |r| r.include?(id) }
+      end
     end
 
     def self.shared_variable?(id)
-      Config::SHARED_VARIABLE_IDS.include?(id) or
-        Config::SHARED_VARIABLE_RANGES.any? { |r| r.include?(id) }
+      if sync_mode == :blacklist
+        not personal_variable?(id)
+      else
+        Config::SHARED_VARIABLE_IDS.include?(id) or
+          Config::SHARED_VARIABLE_RANGES.any? { |r| r.include?(id) }
+      end
     end
 
     # The concrete shared id sets (IDS + expanded RANGES), clamped to the live table size,
@@ -58,14 +93,14 @@ module BSMP
       ids = Config::SHARED_SWITCH_IDS.dup
       Config::SHARED_SWITCH_RANGES.each { |r| ids.concat(r.to_a) }
       n = switch_count
-      ids.select { |i| i >= 1 and i <= n }.uniq.sort
+      ids.select { |i| i >= 1 and i <= n and not personal_switch?(i) }.uniq.sort
     end
 
     def self.shared_variable_id_list
       ids = Config::SHARED_VARIABLE_IDS.dup
       Config::SHARED_VARIABLE_RANGES.each { |r| ids.concat(r.to_a) }
       n = variable_count
-      ids.select { |i| i >= 1 and i <= n }.uniq.sort
+      ids.select { |i| i >= 1 and i <= n and not personal_variable?(i) }.uniq.sort
     end
 
     # An event page is "host-owned world progression" (a guest must not run its
@@ -365,8 +400,8 @@ module BSMP
     def self.dump
       w = "".force_encoding("ASCII-8BIT")
       w << [FORMAT].pack("C")
-      # Host-side scope choice, stamped into the blob so the receiver applies the same mode.
-      full = (BSMP.settings.world_snapshot_full rescue false) ? true : false
+      # Host-side mode choice, stamped into the blob so the receiver applies the same mode.
+      full = (own_sync_mode == :blacklist)
       w << [full ? 1 : 0].pack("C")
       dump_switches(w, full)
       dump_variables(w, full)
@@ -390,7 +425,8 @@ module BSMP
         write_uint(w, n)
         bytes = Array.new((n + 7) / 8, 0)
         (1..n).each do |i|
-          bytes[(i - 1) >> 3] |= (1 << ((i - 1) & 7)) if $game_switches[i]
+          # personal switches are never shared, even in :blacklist mode -> leave the bit 0
+          bytes[(i - 1) >> 3] |= (1 << ((i - 1) & 7)) if $game_switches[i] and not personal_switch?(i)
         end
         w << bytes.pack("C*")
       else
@@ -407,7 +443,9 @@ module BSMP
 
     def self.dump_variables(w, full)
       indices = if full
-        (1..variable_count).select { |i| $game_variables[i] != 0 }
+        # :blacklist -> every non-zero var EXCEPT personal ones (id_list already excludes
+        # personal in :whitelist).
+        (1..variable_count).select { |i| $game_variables[i] != 0 and not personal_variable?(i) }
       else
         shared_variable_id_list.select { |i| $game_variables[i] != 0 }
       end
@@ -440,7 +478,8 @@ module BSMP
         p "BSMP::World: snapshot format #{format} != #{FORMAT}, ignoring"
         return false
       end
-      full = (r.u8 == 1)  # host-stamped mode (0 = filtered/shared-only, 1 = full)
+      full = (r.u8 == 1)  # host-stamped mode: 1 = :blacklist (all minus personal), 0 = :whitelist
+      @applied_mode = full ? :blacklist : :whitelist  # adopt the host's mode for event-ownership
       # Applying the snapshot writes thousands of switches/vars; guard so the
       # live-sync setter hooks don't re-broadcast each one as a fact.
       $bsmp_applying_fact = true
@@ -463,6 +502,7 @@ module BSMP
         n = r.uint
         raw = r.bytes((n + 7) / 8)
         (1..n).each do |i|
+          next if personal_switch?(i)   # never let the host's world touch our personal switches
           bit = (raw.getbyte((i - 1) >> 3) >> ((i - 1) & 7)) & 1
           $game_switches[i] = (bit == 1)
         end
@@ -478,9 +518,9 @@ module BSMP
 
     def self.load_variables(r, full)
       if full
-        # Reset to default first so a guest's stray non-zero vars don't survive the
-        # adoption of the host's world, then apply the host's non-zero set.
-        (1..variable_count).each { |i| $game_variables[i] = 0 }
+        # :blacklist: reset every var (so a guest's stray non-zero doesn't survive) EXCEPT
+        # personal ones, then apply the host's set.
+        (1..variable_count).each { |i| $game_variables[i] = 0 unless personal_variable?(i) }
       else
         # Filtered: clear only the SHARED vars (so a host-zero shared var clears the guest's
         # stale value), leaving the guest's peer-local vars intact, then apply the host's set.
@@ -489,7 +529,8 @@ module BSMP
       count = r.uint
       count.times do
         i = r.uint
-        $game_variables[i] = decode_value(r)
+        v = decode_value(r)                       # consume to keep the stream aligned
+        $game_variables[i] = v unless personal_variable?(i)  # never apply personal (defends vs old host)
       end
     end
 

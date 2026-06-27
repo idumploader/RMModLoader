@@ -330,6 +330,22 @@ module BSMP
               #  practice; the real unlock authority is switches 90-96, this is just the gate.
     ]
 
+    # --- Per-peer PERSONAL state (never shared) ---
+    # Switches / variables private to each player that the world snapshot must NEVER copy,
+    # in EITHER sync mode. This is the safety blacklist: even the share-everything
+    # (:blacklist) mode honours it, so a full re-sync can't clobber a guest's own state.
+    # Seed sparingly — only genuinely per-peer state.
+    #   var 14 = current character (party-leader actor id; written by the Map180 switch and
+    #            by ControlVariables game-data "party member 0"). The host's 14 would else
+    #            overwrite the guest's, so level-up (CE92 levels actor[var14]) and every
+    #            "current character" CE would target the WRONG actor.
+    PERSONAL_VARIABLE_IDS    = [
+      14,                 # current character (party leader actor id)
+    ]
+    PERSONAL_VARIABLE_RANGES = []
+    PERSONAL_SWITCH_IDS      = []
+    PERSONAL_SWITCH_RANGES   = []
+
     # --- Co-op "local" common events (step 6.5) ---
     # Common events whose item/gold gains must NOT be instanced to other peers via
     # the Loot broadcast (1246) — they're personal Souls-style operations (Estus
@@ -563,15 +579,18 @@ module BSMP
       :show_status_plate => true,
       :status_plate_x    => 100,  # 0 = flush left, 100 = flush right
       :status_plate_y    => 0,    # 0 = top,        100 = bottom
-      # World snapshot (join / resync) scope. Default applies ONLY the shared world
-      # (SHARED_* switches/variables, plus self-switches + spirits which are inherently
-      # world state) — a joiner adopts the host's world PROGRESS without its peer-LOCAL
-      # switches/vars getting overwritten (consistent with the live sync, which already
-      # filters by SHARED_*). Flip ON for the legacy WHOLESALE copy (every switch + every
-      # non-zero var) as an emergency hard re-sync if something desyncs badly. Host-side:
-      # the host's setting is stamped into the snapshot, so the receiver applies the right
-      # mode regardless of its own setting.
-      :world_snapshot_full => false,
+      # World snapshot (join / resync) sync mode. Host-authoritative: the host's mode is
+      # stamped into the snapshot, so a receiver applies the host's mode regardless of its
+      # own. Two mutually-exclusive models, BOTH always honouring Config::PERSONAL_* (never
+      # copied, so neither mode can clobber a peer's private state):
+      #   :whitelist (default) = share ONLY the SHARED_* allowlist; everything else stays
+      #          peer-local. Safe default: a missed flag only desyncs (visible & fixable),
+      #          it can't overwrite personal state.
+      #   :blacklist = share EVERYTHING except PERSONAL_*. Use when the allowlist has gaps
+      #          and progress desyncs; the personal blacklist keeps it non-destructive.
+      #          NB: also widens event-ownership (more pages become host-owned) -- see
+      #          BSMP::World.shared_variable?. Any unrecognised value is treated as :whitelist.
+      :world_sync_mode => :whitelist,
       # Co-op double-battle dedup (cache-by-origin). When a scripted battle is won, every
       # participant caches the result keyed by the triggering event's (map, event_id); a
       # peer whose own (slower) cutscene later reaches the SAME command_301 takes the IfWin

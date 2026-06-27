@@ -115,11 +115,14 @@ module BSMP
       M.toggle("Packet trace", bind(:debug_packets).merge(:category => CAT))
       M.toggle("Log to file", bind(:log_to_file).merge(:category => CAT))
       M.action("Mark log (bug here)", :category => CAT) { BSMP.mark_log("from menu") }
-      # Host-side emergency: ON = the join/resync world snapshot copies EVERY switch+var
-      # wholesale (legacy). OFF (default) = only the shared world, so peer-local state
-      # doesn't leak. Flip ON to force a hard full re-sync if a desync needs it.
-      M.toggle("Full world sync", bind(:world_snapshot_full).merge(
-               :category => CAT, :on_text => "ON", :off_text => "OFF"))
+      # World sync mode (host-authoritative). WHITELIST (default) = share only the SHARED_*
+      # allowlist, peer-local state stays private (a missed flag only desyncs). BLACKLIST =
+      # share everything except Config::PERSONAL_*, for when the allowlist has gaps and
+      # progress desyncs -- non-destructive (personal state is still protected). Stored as a
+      # Symbol; this toggle maps it (ON = :blacklist, OFF = :whitelist).
+      M.toggle("World sync: blacklist", :category => CAT, :on_text => "BLACKLIST", :off_text => "WHITELIST",
+               :get => proc { BSMP.settings.world_sync_mode == :blacklist },
+               :set => proc { |v| BSMP.settings.world_sync_mode = (v ? :blacklist : :whitelist) })
 
       # Language lives in the loader's own "General" tab (12 - ModMenuDefaults),
       # not here — it's a global ModLoader setting, not a co-op one.
