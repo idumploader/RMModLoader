@@ -970,7 +970,11 @@ namespace rm_modloader {
         });
         const auto* c = mod_loader->get_config().get("viewport_effects");
         const bool effects_enabled = c && c->get<bool>();
-        if (!effects_enabled && !hrfix_map_original_size) {
+        const auto* hrfix = mod_loader->get_config().get("hrfix_enable");
+        const bool hrfix_enabled = !hrfix || hrfix->get<bool>();
+        // HRFix can enable the original map size after startup, even when
+        // ViewportEffects and the original map size were both off at launch.
+        if (!effects_enabled && !hrfix_enabled) {
             return;
         }
         const auto* cap = mod_loader->get_config().get("viewport_effects_capture");
