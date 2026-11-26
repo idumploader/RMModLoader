@@ -8,6 +8,7 @@
 #include "IpcStreams.hpp"
 #include "Logger.hpp"
 #include "SteamLoader.hpp"
+#include "SavedRenderStream.hpp"
 
 #include <cstdint>
 #include <cstring>
@@ -18,7 +19,7 @@ using rm_modloader::Logger;
 namespace {
 	GDIFakeRenderer  g_dev;
 	ResolvedRenderer g_resolved;
-	char             g_secondary_stream_buf[0x200];
+	SavedRenderStream g_saved_stream;
 	bool             g_initialized = false;
 	SteamFns         g_steam;
 }
@@ -85,20 +86,14 @@ bool SteamOverlay_Init(HWND hwnd, uint32_t appid) {
 	}
 
 	// Fake renderer setup — vtable + struct fields.
-	InitGDIFakeRenderer(&g_dev, kLayout_2026_05, hwnd);
+	InitGDIFakeRenderer(&g_dev, g_resolved.layout, hwnd);
 	// flag_72=1 — заставляет dispatcher пропустить first-switch (frame-setup),
 	// каждый opcode идёт сразу во второй switch.
 	g_dev.flag_72 = 1;
 
-	// Свой CSharedMemStream для secondary_stream'а. M_present_update
-	// проверяет его GetLocalPending() каждый кадр; если 0 и
-	// byte_10124504 && !byte_10124505 — force-disable. Мы пишем туда
-	// 1 байт heartbeat'а каждый кадр.
-	Call_M_MakeCSharedMemStream(g_secondary_stream_buf,
-	                            "GameOverlayRender_OurSecondaryHeartbeat",
-	                            /*capacity*/ 0x400, /*ttl*/ 100,
-	                            /*a5*/ 0, /*a6*/ 0);
-	g_dev.secondary_stream = g_secondary_stream_buf;
+	// Steam retains external paint commands here and rewinds them for replay.
+	g_saved_stream.reset();
+	g_dev.secondary_stream = &g_saved_stream;
 
 	Logger::info(std::format("[steam_overlay] ready. device={} secondary_stream={}\n",
 	                         (void*)&g_dev, (void*)g_dev.secondary_stream));
@@ -117,13 +112,6 @@ void SteamOverlay_RenderFrame(uint32_t* pixels, int width, int height, bool bott
 	g_back_bottom_up = bottom_up;
 	g_drew_this_frame = false;
 
-	// Heartbeat в secondary stream чтобы M_present_update'овский watchdog
-	// не триггерил force-disable. dispatcher прочитает 4 байта opcode'а
-	// (наш 1 байт + 3 байта мусора), залогирует "Corrupt render stream"
-	// в gameoverlayui (косметика), но force-disable не сработает.
-	const uint8_t heartbeat = 0x04;
-	Call_M_write_data(g_dev.secondary_stream, &heartbeat, 1);
-
 	// Главный driver: dispatcher → читает paint stream → дёргает наши
 	// vtable handler'ы → они рисуют в g_back_pixels.
 	Call_M_present_update(&g_dev);
@@ -140,6 +128,7 @@ void SteamOverlay_RenderFrame(uint32_t* pixels, int width, int height, bool bott
 
 void SteamOverlay_Shutdown() {
 	if (!g_initialized) return;
+	g_saved_stream.reset();
 	g_steam.Shutdown();
 	UnloadSteamApi(g_steam);
 	g_initialized = false;

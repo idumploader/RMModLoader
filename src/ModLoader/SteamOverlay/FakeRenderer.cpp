@@ -3,6 +3,7 @@
 #include "GdiRender.hpp"
 #include "Logger.hpp"
 #include "SteamLoader.hpp"
+#include "../Hooks/DisplayHooks.hpp"
 
 #include "../Steam/steam_api.h"  // ISteamScreenshots::WriteScreenshot
 
@@ -11,6 +12,7 @@
 #include <cstring>
 #include <format>
 #include <unordered_map>
+#include <utility>
 
 using rm_modloader::Logger;
 
@@ -67,6 +69,9 @@ static void* g_vtable_storage[64] = {};
 // (Поэтому Handler'а для dtor нет — слот указывает на DLL'евый thunk.)
 
 extern "C" void __fastcall Handler_FrameStart(GDIFakeRenderer* /*ecx*/, void* /*edx*/) {
+}
+static void __fastcall Handler_DrawTexturedQuad(GDIFakeRenderer*,void*,const OverlayVertex* vertices,uint32_t texture,float) {
+    if(vertices)Tex_DrawQuad(texture,vertices);
 }
 
 // Slot 3: DrawTexturedRect. 13 dword args.
@@ -150,7 +155,7 @@ extern "C" void __fastcall Handler_SetChromePaintSource(
 	uint32_t arg1_paint_buf_struct, uint32_t arg2_textureID)
 {
 	if (!arg1_paint_buf_struct) return;
-	const auto* desc = (const ChromePaintBufDesc*)(uintptr_t)arg1_paint_buf_struct;
+	auto* desc = (ChromePaintBufDesc*)(uintptr_t)arg1_paint_buf_struct;
 	auto* mapped = (uint8_t*)desc->mapped_pixels;
 	if (!mapped) return;
 	const int W = desc->width;
@@ -160,9 +165,18 @@ extern "C" void __fastcall Handler_SetChromePaintSource(
 	// Triple-buffer atomic — биты 2-3 = последний slot записанный producer'ом.
 	const size_t slot_bytes = (size_t)W * H * 4;
 	volatile long* sync = (volatile long*)(mapped + 3 * slot_bytes + 48);
-	const long s = *sync;
-	int slot = (s >> 2) & 3;
-	if (slot >= 3) slot = 0;
+	long s = InterlockedCompareExchange(sync,0,0);
+	int slot;
+	for (;;) {
+		slot = (s >> 2) & 3;
+		if (slot >= 3) slot = 0;
+		const long observed=InterlockedCompareExchange(sync,(s & 15) | (slot << 4),s);
+		if(observed==s)break;
+		s=observed;
+	}
+	const bool new_source=desc->state<0;
+	desc->state=slot;
+	if(!new_source && slot==((s >> 4) & 3) && Tex_Has(arg2_textureID))return;
 
 	const uint8_t* pixels = mapped + (size_t)slot * slot_bytes;
 	Tex_LoadOrUpdate(arg2_textureID, 0, 0, (uint32_t)W, (uint32_t)H, pixels);
@@ -320,14 +334,12 @@ extern "C" void __fastcall Handler_GetOutputBounds(
 	GDIFakeRenderer* /*dev*/, void* /*edx*/,
 	int32_t* x, int32_t* y, int32_t* width, int32_t* height)
 {
-	POINT origin = {0, 0};
-	ClientToScreen(s_hwnd, &origin);  // screen-абс coords client (0,0)
-	RECT clientRect;
-	GetClientRect(s_hwnd, &clientRect);
-	*x = origin.x;
-	*y = origin.y;
-	*width = clientRect.right - clientRect.left;
-	*height = clientRect.bottom - clientRect.top;
+	// Steam maps mouse input to the rendered image, not to the black bars.
+	RECT image = rm_modloader::display_output_bounds(s_hwnd);
+	*x = image.left;
+	*y = image.top;
+	*width = image.right - image.left;
+	*height = image.bottom - image.top;
 }
 
 // Slot 27: GetClassName → const char*. 0 args. Возврат в eax.
@@ -342,13 +354,28 @@ extern "C" const char* __fastcall Handler_GetClassName(
 // различает откуда функция — только ABI важен. Свои thunk'и не плывут
 // при Steam update'ах. __stdcall callee-cleans стек на N×4 байт = ровно
 // то что нужно __thiscall'у dispatcher'а (ecx=this игнорируем).
-extern "C" void __stdcall Thunk_Ret0()    {}  // → ret
-extern "C" void __stdcall Thunk_Ret4(int) {}  // → ret 4
+extern "C" uint32_t __stdcall Thunk_Ret0() { return 0; } // ret 0, deterministic unsupported capability
+extern "C" uint32_t __stdcall Thunk_Ret4(int) { return 0; } // ret 4
+static uint32_t __stdcall Thunk_One() { return 1; }
+static uint32_t __stdcall Handler_RendererKind() { return 10; }
+
+template<size_t> using NoopArg = uint32_t;
+template<size_t... I> uint64_t __stdcall AbiNoop(NoopArg<I>...) { return 0; }
+template<size_t... I> void* abi_noop(std::index_sequence<I...>) { return reinterpret_cast<void*>(&AbiNoop<I...>); }
+template<size_t... I> auto abi_noops(std::index_sequence<I...>) {
+    return std::array<void*,sizeof...(I)>{abi_noop(std::make_index_sequence<I>{})...};
+}
+static void __fastcall Handler_FrameInfo(GDIFakeRenderer*,void*,void* info) {
+    // CPU renderer has no GPU adapter LUID or GPU flags. The caller copies the
+    // complete 44-byte structure without testing the return value.
+    if(info)std::memset(info,0,44);
+}
 
 // ---------------------------------------------------------------
 // InitFakeRenderer: собираем vtable + инициализируем структуру.
 // ---------------------------------------------------------------
-void InitGDIFakeRenderer(GDIFakeRenderer* dev, const VtableLayout& layout, HWND hwnd) {
+void InitGDIFakeRenderer(GDIFakeRenderer* dev, const VtableLayout& layout, HWND hwnd,
+                         bool slot8_capability_query) {
 	s_hwnd = hwnd;
 	void* thunk_ret0 = (void*)&Thunk_Ret0;
 	void* thunk_ret4 = (void*)&Thunk_Ret4;
@@ -356,7 +383,29 @@ void InitGDIFakeRenderer(GDIFakeRenderer* dev, const VtableLayout& layout, HWND 
 	// Заливаем все слоты thunk_ret0 — безопасный default для arity=0 слотов.
 	// Слоты-с-аргументами override'им явно ниже.
 	for (int i = 0; i < layout.total_slots; ++i) {
-		g_vtable_storage[i] = thunk_ret0;
+		static const auto noops=abi_noops(std::make_index_sequence<18>{});
+		g_vtable_storage[i] = layout.discovered ? noops.at(layout.argument_bytes[i]/4) : thunk_ret0;
+		if(layout.discovered && layout.returns_one[i])g_vtable_storage[i]=(void*)&Thunk_One;
+	}
+	if (layout.discovered) {
+		auto bind=[&](int slot,void* method) { if(slot>=0)g_vtable_storage[slot]=method; };
+		bind(layout.slot_DrawTexturedRect,(void*)&Handler_DrawTexturedRect);
+		bind(layout.slot_DrawTexturedQuad,(void*)&Handler_DrawTexturedQuad);
+		bind(layout.slot_LoadTexture,(void*)&Handler_LoadTexture);
+		bind(layout.slot_SetChromePaintSource,(void*)&Handler_SetChromePaintSource);
+		bind(layout.slot_SharedTexA,(void*)&Handler_SharedTexA);
+		bind(layout.slot_SharedTexB,(void*)&Handler_SharedTexB);
+		bind(layout.slot_ScreenSize,(void*)&Handler_ScreenSize);
+		bind(layout.slot_DeleteTexture,(void*)&Handler_DeleteTexture);
+		bind(layout.slot_CaptureScreenshot,(void*)&Handler_CaptureScreenshot);
+		bind(layout.slot_GetHWND,(void*)&Handler_GetHWND);
+		bind(layout.slot_GetOutputBounds,(void*)&Handler_GetOutputBounds);
+		bind(layout.slot_GetClassName,(void*)&Handler_GetClassName);
+		bind(layout.slot_FrameInfo,(void*)&Handler_FrameInfo);
+		bind(layout.slot_RendererKind,(void*)&Handler_RendererKind);
+		dev->vtable=g_vtable_storage;
+		dev->shared_tex_obj_98=new SharedTextureObject;
+		return;
 	}
 
 	// Override slots:
@@ -367,6 +416,12 @@ void InitGDIFakeRenderer(GDIFakeRenderer* dev, const VtableLayout& layout, HWND 
 	g_vtable_storage[layout.slot_SetChromePaintSource] = (void*)&Handler_SetChromePaintSource;
 	g_vtable_storage[layout.slot_SharedTexA]           = (void*)&Handler_SharedTexA;
 	g_vtable_storage[layout.slot_SharedTexB]           = (void*)&Handler_SharedTexB;
+	if (slot8_capability_query) {
+		// CPU renderer has no GPU shared-texture capability. The new query is
+		// called with zero stack arguments; the legacy handler would both read
+		// an unrelated stack value as outOwns* and pop 68 bytes from the caller.
+		g_vtable_storage[8] = thunk_ret0;
+	}
 	g_vtable_storage[layout.slot_PostFrame]          = (void*)&Handler_PostFrame;
 	g_vtable_storage[layout.slot_ScreenSize]         = (void*)&Handler_ScreenSize;
 	g_vtable_storage[layout.slot_DeleteTexture]      = (void*)&Handler_DeleteTexture;

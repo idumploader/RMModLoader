@@ -63,6 +63,13 @@ namespace rm_modloader {
     extern RubyValue(__cdecl* eval_rb_cstr)(const char* script, const char* script_name, int* error_code);
     extern RubyValue(__cdecl* eval_rb_cstr_noerr)(const char* script);
     extern RubyValue(__cdecl* rb_funcall)(RubyValue recv, RubyID mid, int n, ...);
+    /// Run proc(data) under a Ruby tag guard. If proc raises/throws, control returns
+    /// here normally and the non-zero tag is written to *state instead of longjmp-ing
+    /// through (and skipping the destructors of) intervening C++ frames. After the C++
+    /// scope has unwound, call rb_jump_tag(*state) to re-propagate the Ruby exception.
+    extern RubyValue(__cdecl* rb_protect)(RubyValue(__cdecl* proc)(RubyValue), RubyValue data, int* state);
+    /// noreturn. Re-raise the Ruby exception/throw captured by rb_protect's *state.
+    extern void(__cdecl* rb_jump_tag)(int state);
     /// noreturn
     extern void(__cdecl* rb_raise)(RubyValue exc_class, const char* fmt, ...);
     extern int(__cdecl* get_rb_error_string)(WCHAR* error_buf, size_t buf_size, int*);

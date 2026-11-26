@@ -5,6 +5,8 @@ namespace rm_modloader {
 
     extern int hrfix_render_width;
     extern int hrfix_render_height;
+    extern bool hrfix_map_original_size;
+    bool is_cut_disabled_map(RxTilemap* tilemap);
 
     /**
      * This hooks add new field to RxTilemap (map_id) and registers it's setted to ruby
@@ -48,24 +50,6 @@ namespace rm_modloader {
         int __thiscall set_sprite_offset_hook(int x, int y);
 
         int __thiscall set_rect_hook(RECT* new_rect);
-    };
-
-    struct RxInputHRFixHook : RxInput {
-        static RxInput*(__thiscall RxInput::* orig_update_keys)();
-
-        static bool is_fullscreen;
-        static RECT last_window_rect;
-        constexpr static char windowed_fullscreen_key = VK_F11;
-
-        void toggle_fullscreen();
-
-        RxInput* __thiscall update_keys_hook();
-    };
-
-    struct DisableFullscreenHook : Screen {
-        static int(__thiscall Screen::* orig_resize_screen)(int width, int height, bool is_fullscreen);
-
-        int __thiscall resize_screen_hook(int width, int height, bool is_fullscreen);
     };
 
     extern void apply_hrfix();

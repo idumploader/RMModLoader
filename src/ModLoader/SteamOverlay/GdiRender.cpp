@@ -1,4 +1,10 @@
+#define NOMINMAX
 #include "GdiRender.hpp"
+#include "../Hooks/Renderer/RasterWorkers.hpp"
+#include "../Hooks/Renderer/RowPool.hpp"
+#include <memory>
+#include <algorithm>
+#include <cmath>
 
 #include <cstdio>
 #include <cstring>
@@ -110,38 +116,39 @@ void Tex_SaveToBMP(const char* filename,
 	fclose(f);
 }
 
-void Tex_DrawRect(uint32_t textureID,
-                  int dx, int dy, int dw, int dh,
-                  float u0, float v0, float u1, float v1,
-                  uint32_t color)
-{
-	if (!g_back_pixels || dw <= 0 || dh <= 0) return;
 
-	const int c_a = (color >> 24) & 0xFF;
-	const int c_r = (color >> 16) & 0xFF;
-	const int c_g = (color >>  8) & 0xFF;
-	const int c_b = (color >>  0) & 0xFF;
-	if (c_a == 0) return; // полностью прозрачный fill
+namespace {
+    bool parallel=false,shared_pool=true;
+    int own_threads=0;
+    std::unique_ptr<rm_modloader::renderer::RowPool> own_pool;
+    uint64_t parallel_operations=0;
+    OverlayWriteCallback write_callback=nullptr;
+    void* write_context=nullptr;
+}
+bool Tex_Has(uint32_t id) { return g_textures.find(id)!=g_textures.end(); }
+void Tex_SetWriteCallback(OverlayWriteCallback callback,void* context) { write_callback=callback;write_context=context; }
+void Tex_SetParallel(bool value) { parallel=value; if (!value) Tex_ResetWorkers(); }
+void Tex_SetSharedPool(bool value) { shared_pool=value; }
+bool Tex_ParallelEnabled() { return parallel; }
+bool Tex_SharedPoolEnabled() { return shared_pool; }
+uint64_t Tex_ParallelOperations() { return parallel_operations; }
+void Tex_ResetWorkers() { own_pool.reset(); own_threads=0; }
 
-	auto it = g_textures.find(textureID);
-	const GDITexture* tex = (it == g_textures.end()) ? nullptr : &it->second;
-	const uint32_t* tpx = (tex && tex->dib_pixels) ? (const uint32_t*)tex->dib_pixels : nullptr;
-	const int       tw  = tex ? tex->width  : 0;
-	const int       th  = tex ? tex->height : 0;
-
-	// Clip to back buffer
-	const int x0 = (dx > 0) ? dx : 0;
-	const int y0 = (dy > 0) ? dy : 0;
-	const int x1 = ((dx + dw) < g_back_w) ? (dx + dw) : g_back_w;
-	const int y1 = ((dy + dh) < g_back_h) ? (dy + dh) : g_back_h;
-	if (x0 >= x1 || y0 >= y1) return;
-
-	g_drew_this_frame = true;
-
-	const float u_per_dx = (u1 - u0) / (float)dw;
-	const float v_per_dy = (v1 - v0) / (float)dh;
-
-	for (int py = y0; py < y1; ++py) {
+namespace {
+struct RectWork {
+    uint32_t* pixels;
+    const uint32_t* tpx;
+    int width,height,tw,th,dx,dy,x0,x1,y0,y1,bands;
+    int c_a,c_r,c_g,c_b;
+    float u0,v0,u_per_dx,v_per_dy;
+    bool bottom_up;
+};
+void paint_rows(void* context,int band) noexcept {
+    const auto& work=*static_cast<const RectWork*>(context);
+    const auto& [pixels,tpx,width,height,tw,th,dx,dy,x0,x1,y0,y1,bands,c_a,c_r,c_g,c_b,u0,v0,u_per_dx,v_per_dy,bottom_up]=work;
+    const int first=y0+int(int64_t(y1-y0)*band/bands);
+    const int last=y0+int(int64_t(y1-y0)*(band+1)/bands);
+	for (int py = first; py < last; ++py) {
 		const float v  = v0 + (py - dy + 0.5f) * v_per_dy;
 		int   sy = (int)(v * th);
 		if (tw && th) {
@@ -149,8 +156,8 @@ void Tex_DrawRect(uint32_t textureID,
 			else if (sy >= th) sy = th - 1;
 		}
 
-		const int dst_y = g_back_bottom_up ? (g_back_h - 1 - py) : py;
-		uint32_t* dst_row = g_back_pixels + (size_t)dst_y * g_back_w;
+		const int dst_y = bottom_up ? (height - 1 - py) : py;
+		uint32_t* dst_row = pixels + (size_t)dst_y * width;
 
 		for (int px = x0; px < x1; ++px) {
 			// Sample texture (white if no texture).
@@ -188,4 +195,106 @@ void Tex_DrawRect(uint32_t textureID,
 			dst_row[px] = 0xFF000000u | ((uint32_t)o_r << 16) | ((uint32_t)o_g << 8) | (uint32_t)o_b;
 		}
 	}
+
+}
+}
+void Tex_DrawRect(uint32_t textureID,int dx,int dy,int dw,int dh,
+                  float u0,float v0,float u1,float v1,uint32_t color) {
+    if (!g_back_pixels || dw<=0 || dh<=0 || !(color>>24)) return;
+    const int x0=std::max(dx,0),y0=std::max(dy,0);
+    const int x1=int(std::min(int64_t(dx)+dw,int64_t(g_back_w)));
+    const int y1=int(std::min(int64_t(dy)+dh,int64_t(g_back_h)));
+    if (x0>=x1 || y0>=y1) return;
+    if (write_callback) {
+        g_back_pixels=write_callback(write_context);
+        write_callback=nullptr;write_context=nullptr;
+        if (!g_back_pixels) return;
+    }
+    auto found=g_textures.find(textureID);
+    const auto* texture=found==g_textures.end() ? nullptr : &found->second;
+    RectWork work{g_back_pixels,texture ? static_cast<const uint32_t*>(texture->dib_pixels) : nullptr,
+        g_back_w,g_back_h,texture ? texture->width : 0,texture ? texture->height : 0,
+        dx,dy,x0,x1,y0,y1,1,int(color>>24),int((color>>16)&255),int((color>>8)&255),int(color&255),
+        u0,v0,(u1-u0)/float(dw),(v1-v0)/float(dh),g_back_bottom_up};
+    g_drew_this_frame=true;
+    const int threads=rm_modloader::renderer::raster_thread_count();
+    if (parallel && threads>1 && int64_t(x1-x0)*(y1-y0)>=128*1024 && y1-y0>=threads*8) {
+        work.bands=threads;
+        if (shared_pool && rm_modloader::renderer::run_shared_raster_bands(&paint_rows,&work)) {
+            Tex_ResetWorkers();
+            ++parallel_operations;return;
+        }
+        if (!own_pool || own_threads!=threads) {
+            try {
+                own_pool=std::make_unique<rm_modloader::renderer::RowPool>(threads);
+                own_threads=threads;
+            } catch (...) { work.bands=1;paint_rows(&work,0);return; }
+        }
+        own_pool->run(&paint_rows,&work);++parallel_operations;
+    } else paint_rows(&work,0);
+}
+
+void Tex_DrawQuad(uint32_t textureID,const OverlayVertex* v) {
+    if(!g_back_pixels || !v)return;
+    if(!((v[0].color|v[1].color|v[2].color|v[3].color)>>24))return;
+    for(int i=0;i<4;++i)if(!std::isfinite(v[i].x) || !std::isfinite(v[i].y) ||
+        !std::isfinite(v[i].u) || !std::isfinite(v[i].v))return;
+    // Common axis-aligned Steam UI quads use the existing parallel rectangle path.
+    if(v[0].x==v[3].x && v[1].x==v[2].x && v[0].y==v[1].y && v[2].y==v[3].y &&
+       v[0].u==v[3].u && v[1].u==v[2].u && v[0].v==v[1].v && v[2].v==v[3].v &&
+       v[0].color==v[1].color && v[0].color==v[2].color && v[0].color==v[3].color &&
+       v[0].x>=-32768 && v[1].x<=32768 && v[0].y>=-32768 && v[2].y<=32768 &&
+       v[0].x==std::floor(v[0].x) && v[1].x==std::floor(v[1].x) &&
+       v[0].y==std::floor(v[0].y) && v[2].y==std::floor(v[2].y) &&
+       v[1].x>v[0].x && v[2].y>v[0].y) {
+        Tex_DrawRect(textureID,int(v[0].x),int(v[0].y),int(v[1].x-v[0].x),int(v[2].y-v[0].y),
+            v[0].u,v[0].v,v[2].u,v[2].v,v[0].color);return;
+    }
+    float left=v[0].x,right=left,top=v[0].y,bottom=top;
+    for(int i=1;i<4;++i) { left=std::min(left,v[i].x);right=std::max(right,v[i].x);
+        top=std::min(top,v[i].y);bottom=std::max(bottom,v[i].y); }
+    const int x0=int(std::floor(std::clamp(left,0.f,float(g_back_w))));
+    const int x1=int(std::ceil(std::clamp(right,0.f,float(g_back_w))));
+    const int y0=int(std::floor(std::clamp(top,0.f,float(g_back_h))));
+    const int y1=int(std::ceil(std::clamp(bottom,0.f,float(g_back_h))));
+    if(x0>=x1 || y0>=y1)return;
+    if(write_callback) { g_back_pixels=write_callback(write_context);write_callback=nullptr;write_context=nullptr;
+        if(!g_back_pixels)return; }
+    auto found=g_textures.find(textureID);
+    const auto* tex=found==g_textures.end()?nullptr:&found->second;
+    auto edge=[](const OverlayVertex& a,const OverlayVertex& b,float x,float y) {
+        return (b.x-a.x)*(y-a.y)-(b.y-a.y)*(x-a.x); };
+    auto top_left=[](const OverlayVertex& a,const OverlayVertex& b) {
+        return b.y<a.y || (b.y==a.y && b.x>a.x); };
+    for(int triangle=0;triangle<2;++triangle) {
+        OverlayVertex a=v[0],b=v[triangle+1],c=v[triangle+2];
+        float area=edge(a,b,c.x,c.y);
+        if(!std::isfinite(area) || area==0)continue;
+        if(area<0) { std::swap(b,c);area=-area; }
+        for(int y=y0;y<y1;++y)for(int x=x0;x<x1;++x) {
+            const float e0=edge(b,c,x+.5f,y+.5f),e1=edge(c,a,x+.5f,y+.5f),e2=edge(a,b,x+.5f,y+.5f);
+            if(e0<0 || (e0==0 && !top_left(b,c)) || e1<0 || (e1==0 && !top_left(c,a)) ||
+               e2<0 || (e2==0 && !top_left(a,b)))continue;
+            const float w0=e0/area,w1=e1/area,w2=e2/area;
+            uint32_t sample=0xffffffff;
+            if(tex) {
+                const float u=std::clamp(w0*a.u+w1*b.u+w2*c.u,0.f,1.f);
+                const float t=std::clamp(w0*a.v+w1*b.v+w2*c.v,0.f,1.f);
+                const int sx=std::min(int(u*tex->width),tex->width-1),sy=std::min(int(t*tex->height),tex->height-1);
+                sample=static_cast<const uint32_t*>(tex->dib_pixels)[size_t(sy)*tex->width+sx];
+            }
+            int modulation[4];
+            for(int k=0;k<4;++k)modulation[k]=std::clamp(int(w0*((a.color>>(8*k))&255)+
+                w1*((b.color>>(8*k))&255)+w2*((c.color>>(8*k))&255)+.5f),0,255);
+            const int alpha=(((sample>>24)&255)*modulation[3]+127)/255;
+            if(!alpha)continue;
+            auto& pixel=g_back_pixels[size_t(g_back_bottom_up?g_back_h-1-y:y)*g_back_w+x];
+            uint32_t out=0xff000000;
+            for(int k=0;k<3;++k) {
+                const int src=(((sample>>(8*k))&255)*modulation[k]+127)/255;
+                out|=uint32_t((src*alpha+((pixel>>(8*k))&255)*(255-alpha)+127)/255)<<(8*k);
+            }
+            pixel=out;g_drew_this_frame=true;
+        }
+    }
 }

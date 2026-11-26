@@ -1,6 +1,7 @@
 #include "IntegratedHooks.hpp"
 #include "ControlsChangeHooks.hpp"
 #include "FocusPauseHooks.hpp"
+#include "MapFrameProbe.hpp"
 #include "../ModLoader.hpp"
 #include "../Hook.hpp"
 
@@ -10,6 +11,56 @@
 #undef max
 
 namespace rm_modloader {
+    namespace {
+        uint64_t pump_batches=0, pump_dispatches=0, pump_limited=0;
+        unsigned pump_max_batch=0;
+        struct MessagePumpHook : GameFrame {
+            static int (__thiscall GameFrame::* original_dispatch)();
+            int __thiscall dispatch_hook() {
+                // RGSS handles one message per scheduler iteration. When a frame
+                // is late there is no wait loop, so key-up can trail a growing
+                // backlog. Keep native accelerator/quit/window handling, but
+                // service a bounded batch even when no FPS sleep is needed.
+                const auto begin=std::chrono::steady_clock::now();
+                unsigned count=0;
+                int result;
+                MSG message;
+                const bool tracing=map_frame_trace_recording();
+                do {
+                    const auto dispatch_begin=tracing ? std::chrono::steady_clock::now() : begin;
+                    result=(this->*original_dispatch)();
+                    const auto dispatch_end=tracing ? std::chrono::steady_clock::now() : begin;
+                    ++count;
+                    if (!result) {
+                        if (tracing) map_frame_trace_dispatch_part(
+                            std::chrono::duration<double,std::milli>(dispatch_end-dispatch_begin).count(),0);
+                        break; // native WM_QUIT contract
+                    }
+                    const bool has_message=PeekMessageW(&message,nullptr,0,0,PM_NOREMOVE)!=FALSE;
+                    if (tracing) map_frame_trace_dispatch_part(
+                        std::chrono::duration<double,std::milli>(dispatch_end-dispatch_begin).count(),
+                        std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-dispatch_end).count());
+                    if (!has_message) break;
+                    if (count>=256 || std::chrono::steady_clock::now()-begin>=std::chrono::milliseconds(2)) {
+                        ++pump_limited;
+                        break; // don't starve logic under a continuous message flood
+                    }
+                } while (true);
+                ++pump_batches; pump_dispatches+=count;
+                pump_max_batch=std::max(pump_max_batch,count);
+                map_frame_trace_dispatch(
+                    std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-begin).count(),
+                    count);
+                return result;
+            }
+        };
+        int (__thiscall GameFrame::* MessagePumpHook::original_dispatch)()=nullptr;
+        RubyValue __cdecl input_queue_status(RubyValue) {
+            const auto report=nlohmann::json{{"batches",pump_batches},{"dispatch_calls",pump_dispatches},
+                {"max_batch",pump_max_batch},{"limited_batches",pump_limited}}.dump();
+            return rb_str_new(report.data(),static_cast<long>(report.size()));
+        }
+    }
 
 	RxInput*(__thiscall RxInput::* ExtendedControlSet::orig_update_keys)() = nullptr;
 
@@ -122,6 +173,17 @@ namespace rm_modloader {
 		return is_key_repeated(key) ? ruby_true : ruby_false;
 	}
 
+	RubyValue __cdecl ExtendedControlSet::mod_loader_input_press(RubyValue module, RubyValue key_value) {
+		int key = rb_parse_int(key_value);
+		if (key < 0 || key >= 0xFF) {
+			return ruby_false;
+		}
+
+		// Held state: true every frame the key is down (high bit of the key state),
+		// unlike the one-shot trigger or the delayed repeat. RGSS Input#press?.
+		return (current_keyboard_state[key] & 0x80) ? ruby_true : ruby_false;
+	}
+
 	RubyValue __cdecl ExtendedControlSet::mod_loader_map_to_char(RubyValue module, RubyValue key_value) {
 		int key = rb_parse_int(key_value);
 		if (key >= 0xFF) {
@@ -173,11 +235,13 @@ namespace rm_modloader {
 	}
 
 	void apply_integrated_hooks() {
+        mod_loader->hook_method(0x2510,&MessagePumpHook::dispatch_hook,&MessagePumpHook::original_dispatch);
 		// input_update_keys is also hooked by HRFixHooks; the hook chain composes
 		// both, so we no longer re-point input_update_keys at our detour by hand.
 		mod_loader->hook_method(input_update_keys, &ExtendedControlSet::update_keys_hook, &ExtendedControlSet::orig_update_keys);
 
 		mod_loader->add_preinit_handler([] {
+            mod_loader->register_ruby_method("input_queue_status",input_queue_status);
 			mod_loader->register_ruby_method("gamepad_deadzone=", &ExtendedControlSet::mod_loader_gamepad_set_deadzone);
 			mod_loader->register_ruby_method("gamepad_bind",      &ExtendedControlSet::mod_loader_gamepad_bind);
 			mod_loader->register_ruby_method("gamepad_invert_x=", &ExtendedControlSet::mod_loader_gamepad_set_invert_x);
@@ -185,6 +249,7 @@ namespace rm_modloader {
 
 			mod_loader->register_ruby_method("input_trigger?",    &ExtendedControlSet::mod_loader_input_trigger);
 			mod_loader->register_ruby_method("input_repeat?",     &ExtendedControlSet::mod_loader_input_repeat);
+			mod_loader->register_ruby_method("input_press?",      &ExtendedControlSet::mod_loader_input_press);
 			mod_loader->register_ruby_method("map_char",          &ExtendedControlSet::mod_loader_map_to_char);
 		});
 	}

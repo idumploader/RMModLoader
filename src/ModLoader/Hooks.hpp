@@ -1,5 +1,6 @@
 #pragma once
 #include "Hooks/HRFixHooks.hpp"
+#include "Hooks/DisplayHooks.hpp"
 #include "Hooks/FastRenderHooks.hpp"
 #include "Hooks/ControlsChangeHooks.hpp"
 #include "Hooks/IntegratedHooks.hpp"
@@ -10,6 +11,11 @@
 #include "Hooks/HttpServerHooks.hpp"
 #include "Hooks/FocusPauseHooks.hpp"
 #include "Hooks/ViewportEffectsHooks.hpp"
+#include "Hooks/ProfilerHooks.hpp"
+#include "Hooks/ParallelRenderer.hpp"
+#include "Hooks/MapFrameProbe.hpp"
+#include "Hooks/RenderIntegration.hpp"
+#include "Hooks/GlyphCacheHooks.hpp"
 
 #include <array>
 
@@ -19,6 +25,7 @@ namespace rm_modloader {
 	std::array hooks_appliers = {
 		apply_integrated_hooks,
 		apply_hrfix,
+		apply_display_hooks,
 		apply_fast_render,
 		apply_steam_support_hooks,
 		apply_controls_change,
@@ -27,6 +34,11 @@ namespace rm_modloader {
 		apply_sprite_dispose_fix,
 		apply_http_server_hooks,
 		apply_focus_pause_hooks,
-		apply_viewport_effects
+		apply_viewport_effects,
+		apply_profiler_hooks,
+		apply_parallel_renderer,
+		apply_render_integration,
+		apply_map_frame_probe,
+		apply_glyph_cache_hooks
 	};
 }

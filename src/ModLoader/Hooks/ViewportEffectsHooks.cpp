@@ -1,7 +1,13 @@
 #include "ViewportEffectsHooks.hpp"
+#include "MapFrameProbe.hpp"
+#include "ParallelRenderer.hpp"
+#include "Renderer/SnapshotExecution.hpp"
+#include "Renderer/RasterWorkers.hpp"
+#include "HRFixHooks.hpp"
 #include "../ModLoader.hpp"
 #include "../RMClasses.hpp"
 #include "../RMGlobal.hpp"
+#include "../BoxBlur.hpp"
 
 #include <mutex>
 #include <cstring>
@@ -12,6 +18,7 @@
 #include <thread>
 #include <condition_variable>
 #include <functional>
+#include <algorithm>
 
 namespace rm_modloader {
 
@@ -113,6 +120,7 @@ namespace rm_modloader {
         // content lands at absolute coords in the backbuffer); inactive -> focus on the
         // viewport centre. All fields default to "no-op"; the walker skips an inert effect.
         struct VPEffect {
+            int source_width = 0, source_height = 0; // 0: viewport-sized source
             double zoom = 1.0;                 // >1 zooms in about the focus
             bool   center_active = false;
             int    center_x = 0, center_y = 0;
@@ -128,7 +136,7 @@ namespace rm_modloader {
             int    pixelize = 1;               // mosaic block size in px (1 = off, >1 = blockify)
             bool wave_on() const { return wave_amp != 0.0 && wave_length > 0.0; }
             bool rotates() const { return angle != 0.0 || flip_x || flip_y; }
-            bool active() const { return zoom > 1.0 || flip_x || flip_y || wave_on() || angle != 0.0 || blur > 0 || zoom_blur > 0 || radial_blur > 0 || pixelize > 1; }
+            bool active() const { return source_width > 0 || zoom > 1.0 || flip_x || flip_y || wave_on() || angle != 0.0 || blur > 0 || zoom_blur > 0 || radial_blur > 0 || pixelize > 1; }
         };
 
         // Per-viewport effects, keyed by Sprite::sprite_id (unique forever). Touched only from
@@ -315,10 +323,53 @@ namespace rm_modloader {
             });
         }
 
+        DWORD menu_blur_owner = 0;
+        RubyValue menu_blur_bitmap_class = ruby_nil;
+
+        // RGSS Bitmap.blur: clamped 3x3 box, all four channels, floor(sum/9).
+        // Reuse the ViewportEffects pool, but keep intermediate sums unrounded.
+        // Source stays immutable until the barrier; workers never call RGSS/Ruby.
+        bool menu_box_blur(Surface* surface) {
+            const auto& info = surface->info.bitmap->bmiHeader;
+            const int w = info.biWidth, h = info.biHeight;
+            if (w < 3 || h < 3) return true; // original engine's small-bitmap no-op
+            if (info.biBitCount != 32 || size_t(w) * size_t(h) > 16 * 1024 * 1024)
+                return false; // transient output capped at 64 MiB; Ruby uses original
+            auto image = mod_loader->at_base_offset_as<img_off8_t>(img_off8_offset);
+            auto get_stride = mod_loader->at_base_offset_as<stride_t>(stride_offset);
+            const auto* source = image(surface);
+            const int stride = get_stride(surface) / 4;
+            if (!source || (stride > -w && stride < w)) return false;
+            std::vector<uint32_t> output(size_t(w) * h);
+            const int bands = (std::max)(1, (std::min)(g_blur_threads, g_pool.max_workers + 1));
+            blur_rgss_box_3x3(source, stride, w, h, output.data(), bands,
+                [](int count, const auto& job) { g_pool.run(count, job); });
+            auto* dest = const_cast<uint32_t*>(source);
+            for (int y = 0; y < h; ++y)
+                std::memcpy(dest + ptrdiff_t(y) * stride, output.data() + size_t(y) * w, size_t(w) * 4);
+            return true;
+        }
+
+        RubyValue __cdecl menu_bitmap_blur(RubyValue, RubyValue bitmap) {
+            if (GetCurrentThreadId() != menu_blur_owner || rb_type(bitmap) != RUBY_T_DATA ||
+                reinterpret_cast<RubyRBasic*>(bitmap)->klass != menu_blur_bitmap_class)
+                return ruby_false;
+            auto* wrapper = get_rb_data_data<RxBitmap>(bitmap);
+            if (!wrapper || !wrapper->surface) return ruby_false;
+            try {
+                if (!menu_box_blur(wrapper->surface)) return ruby_false;
+            } catch (const std::exception&) { return ruby_false; }
+            // Same mutation notification as Bitmap.blur, through the renderer's
+            // hooked entry point (cache invalidation + attached sprite dirtying).
+            mod_loader->at_base_offset_as<BOOL(__cdecl*)(void*)>(0x06100)(wrapper);
+            return ruby_true;
+        }
+
         // Separable box blur of a BGRA region in place, via the engine's pixel pointer
         // (surface_get_image_off8 = top-row, top-down y*stride+x like the engine itself uses).
-        // Two O(1)-per-pixel sliding-window passes (horizontal -> packed tmp -> vertical). The
-        // engine has no blur primitive, so this is the one genuinely hand-rolled per-pixel cost.
+        // Two O(1)-per-pixel sliding-window passes (horizontal -> packed tmp -> vertical).
+        // This viewport variant truncates its edge window and rounds after each pass;
+        // the menu kernel instead matches RGSS Bitmap.blur exactly.
         // Each pass is parallelised over independent rows (then columns) via the pool.
         void box_blur(uint32_t* base, int stride, int x0, int y0, int x1, int y1, int r) {
             int W = x1 - x0, H = y1 - y0;
@@ -503,15 +554,67 @@ namespace rm_modloader {
         static void* (__thiscall Sprite::* orig)(Surface*, DWORD*, int*, RECT*);
 
         void* __thiscall walk_hook(Surface* dest, DWORD* origin, int* off, RECT* clip) {
+            if (parallel_renderer_drawing()) {
+                // Snapshot metadata and scratch pixels belong to this job.
+                // Never read the live effect map or its shared backbuffer here.
+                static thread_local bool capturing=false;
+                int cw=0,ch=0;
+                Surface* buffer=nullptr;
+                const void* captured_attrs=nullptr;
+                if (!capturing && render_snapshot_viewport_scale(this,cw,ch,buffer,captured_attrs)) {
+                    const auto source_start=std::chrono::steady_clock::now();
+                    RECT vr=this->rect;
+                    RECT source{vr.left,vr.top,vr.left+cw,vr.top+ch};
+                    unsigned char attrs[attrs_size];
+                    std::memcpy(attrs,captured_attrs,attrs_size);
+                    RECT full{0,0,source.right,source.bottom};
+                    buffer->left_offset=buffer->top_offset=0;
+                    buffer->rect=full;
+                    e_fill_rect(buffer,&full,0);
+                    {
+                        struct CaptureGuard {
+                            bool& value;
+                            CaptureGuard(bool& v):value(v) { value=true; }
+                            ~CaptureGuard() { value=false; }
+                        } guard(capturing);
+                        (this->*orig)(buffer,origin,off,&source);
+                    }
+                    renderer::record_worker_viewport_source(std::chrono::duration<double,std::milli>(
+                        std::chrono::steady_clock::now()-source_start).count());
+                    *reinterpret_cast<DWORD*>(attrs)=0x10000;
+                    dest->left_offset=dest->top_offset=0;
+                    dest->rect={0,0,vr.right,vr.bottom};
+                    const auto stretch_start=std::chrono::steady_clock::now();
+                    renderer::draw_viewport_stretch(dest,&vr,buffer,&source,attrs);
+                    renderer::record_worker_viewport_stretch(std::chrono::duration<double,std::milli>(
+                        std::chrono::steady_clock::now()-stretch_start).count());
+                    return this;
+                }
+                return (this->*orig)(dest, origin, off, clip);
+            }
             VPEffect* eff = resolve_effect(this);
             if (g_in_capture || !eff) {
                 return (this->*orig)(dest, origin, off, clip);
             }
 
+            MapProbeScope probe(MapProbePart::viewport);
+            map_frame_probe_viewport_kind(eff->zoom > 1.0 || eff->rotates() || eff->wave_on()
+                || eff->blur > 0 || eff->zoom_blur > 0 || eff->radial_blur > 0 || eff->pixelize > 1);
+
             RECT vr = this->rect;
             int w = vr.right - vr.left, h = vr.bottom - vr.top;
+            const int cw = eff->source_width > 0 ? eff->source_width : w;
+            const int ch = eff->source_height > 0 ? eff->source_height : h;
+            if (w <= 0 || h <= 0 || cw <= 0 || ch <= 0) return this;
+            RECT captured = {vr.left, vr.top, vr.left + cw, vr.top + ch};
+            const int focus_x = eff->center_active ? eff->center_x : vr.left + w / 2;
+            const int focus_y = eff->center_active ? eff->center_y : vr.top + h / 2;
+            const int source_focus_x = eff->center_active
+                ? captured.left + (focus_x - vr.left) * cw / w : captured.left + cw / 2;
+            const int source_focus_y = eff->center_active
+                ? captured.top + (focus_y - vr.top) * ch / h : captured.top + ch / 2;
             unsigned char attrs[attrs_size];
-            if (!ensure_backbuffer(vr.right, vr.bottom) || !grab_attrs(this, attrs, 0)) {
+            if (!ensure_backbuffer(captured.right, captured.bottom) || !grab_attrs(this, attrs, 0)) {
                 return (this->*orig)(dest, origin, off, clip);
             }
 
@@ -525,7 +628,13 @@ namespace rm_modloader {
             g_backbuffer->rect = bbfull;
             e_fill_rect(g_backbuffer, &bbfull, 0);
             g_in_capture = true;
-            (this->*orig)(g_backbuffer, origin, off, clip);
+            // Source coordinates stay logical. Only the final composite scales
+            // to vr; UI in other viewports keeps the full render resolution.
+            RECT source_clip = captured;
+            {
+                MapProbeScope subtree_probe(MapProbePart::viewport_subtree);
+                (this->*orig)(g_backbuffer, origin, off, eff->source_width > 0 ? &source_clip : clip);
+            }
             g_in_capture = false;
 
             // Blur the captured region in place (before any zoom/rotate blit), so it composes
@@ -534,15 +643,13 @@ namespace rm_modloader {
                 uint32_t* px = e_img_off8(g_backbuffer);
                 int stride_px = e_stride(g_backbuffer) / 4;   // SIGNED: negative for a bottom-up DIB
                 if (px && stride_px != 0) {                   // base is the top row, so -stride walks down
-                    int bcx = eff->center_active ? eff->center_x : (vr.left + vr.right) / 2;
-                    int bcy = eff->center_active ? eff->center_y : (vr.top + vr.bottom) / 2;
                     if (eff->blur > 0)
-                        box_blur(px, stride_px, vr.left, vr.top, vr.right, vr.bottom, eff->blur);
+                        box_blur(px, stride_px, captured.left, captured.top, captured.right, captured.bottom, eff->blur);
                     if (eff->zoom_blur > 0 || eff->radial_blur > 0)   // fused: one pass for both
-                        motion_blur(px, stride_px, vr.left, vr.top, vr.right, vr.bottom, bcx, bcy,
+                        motion_blur(px, stride_px, captured.left, captured.top, captured.right, captured.bottom, source_focus_x, source_focus_y,
                                     eff->zoom_blur, eff->radial_blur);
                     if (eff->pixelize > 1)                            // blockify last (after blur)
-                        pixelize_blur(px, stride_px, vr.left, vr.top, vr.right, vr.bottom, eff->pixelize);
+                        pixelize_blur(px, stride_px, captured.left, captured.top, captured.right, captured.bottom, eff->pixelize);
                 }
             }
 
@@ -560,17 +667,17 @@ namespace rm_modloader {
             // clamped -> the zoom is lost.) z>=1 zooms in; z<1 would need a sub-region larger than
             // the buffer, so we never store zoom<=1 as active.
             double z = eff->zoom < 1.0 ? 1.0 : eff->zoom;
-            int sw = static_cast<int>(w / z), sh = static_cast<int>(h / z);
+            int sw = static_cast<int>(cw / z), sh = static_cast<int>(ch / z);
+            if (sw < 1) sw = 1;
+            if (sh < 1) sh = 1;
             // Centre the sampled sub-rect on the focus point (viewport centre by default, or a
             // script-set screen pixel for follow-cam). Clamp inside the viewport so we never
             // sample outside the captured layer (which would smear the edge / show 0s).
-            int cx = eff->center_active ? eff->center_x : (vr.left + w / 2);
-            int cy = eff->center_active ? eff->center_y : (vr.top + h / 2);
-            int sx = cx - sw / 2, sy = cy - sh / 2;
-            if (sx < vr.left) sx = vr.left;
-            if (sy < vr.top)  sy = vr.top;
-            if (sx + sw > vr.right)  sx = vr.right - sw;
-            if (sy + sh > vr.bottom) sy = vr.bottom - sh;
+            int sx = source_focus_x - sw / 2, sy = source_focus_y - sh / 2;
+            if (sx < captured.left) sx = captured.left;
+            if (sy < captured.top) sy = captured.top;
+            if (sx + sw > captured.right) sx = captured.right - sw;
+            if (sy + sh > captured.bottom) sy = captured.bottom - sh;
             RECT src = { sx, sy, sx + sw, sy + sh };
 
             // The stretch clipper (sub_1010CC60) offsets+clips the dest rect by the dest
@@ -599,16 +706,15 @@ namespace rm_modloader {
                     // captured region and let zoom_x/zoom_y do the zoom -- mixing both (a pre-
                     // shrunk src AND zoom_x) double-counts and reads out of bounds (crash). Flip
                     // is the SIGN of the scale; the engine mirrors the axis about the pivot.
-                    RECT full = { vr.left, vr.top, vr.right, vr.bottom };
-                    int px = eff->center_active ? eff->center_x : (vr.left + vr.right) / 2;
-                    int py = eff->center_active ? eff->center_y : (vr.top + vr.bottom) / 2;
-                    POINT pivot = { px, py };               // same point in dest and src (full region)
+                    RECT full = captured;
+                    POINT pivot = {focus_x, focus_y};
+                    POINT source_pivot = {source_focus_x, source_focus_y};
                     sp_set<RECT>(spr, SP_RECT, vr);
                     sp_set<RECT>(spr, SP_SRCRECT, full);
                     sp_set<POINT>(spr, SP_COORD, pivot);
-                    sp_set<POINT>(spr, SP_ORIGIN, pivot);
-                    sp_set<double>(spr, SP_ZOOMX, eff->flip_x ? -z : z);   // z = zoom magnitude (>=1)
-                    sp_set<double>(spr, SP_ZOOMY, eff->flip_y ? -z : z);
+                    sp_set<POINT>(spr, SP_ORIGIN, source_pivot);
+                    sp_set<double>(spr, SP_ZOOMX, (eff->flip_x ? -z : z) * w / cw);   // z = zoom magnitude (>=1)
+                    sp_set<double>(spr, SP_ZOOMY, (eff->flip_y ? -z : z) * h / ch);
                     // Pure flip (angle 0) still needs the rotate branch; nudge to a full turn.
                     sp_set<double>(spr, SP_ANGLE, eff->angle != 0.0 ? eff->angle : 360.0);
                     sp_set<int>(spr, SP_MIRROR, 0);
@@ -668,7 +774,7 @@ namespace rm_modloader {
     // Per-viewport methods live on the Viewport class (Viewport#zoom= / #zoom / #zoom_center /
     // #zoom_auto_center). Global map-default helpers live on the ModLoader module
     // (ModLoader.viewport_*). Both only mutate the state the walker reads; the walker hook and
-    // engine fns are only installed when "viewport_effects" is enabled in config.
+    // engine fns are installed when effects or logical map sizing need them.
     namespace {
         // RubyValue -> double via the engine's own NUM2DBL (rb_num2dbl): reads RFloat[+8] for a
         // Float and coerces an Integer through rb_Float, so `zoom = 2` and `zoom = 1.5` both work.
@@ -690,6 +796,19 @@ namespace rm_modloader {
         inline void reclaim_if_inert(std::unordered_map<DWORD, VPEffect>::iterator it) {
             if (it != g_effects.end() && !it->second.active()) g_effects.erase(it);
         }
+        RubyValue __cdecl vp_set_source_size(RubyValue self, RubyValue width, RubyValue height) {
+            int w = rb_parse_int(width), h = rb_parse_int(height);
+            if (w < 0 || h < 0 || w > 2560 || h > 1440 || ((w == 0) != (h == 0)))
+                return ruby_false;
+            auto* vp = rgss_native<Sprite>(self);
+            if (!vp) return ruby_false;
+            auto& effect = g_effects[vp->sprite_id];
+            effect.source_width = w;
+            effect.source_height = h;
+            reclaim_if_inert(g_effects.find(vp->sprite_id));
+            return ruby_true;
+        }
+
         RubyValue __cdecl vp_set_zoom(RubyValue self, RubyValue v) {
             RxViewport* vp = rgss_native<RxViewport>(self);
             if (!vp) return v;
@@ -826,9 +945,32 @@ namespace rm_modloader {
         RubyValue __cdecl ve_get_max_threads(RubyValue) { return rb_make_number(g_pool.max_workers + 1); }
     }
 
+    bool viewport_has_custom_effect(const Sprite* node) {
+        return resolve_effect(node) != nullptr;
+    }
+
+    bool viewport_snapshot_source_size(const Sprite* node, int& width, int& height, void* attributes) {
+        const auto* effect=resolve_effect(node);
+        if (!effect || effect->source_width<=0 || effect->source_height<=0 ||
+            effect->zoom>1.0 || effect->rotates() || effect->wave_on() ||
+            effect->blur>0 || effect->zoom_blur>0 || effect->radial_blur>0 || effect->pixelize>1)
+            return false;
+        width=effect->source_width; height=effect->source_height;
+        if (attributes && !grab_attrs(const_cast<Sprite*>(node),attributes,0)) return false;
+        return true;
+    }
+
     void apply_viewport_effects() {
+        // Menu bitmap blur is available even when viewport effects are disabled;
+        // then the same kernel runs inline without creating background workers.
+        mod_loader->add_postinit_handler([] {
+            menu_blur_owner = GetCurrentThreadId();
+            menu_blur_bitmap_class = eval_rb_cstr_noerr("Bitmap");
+            mod_loader->register_ruby_method("menu_bitmap_blur", menu_bitmap_blur);
+        });
         const auto* c = mod_loader->get_config().get("viewport_effects");
-        if (!(c && c->get<bool>())) {
+        const bool effects_enabled = c && c->get<bool>();
+        if (!effects_enabled && !hrfix_map_original_size) {
             return;
         }
         const auto* cap = mod_loader->get_config().get("viewport_effects_capture");
@@ -841,11 +983,11 @@ namespace rm_modloader {
         // _threads" in config overrides the startup band count (1 = single-threaded).
         int pool_max = static_cast<int>(std::thread::hardware_concurrency()) - 1;
         if (pool_max < 0) pool_max = 0; else if (pool_max > 8) pool_max = 8;
-        g_pool.ensure(pool_max);
+        if (effects_enabled) g_pool.ensure(pool_max);
         const auto* th = mod_loader->get_config().get("viewport_blur_threads");
         int want = th ? static_cast<int>(th->get<double>()) : (pool_max + 1);
         if (want < 1) want = 1; else if (want > pool_max + 1) want = pool_max + 1;
-        g_blur_threads = want;
+        g_blur_threads = effects_enabled ? want : 1;
 
         e_op_new    = mod_loader->at_base_offset_as<op_new_t>(op_new_offset);
         e_surf_ctor = mod_loader->at_base_offset_as<surf_ctor_t>(surface_ctor_offset);
@@ -869,6 +1011,7 @@ namespace rm_modloader {
         mod_loader->add_preinit_handler([] {
             // Per-viewport: any Viewport instance. Class object ptr is the same slot HRFix uses.
             RubyValue* viewport_klass = mod_loader->at_base_offset_as<RubyValue*>(0x26A0D8);
+            rb_define_method(*viewport_klass, "source_size", vp_set_source_size, 2);
             rb_define_method(*viewport_klass, "zoom=",            vp_set_zoom,   1);
             rb_define_method(*viewport_klass, "zoom",             vp_get_zoom,   0);
             rb_define_method(*viewport_klass, "zoom_center",      vp_set_center, 2);

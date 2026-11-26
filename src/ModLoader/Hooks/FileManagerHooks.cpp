@@ -1,9 +1,10 @@
 #include "FileManagerHooks.hpp"
 #include "../ModLoader.hpp"
 #include "../Hook.hpp"
+#include "../SurfaceBitmapWriter.hpp"
 #include "../RMGlobal.hpp"
 
-#include <fstream>
+#include <stdexcept>
 
 #pragma comment(lib, "Winmm.lib")
 
@@ -19,60 +20,23 @@ namespace rm_modloader {
 	using MemoryFilePtr = std::unique_ptr<RxMemoryFile, MemoryFilePtrDeleter>;
 
 	static void dump_surface(Surface* surface, const std::filesystem::path& path) {
-#pragma pack(push, 1)
-		struct BmpHeader {
-			char bitmapSignatureBytes[2] = { 'B', 'M' };
-			uint32_t sizeOfBitmapFile = 54 + 0;
-			uint32_t reservedBytes = 0;
-			uint32_t pixelDataOffset = 54;
-		} bmp_header;
-
-		struct BmpInfoHeader {
-			uint32_t sizeOfThisHeader = 40;
-			int32_t width = 0; // in pixels
-			int32_t height = 0; // in pixels
-			uint16_t numberOfColorPlanes = 1; // must be 1
-			uint16_t colorDepth = 32;
-			uint32_t compressionMethod = 0;
-			uint32_t rawBitmapDataSize = 0; // generally ignored
-			int32_t horizontalResolution = 0; // in pixel per meter
-			int32_t verticalResolution = 0; // in pixel per meter
-			uint32_t colorTableEntries = 0;
-			uint32_t importantColors = 0;
-		} bmp_info_header;
-#pragma pack(pop)
-
-		bmp_info_header.width = surface->info.bitmap->bmiHeader.biWidth;
-		bmp_info_header.height = surface->info.bitmap->bmiHeader.biHeight;
-
-		if (bmp_info_header.width == 0 || bmp_info_header.height == 0) {
-			return;
-		}
-
-		std::span<uint8_t> surface_span(surface->image.bits, bmp_info_header.width * bmp_info_header.height * 4);
-
-		bmp_header.sizeOfBitmapFile = 54 + surface_span.size_bytes();
-
-		std::ofstream file_stream(path, std::ios::binary);
-		if (!file_stream.is_open()) {
+		if (!write_surface_bitmap(path, surface->info.bitmap->bmiHeader.biWidth,
+			surface->info.bitmap->bmiHeader.biHeight, surface->image.bits)) {
 			throw std::runtime_error("Failed to create output file");
 		}
-
-		file_stream.write(reinterpret_cast<char*>(&bmp_header), sizeof(BmpHeader));
-		file_stream.write(reinterpret_cast<char*>(&bmp_info_header), sizeof(BmpInfoHeader));
-
-		file_stream.write(reinterpret_cast<char*>(surface_span.data()), surface_span.size_bytes());
 	}
 
 	static Surface* get_value_surface(RubyValue value) {
 		RubyValue* rx_graphics_class = mod_loader->at_base_offset_as<RubyValue*>(0x261B3C);
 
 		if (rb_type(value) == RUBY_T_DATA
-			&& rb_get_value_klass(value) != *rx_bitmap_class) {
-			return get_rb_data_data<RxBitmap>(value)->surface;
+			&& rb_get_value_klass(value) == *rx_bitmap_class) {
+			auto* surface = get_rb_data_data<RxBitmap>(value)->surface;
+			if (!surface) rb_raise(*ruby_error_arg_error, "Bitmap is disposed");
+			return surface;
 		}
 		else if (rb_type(value) == RUBY_T_MODULE
-			&& rb_get_value_klass(value) != *rx_graphics_class) {
+			&& value == *rx_graphics_class) {
 			return mod_loader->get_game()->screen->surface;
 		}
 		else {

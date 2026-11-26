@@ -1,5 +1,6 @@
 {
 	"hrfix_enable": true,
+	"hrfix_map_original_size": false,
 	"fast_render": false,
 	"controls_change": true,
 	"steam_support": false,

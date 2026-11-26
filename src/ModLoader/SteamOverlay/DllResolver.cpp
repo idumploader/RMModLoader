@@ -1,4 +1,5 @@
 #include "DllResolver.hpp"
+#include "RendererLayout.hpp"
 
 #include "Logger.hpp"
 
@@ -302,6 +303,15 @@ bool ResolveRenderer(ResolvedRenderer& r) {
 	BYTE* base = reinterpret_cast<BYTE*>(r.base);
 	r.M_ProcessPaintStream = reinterpret_cast<ResolvedRenderer::PFN_Dispatcher>(base + g_off.M_ProcessPaintStream);
 	r.M_present_update     = reinterpret_cast<ResolvedRenderer::PFN_PresentUpdate>(base + g_off.M_present_update);
+	std::string layout_error;
+	if (!discover_renderer_layout(r.base, r.layout, layout_error)) {
+		Logger::error(std::format("[steam_overlay] renderer ABI unsupported: {}. Overlay disabled.\n", layout_error));
+		return false;
+	}
+	Logger::info(std::format("[steam_overlay] discovered {} slots: texture={} draw={} chrome={} shared={}/{} screen={} hwnd={} bounds={} name={}\n",
+		r.layout.total_slots, r.layout.slot_LoadTexture, r.layout.slot_DrawTexturedRect,
+		r.layout.slot_SetChromePaintSource, r.layout.slot_SharedTexA,r.layout.slot_SharedTexB,
+		r.layout.slot_ScreenSize,r.layout.slot_GetHWND,r.layout.slot_GetOutputBounds,r.layout.slot_GetClassName));
 	g_addr_M_present_update       = reinterpret_cast<uintptr_t>(base + g_off.M_present_update);
 	g_addr_M_MakeCSharedMemStream = reinterpret_cast<uintptr_t>(base + g_off.M_MakeCSharedMemStream);
 	g_addr_M_write_data           = reinterpret_cast<uintptr_t>(base + g_off.M_write_data);

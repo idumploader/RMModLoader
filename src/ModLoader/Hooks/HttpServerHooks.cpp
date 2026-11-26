@@ -95,10 +95,18 @@ namespace rm_modloader {
 				server_->Put   (R"(.*)", catchall);
 				server_->Delete(R"(.*)", catchall);
 
-				// httplib::Server::listen blocks; run on a dedicated thread.
+				// Bind before reporting success so the menu can reject an occupied port.
+				if (port < 1 || port > 65535 || !server_->bind_to_port("127.0.0.1", port)) {
+					mod_loader->log_error("http server could not bind 127.0.0.1:{}\n", port);
+					server_.reset();
+					return false;
+				}
+
+				// Wait for the accept loop before returning: an immediate OFF must not
+				// call httplib::stop before is_running becomes true and then hang joining.
 				server_thread_ = std::thread([this] {
 					try {
-						server_->listen("127.0.0.1", port_);
+						server_->listen_after_bind();
 					}
 					catch (const std::exception& e) {
 						mod_loader->log_error("http server thread crashed: {}\n", e.what());
@@ -106,8 +114,15 @@ namespace rm_modloader {
 					catch (...) {
 						mod_loader->log_error("http server thread crashed with unknown exception\n");
 					}
+					server_->decommission(); // release wait_until_ready on early exit, too
 				});
 
+				server_->wait_until_ready();
+				if (!server_->is_running()) {
+					server_thread_.join();
+					server_.reset();
+					return false;
+				}
 				running_ = true;
 				mod_loader->log_info("http server listening on 127.0.0.1:{}\n", port_);
 				return true;
@@ -117,6 +132,7 @@ namespace rm_modloader {
 				{
 					std::lock_guard<std::mutex> lock(mu_);
 					if (!running_) return;
+					running_ = false;
 					if (server_) server_->stop();
 
 					// Wake any in-flight requests with 503 so their threads exit cleanly.
@@ -140,7 +156,6 @@ namespace rm_modloader {
 
 				std::lock_guard<std::mutex> lock(mu_);
 				server_.reset();
-				running_ = false;
 			}
 
 			// Called from Ruby main thread. Empty string == queue empty.
@@ -212,24 +227,31 @@ namespace rm_modloader {
 
 				{
 					std::lock_guard<std::mutex> lock(mu_);
+					// A request accepted just before OFF may reach us after stop drained
+					// pending_. Reject it instead of keeping the Ruby thread in join for 30s.
+					if (!running_) {
+						res.status = 503;
+						res.set_content("server shutting down", "text/plain");
+						return;
+					}
 					pending_.emplace(id, slot);
 					ready_queue_.push_back(req_json.dump());
 				}
 
 				// Block this connection thread until Ruby responds (or timeout / stop).
+				bool ready;
 				{
 					std::unique_lock<std::mutex> sl(slot->mtx);
-					slot->cv.wait_for(sl, std::chrono::seconds(30), [&] { return slot->ready; });
+					ready = slot->cv.wait_for(sl, std::chrono::seconds(30), [&] { return slot->ready; });
+					res.status = slot->status;
+					res.set_content(slot->body, slot->content_type);
 				}
 
-				if (!slot->ready) {
+				if (!ready) {
 					// Timed out — clean up the pending entry if it's still there.
 					std::lock_guard<std::mutex> lock(mu_);
 					pending_.erase(id);
 				}
-
-				res.status = slot->status;
-				res.set_content(slot->body, slot->content_type);
 			}
 
 			static std::string generate_id() {
