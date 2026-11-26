@@ -1,3 +1,6 @@
 /*.7z
 /.vs/
 /out/
+.DS_Store
+/mod_loader/bsmp-traces/
+/docs/PERFORMANCE.md

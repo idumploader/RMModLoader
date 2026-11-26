@@ -189,7 +189,12 @@ namespace rm_modloader {
 		if (string->basic.flags & ruby_flag_string_no_embed) {
 			return std::string_view(string->as.heap.ptr, string->as.heap.len);
 		}
-		return std::string_view(string->as.ary);
+		// Embedded (short) strings: the length lives in the flags (RSTRING_EMBED_LEN),
+		// the buffer is NOT a reliable C-string. Reading it with strlen would truncate
+		// binary payloads at the first NUL byte (e.g. a leading 0x00 frame flag), so
+		// take the embedded length explicitly. Shift/mask per Ruby 1.9 RSTRING_EMBED_LEN.
+		const long embed_len = (string->basic.flags >> (ruby_flags_ushift + 2)) & 0x1F;
+		return std::string_view(string->as.ary, embed_len);
 	}
 
 	// Forward-declared here so Ruby.hpp need not include RMGlobal.hpp (which itself

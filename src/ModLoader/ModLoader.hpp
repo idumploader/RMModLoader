@@ -2,6 +2,8 @@
 #include "RMClasses.hpp"
 #include "RMGlobal.hpp"
 #include "ModLoaderConfig.hpp"
+#include "HookRegistry.hpp"
+#include <map>
 
 #include <filesystem>
 #include <unordered_map>
@@ -339,6 +341,7 @@ namespace rm_modloader {
 		 * @return Reference to @see ModLoaderConfig
 		 */
 		const ModLoaderConfig& get_config() const;
+		void save_config_overrides(const nlohmann::json& values) const;
 
 		/**
 		 * Register ruby "ModLoader" module method.
@@ -434,27 +437,6 @@ namespace rm_modloader {
 		ModLoaderPatchID hook_function_internal(void* target, void* hook_func, void** orig_func);
 		ModLoaderPatchID hook_api_function_internal(std::wstring_view lib_name, std::string_view function_name, void* hook_func, void** orig_func);
 
-		// One installed hook. orig_slot is the caller-owned `orig` pointer variable
-		// (e.g. a static member): it MUST outlive the hook, since the chain reads it
-		// on every call and rewrites it when neighbours are added/removed. We store
-		// the slot address by value, so growing the entries vector never invalidates
-		// it -- only the pointed-to variable must stay put.
-		struct HookEntry {
-			ModLoaderPatchID id;
-			void* detour;
-			void** orig_slot;
-		};
-
-		// Per-target hook chain. MinHook is installed once on the target with the
-		// head entry's detour; intermediate links are wired through the entries' orig
-		// slots, and only the tail's orig is the MinHook trampoline (the real
-		// function). A single hook is therefore identical to a plain direct hook.
-		struct HookChain {
-			void* trampoline = nullptr;
-			std::vector<HookEntry> entries;
-		};
-
-		ModLoaderPatchID append_to_chain(HookChain& chain, void* hook_func, void** orig_func, void* target);
 
 		/**
 		 * Internal ruby log method
@@ -515,14 +497,12 @@ namespace rm_modloader {
 
 		std::filesystem::path modloader_root_;
 		
-		ModLoaderPatchID last_patch_id_;
 		ModLoaderHandlerID last_handler_id_;
 
-		std::unordered_map<void*, HookChain> hook_chains_;          // target -> hook chain
-		std::unordered_map<ModLoaderPatchID, void*> patch_targets_; // patch id -> target
-		std::mutex hook_registry_mutex_;
-		std::unordered_map<ModLoaderHandlerID, PreinitHandler> preinit_handlers_;
-		std::unordered_map<ModLoaderHandlerID, PostinitHandler> postinit_handlers_;
+		HookRegistry hook_registry_;
+		// Handler IDs increase monotonically: map order is registration order.
+		std::map<ModLoaderHandlerID, PreinitHandler> preinit_handlers_;
+		std::map<ModLoaderHandlerID, PostinitHandler> postinit_handlers_;
 
 		ModLoaderConfig config_;
 		RubyValue ruby_module_;

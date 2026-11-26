@@ -209,7 +209,7 @@ M.header("Reset", C)
 M.action("Reset all", C) { ViewportFXTest.reset }
 
 # Per-frame scheduler tick (drives run_sequence). Map-only, so hook Scene_Map. This
-# file loads at 246 (before BSMP's 1240/1271 Spriteset hooks and any later Scene_Map
+# file loads at 246 (before later Spriteset hooks and any later Scene_Map
 # wrap), so the alias chain stays intact.
 class Scene_Map
   alias vfxtest_orig_update update

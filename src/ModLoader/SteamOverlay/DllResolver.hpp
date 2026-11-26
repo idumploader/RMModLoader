@@ -10,6 +10,7 @@
 
 #include <cstdint>
 #include <Windows.h>
+#include "RendererLayout.hpp"
 
 struct GDIFakeRenderer;      // fwd-decl: dispatcher работает с этим типом
 struct CSharedMemStream;     // непрозрачный, передаём только указатель
@@ -29,6 +30,7 @@ extern RendererOffsets g_off;
 
 struct ResolvedRenderer {
 	HMODULE base = nullptr;
+	VtableLayout layout{};
 
 	// dispatcher — 32-bit __thiscall (ecx=this, args на стеке). Имитируем
 	// через __fastcall с dummy edx — компилятор положит arg0 в ecx,

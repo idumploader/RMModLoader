@@ -134,7 +134,10 @@ namespace rm_modloader {
 		DWORD width;
 		DWORD height;
 		DWORD depth;
-		DWORD gap10044[4];
+		int16_t* flash_data;
+		DWORD flash_data_width;
+		DWORD flash_data_height;
+		DWORD flash_data_depth;
 		int16_t* flags;
 		DWORD flags_count;
 		DWORD unk5C;
@@ -142,7 +145,7 @@ namespace rm_modloader {
 		DWORD offset_y;
 		DWORD offset_x_tiles;
 		DWORD offset_y_tiles;
-		DWORD unk10070;
+		DWORD frame_count;
 	};
 
 

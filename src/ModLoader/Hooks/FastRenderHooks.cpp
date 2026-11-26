@@ -13,6 +13,7 @@
 #include "../ModLoader.hpp"
 #include "../TilemapReader.hpp"
 #include "../Hook.hpp"
+#include "../SurfaceBitmapWriter.hpp"
 
 #include <glad.h>
 #include <staplegl.hpp>
@@ -41,6 +42,17 @@ std::array<T, 0> make_array() {
 using std::views::iota;
 
 namespace rm_modloader {
+	static constexpr staplegl::texture_color surface_texture_color = {
+		.internal_format = GL_RGBA,
+		.format = GL_BGRA,
+		.datatype = GL_UNSIGNED_BYTE
+	};
+	static constexpr staplegl::texture_filter surface_texture_filter = {
+		.min_filter = GL_LINEAR,
+		.mag_filter = GL_LINEAR,
+		.clamping = GL_CLAMP_TO_BORDER
+	};
+
 
 	constexpr int32_t max_z_layer = 100;
 
@@ -438,17 +450,9 @@ namespace rm_modloader {
 			return;
 		}
 
-		staplegl::texture_color surface_color = {
-			.internal_format = GL_RGBA,
-			.format = GL_BGRA,
-			.datatype = GL_UNSIGNED_BYTE
-		};
+		const auto& surface_color = surface_texture_color;
 
-		staplegl::texture_filter surface_filter = {
-			.min_filter = GL_LINEAR,
-			.mag_filter = GL_LINEAR,
-			.clamping = GL_CLAMP_TO_BORDER
-		};
+		const auto& surface_filter = surface_texture_filter;
 
 		//mod_loader->log_info("Emplaced texture ({} bits)\n", surface->info.bitmap->bmiHeader.biBitCount);
 
@@ -668,17 +672,9 @@ namespace rm_modloader {
 			.width = 0,
 			.height = 0
 		};
-		staplegl::texture_color surface_color = {
-			.internal_format = GL_RGBA,
-			.format = GL_BGRA,
-			.datatype = GL_UNSIGNED_BYTE
-		};
+		const auto& surface_color = surface_texture_color;
 
-		staplegl::texture_filter surface_filter = {
-			.min_filter = GL_LINEAR,
-			.mag_filter = GL_LINEAR,
-			.clamping = GL_CLAMP_TO_BORDER
-		};
+		const auto& surface_filter = surface_texture_filter;
 
 		std::span<const float> texture_span;
 
@@ -780,17 +776,9 @@ namespace rm_modloader {
 				.width = sprite_surface->info.bitmap->bmiHeader.biWidth,
 				.height = sprite_surface->info.bitmap->bmiHeader.biHeight
 			};
-			staplegl::texture_color surface_color = {
-				.internal_format = GL_RGBA,
-				.format = GL_BGRA,
-				.datatype = GL_UNSIGNED_BYTE
-			};
+			const auto& surface_color = surface_texture_color;
 
-			staplegl::texture_filter surface_filter = {
-				.min_filter = GL_LINEAR,
-				.mag_filter = GL_LINEAR,
-				.clamping = GL_CLAMP_TO_BORDER
-			};
+			const auto& surface_filter = surface_texture_filter;
 			std::span<const float> texture_span(reinterpret_cast<const float*>(sprite_surface->image.bits), surface_res.width * surface_res.height * 4);
 
 			staplegl::texture_2d& texture = surface_textures_[sprite_surface];
@@ -853,17 +841,9 @@ namespace rm_modloader {
 				.width = sprite_surface->info.bitmap->bmiHeader.biWidth,
 				.height = sprite_surface->info.bitmap->bmiHeader.biHeight
 			};
-			staplegl::texture_color surface_color = {
-				.internal_format = GL_RGBA,
-				.format = GL_BGRA,
-				.datatype = GL_UNSIGNED_BYTE
-			};
+			const auto& surface_color = surface_texture_color;
 
-			staplegl::texture_filter surface_filter = {
-				.min_filter = GL_LINEAR,
-				.mag_filter = GL_LINEAR,
-				.clamping = GL_CLAMP_TO_BORDER
-			};
+			const auto& surface_filter = surface_texture_filter;
 			std::span<const float> texture_span(reinterpret_cast<const float*>(sprite_surface->image.bits), surface_res.width * surface_res.height * 4);
 
 			staplegl::texture_2d& texture = surface_textures_[sprite_surface];
@@ -911,16 +891,8 @@ namespace rm_modloader {
 			.width = surface->info.bitmap->bmiHeader.biWidth,
 			.height = surface->info.bitmap->bmiHeader.biHeight
 		};
-		staplegl::texture_color surface_color = {
-			.internal_format = GL_RGBA,
-			.format = GL_BGRA,
-			.datatype = GL_UNSIGNED_BYTE
-		};
-		staplegl::texture_filter surface_filter = {
-			.min_filter = GL_LINEAR,
-			.mag_filter = GL_LINEAR,
-			.clamping = GL_CLAMP_TO_BORDER
-		};
+		const auto& surface_color = surface_texture_color;
+		const auto& surface_filter = surface_texture_filter;
 
 		if (surface_res.width == 0 || surface_res.height == 0) {
 			return;
@@ -1089,46 +1061,8 @@ namespace rm_modloader {
 	}
 
 	void dump_surface(Surface* surface, const std::filesystem::path& path) {
-#pragma pack(push, 1)
-		struct BmpHeader {
-			char bitmapSignatureBytes[2] = { 'B', 'M' };
-			uint32_t sizeOfBitmapFile = 54 + 0;
-			uint32_t reservedBytes = 0;
-			uint32_t pixelDataOffset = 54;
-		} bmp_header;
-
-		struct BmpInfoHeader {
-			uint32_t sizeOfThisHeader = 40;
-			int32_t width = 0; // in pixels
-			int32_t height = 0; // in pixels
-			uint16_t numberOfColorPlanes = 1; // must be 1
-			uint16_t colorDepth = 32;
-			uint32_t compressionMethod = 0;
-			uint32_t rawBitmapDataSize = 0; // generally ignored
-			int32_t horizontalResolution = 0; // in pixel per meter
-			int32_t verticalResolution = 0; // in pixel per meter
-			uint32_t colorTableEntries = 0;
-			uint32_t importantColors = 0;
-		} bmp_info_header;
-#pragma pack(pop)
-
-		bmp_info_header.width = surface->info.bitmap->bmiHeader.biWidth;
-		bmp_info_header.height = surface->info.bitmap->bmiHeader.biHeight;
-
-		if (bmp_info_header.width == 0 || bmp_info_header.height == 0) {
-			return;
-		}
-
-		std::span<uint8_t> surface_span(surface->image.bits, bmp_info_header.width * bmp_info_header.height * 4);
-
-		bmp_header.sizeOfBitmapFile = 54 + surface_span.size_bytes();
-
-		std::ofstream file_stream(path, std::ios::binary);
-
-		file_stream.write(reinterpret_cast<char*>(&bmp_header), sizeof(BmpHeader));
-		file_stream.write(reinterpret_cast<char*>(&bmp_info_header), sizeof(BmpInfoHeader));
-
-		file_stream.write(reinterpret_cast<char*>(surface_span.data()), surface_span.size_bytes());
+		write_surface_bitmap(path, surface->info.bitmap->bmiHeader.biWidth,
+			surface->info.bitmap->bmiHeader.biHeight, surface->image.bits);
 	}
 
 	void GLRenderer::glfw_key_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {

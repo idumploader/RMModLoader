@@ -42,6 +42,7 @@ namespace rm_modloader {
 
 		static RubyValue __cdecl mod_loader_input_trigger(RubyValue module, RubyValue key_value);
 		static RubyValue __cdecl mod_loader_input_repeat(RubyValue module, RubyValue key_value);
+		static RubyValue __cdecl mod_loader_input_press(RubyValue module, RubyValue key_value);
 		static RubyValue __cdecl mod_loader_map_to_char(RubyValue module, RubyValue key_value);
 
 		static RubyValue __cdecl mod_loader_gamepad_set_deadzone(RubyValue module, RubyValue deadzone_value);

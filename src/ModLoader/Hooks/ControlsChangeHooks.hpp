@@ -82,6 +82,7 @@ namespace rm_modloader {
 		static decltype(&GetKeyState) orig_GetKeyState;
 
 		static SHORT __stdcall get_key_state_hook(int virt_key);
+		static RubyValue __cdecl mod_loader_movement_keys(RubyValue module, RubyValue mode);
 
 		static RubyValue __cdecl mod_loader_hook_key(RubyValue module, RubyValue orig_virt_key, RubyValue virt_key);
 	};

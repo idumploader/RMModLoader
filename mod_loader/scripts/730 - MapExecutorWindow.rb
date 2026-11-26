@@ -6,7 +6,7 @@
 #
 # Dependencies: ExecutorModule (700), ModLoader::Keyboard (7), ModLoader,
 #               $data_items / $data_weapons / $data_armors.
-# Config gate:  ExecutorModule::ENABLED
+# Enabled through Debug settings (checked when opening).
 # Defines: ExecutorGive_Window, ExecutorGiveSwitch_Window, ExecutorGiveList_Window
 #==============================================================================
 
@@ -14,11 +14,29 @@ $imported ||= {}
 if not $imported["IDL-MapExecutorWindow"]
 $imported["IDL-MapExecutorWindow"] = "1.0"
 
-if ExecutorModule::ENABLED
+if defined?(ExecutorModule)
 
 module ExecutorModule
   GIVE_WINDOW_KEY = ModLoader::Keyboard::T
+
+  GIVE_TEXT = {
+    'executor.give.title' => 'Give items',
+    'executor.give.tabs_hint' => 'Left/Right: category   Confirm: select',
+    'executor.give.tabs_back' => 'Cancel / T: close',
+    'executor.give.item_hint' => 'Confirm: give one item',
+    'executor.give.item_back' => 'Cancel: categories   T: close'
+  }
+  GIVE_TEXT.each { |key, text| ModLoader::I18n.define(key, text) }
+
+  def self.give_text(key)
+    ModLoader::I18n[key]
+  end
 end
+
+ModLoader::Hotkeys.register(:executor_give,
+  :key => ExecutorModule::GIVE_WINDOW_KEY,
+  :enabled => proc { ExecutorModule.enabled? && SceneManager.scene.is_a?(Scene_Map) }
+) { |scene| scene.toggle_give_window }
 
 class Game_Player
 
@@ -46,11 +64,6 @@ class Scene_Map
       executor_give_orig_update
     end
 
-    update_executor_windows
-  end
-
-  def update_executor_windows
-    toggle_give_window if not $executor_input_is_disabled and ModLoader.input_trigger?(ExecutorModule::GIVE_WINDOW_KEY)
   end
 
   def toggle_give_window
@@ -132,6 +145,38 @@ class ExecutorGiveList_Window < Window_Selectable
     draw_all_items
   end
 
+  # Keep RGSS's contents coordinates, cursor and scroll arrows intact, but
+  # rasterize only rows intersecting the window. Previously the first visit
+  # rendered every item in the database before the next game update.
+  def create_contents
+    @give_drawn_items = {}
+    super
+  end
+
+  def draw_all_items
+    draw_visible_items
+  end
+
+  def oy=(value)
+    super
+    draw_visible_items
+  end
+
+  def draw_visible_items
+    return unless @items && @give_drawn_items && contents && !contents.disposed?
+    visible_height = height - standard_padding * 2
+    return if visible_height <= 0 || item_height <= 0
+    first_row = [oy / item_height, 0].max
+    last_row = (oy + visible_height - 1) / item_height
+    first = first_row * col_max
+    last = [(last_row + 1) * col_max, item_max].min
+    (first...last).each do |index|
+      next if @give_drawn_items[index]
+      draw_item(index)
+      @give_drawn_items[index] = true
+    end
+  end
+
   def select_last
     select(0)
   end
@@ -148,6 +193,27 @@ class ExecutorGiveSwitch_Window < Window_HorzCommand
 
   def window_width
     @wnd_width
+  end
+
+  def window_height
+    fitting_height(2)
+  end
+
+  def contents_height
+    height - standard_padding * 2
+  end
+
+  def item_rect(index)
+    rect = super
+    rect.y += line_height
+    rect
+  end
+
+  def draw_all_items
+    change_color(system_color)
+    draw_text(0, 0, contents_width, line_height,
+      ExecutorModule.give_text('executor.give.title'), 1)
+    super
   end
 
   def col_max
@@ -171,36 +237,67 @@ class ExecutorGiveSwitch_Window < Window_HorzCommand
   end
 end
 
+class ExecutorGiveHelp_Window < Window_Base
+  def initialize(width)
+    super(0, 0, width, fitting_height(2))
+  end
+
+  def set(list_active)
+    language = ModLoader::I18n.language
+    return if @list_active == list_active && @language == language
+    @list_active, @language = list_active, language
+    contents.clear
+    keys = list_active ? ['item_hint', 'item_back'] : ['tabs_hint', 'tabs_back']
+    keys.each_with_index do |key, row|
+      draw_text(0, row * line_height, contents_width, line_height,
+        ExecutorModule.give_text('executor.give.' + key), 1)
+    end
+  end
+end
+
 class ExecutorGive_Window < Window_Base
   def initialize
     super(0, 0, window_width, window_height)
+    # Retain Scene_Base's window lifecycle; only the child panels are visible.
+    self.opacity = 0
     @category_windows = {}
-    create_viewport
     create_windows
 
     update_placement
     self.openness = 0
+    @switch_window.openness = 0
+    @current_category_window.openness = 0
+    @help_window.openness = 0
     open
 
     @switch_window.activate
   end
 
+  def contents_width; 1; end
+  def contents_height; 1; end
+
   def open
     super
     @switch_window.open
     @current_category_window.open if @current_category_window
+    @help_window.open
   end
 
   def close
     super
     @switch_window.close
     @current_category_window.close if @current_category_window
+    @help_window.close
+    @switch_window.deactivate
+    @current_category_window.deactivate if @current_category_window
   end
 
   def dispose
     super
     @switch_window.dispose
     @category_windows.each { |k, window| window.dispose }
+    @help_window.dispose
+    @viewport.dispose if @viewport && !@viewport.disposed?
   end
 
   def activate
@@ -211,49 +308,55 @@ class ExecutorGive_Window < Window_Base
     self.x = (Graphics.width - self.width) / 2
     self.y = (Graphics.height - self.height) / 2
 
-    @switch_window.x = self.x + @header_width + 10
+    @switch_window.x = self.x
     @switch_window.y = self.y
+    @help_window.x = self.x
+    @help_window.y = self.y + height - @help_window.height
 
     @category_windows.each do |category, window|
       window.x = self.x
-      window.y = self.y + header_height + 14
+      window.y = self.y + @switch_window.height + 4
     end
   end
 
   def window_width
-    return 600
+    return [720, Graphics.width - 32].min
   end
 
   def window_height
-    return 400
+    return [600, Graphics.height - 32].min
   end
 
   def header_height
-    return line_height
-  end
-
-  def create_viewport
-    @viewport = Viewport.new(0, 0, window_width, window_height)
+    @switch_window.height
   end
 
   def create_windows
-    @header_width = self.draw_text(0, 0, window_width, line_height, "Give").width
-
-    @switch_window = ExecutorGiveSwitch_Window.new(window_width - @header_width - 10)
+    @switch_window = ExecutorGiveSwitch_Window.new(width)
     @switch_window.set_handler(:ok,     method(:on_category_ok))
     @switch_window.set_handler(:cancel, method(:on_category_cancel))
     @switch_window.category_handler = method(:on_category_change)
+    @help_window = ExecutorGiveHelp_Window.new(width)
+    @ui_language = ModLoader::I18n.language
+    on_category_change(@switch_window.current_symbol)
   end
 
   def update
     super
+    if @ui_language != ModLoader::I18n.language
+      @ui_language = ModLoader::I18n.language
+      @switch_window.refresh
+    end
     @switch_window.update
-    @current_category_window.update
+    @current_category_window.update if @current_category_window
+    @help_window.set(@current_category_window && @current_category_window.active)
+    @help_window.update
   end
 
   def on_category_ok
+    @switch_window.deactivate
     @current_category_window.activate
-    @current_category_window.select_last
+    @current_category_window.select_last if @current_category_window.index < 0
   end
 
   def on_category_cancel
@@ -267,7 +370,7 @@ class ExecutorGive_Window < Window_Base
   end
 
   def on_item_cancel
-    @current_category_window.unselect
+    @current_category_window.deactivate
     @switch_window.activate
   end
 
@@ -277,19 +380,25 @@ class ExecutorGive_Window < Window_Base
 
     category_window = @category_windows[category] if @category_windows.include?(category)
     if not category_window
-      category_window= ExecutorGiveList_Window.new(window_width, window_height - line_height)
+      list_height = height - @switch_window.height - @help_window.height - 8
+      category_window = ExecutorGiveList_Window.new(width, list_height)
       category_window.set_handler(:ok,     method(:on_item_ok))
       category_window.set_handler(:cancel, method(:on_item_cancel))
 
       category_window.category = category
       category_window.x = self.x
-      category_window.y = self.y + header_height + 14
+      category_window.y = self.y + @switch_window.height + 4
 
       @category_windows[category] = category_window
     end
 
-    @current_category_window.hide if @current_category_window
+    if @current_category_window
+      @current_category_window.deactivate
+      @current_category_window.hide
+    end
     @current_category_window = category_window
+    @current_category_window.openness = @switch_window.openness
+    @current_category_window.open if @opening || open?
     @current_category_window.show
   end
 
@@ -312,10 +421,13 @@ class ExecutorGive_Window < Window_Base
     end
 
     $game_temp.streffect.push(Window_Getinfo.new(item.id, category, category_name, amount))
-    $game_party.gain_item(item, amount)
+    # The game's popup can grant the item itself (CUSTOM_GET_WINDOW::GET).
+    # Only grant here when the popup is configured as a notification.
+    popup_grants_item = Window_Getinfo.const_defined?(:GET) && Window_Getinfo::GET
+    $game_party.gain_item(item, amount) unless popup_grants_item
   end
 end
 
-end # ExecutorModule::ENABLED
+end # defined?(ExecutorModule)
 
 end # not $imported["IDL-MapExecutorWindow"]

@@ -11,7 +11,16 @@ if (CMAKE_TOOLCHAIN_FILE MATCHES "vcpkg.cmake")
   include(${CMAKE_TOOLCHAIN_FILE})
 endif()
 
-project(rmforge LANGUAGES CXX C VERSION 3.1)
+project(rmforge LANGUAGES CXX C VERSION 3.2)
+
+# Match /showIncludes parsing when the caller explicitly selects MSVC's language.
+# Existing build trees can retain a misdecoded localized prefix from detection,
+# silently leaving Ninja with zero header dependencies.
+if(MSVC AND "$ENV{VSLANG}" STREQUAL "1033")
+  set(CMAKE_CL_SHOWINCLUDES_PREFIX "Note: including file: ")
+elseif(MSVC AND "$ENV{VSLANG}" STREQUAL "1049")
+  set(CMAKE_CL_SHOWINCLUDES_PREFIX "Примечание: включение файла: ")
+endif()
 
 include(CMakePackageConfigHelpers)
 
@@ -50,7 +59,10 @@ find_package(httplib CONFIG REQUIRED)
 add_library(ModLoader SHARED
   "src/ModLoader/DllMain.cpp"
   "src/ModLoader/Hooks/HRFixHooks.cpp"
+  "src/ModLoader/Hooks/DisplayHooks.cpp"
   "src/ModLoader/ModLoader.cpp"
+  "src/ModLoader/HookRegistry.cpp"
+  "src/ModLoader/ScriptLoader.cpp"
   "src/ModLoader/ModLoaderConfig.cpp"
   "src/ModLoader/RMGlobal.cpp"
   "src/ModLoader/TilemapReader.cpp"
@@ -65,10 +77,25 @@ add_library(ModLoader SHARED
   "src/ModLoader/Hooks/SteamOverlayHooks.cpp"
   "src/ModLoader/Hooks/SpriteDisposeFixHooks.cpp"
   "src/ModLoader/Hooks/HttpServerHooks.cpp"
+  "src/ModLoader/Hooks/GlyphCacheHooks.cpp"
   "src/ModLoader/Hooks/FocusPauseHooks.cpp"
   "src/ModLoader/Hooks/ViewportEffectsHooks.cpp"
+  "src/ModLoader/Hooks/ProfilerHooks.cpp"
+  "src/ModLoader/Hooks/ParallelRenderer.cpp"
+  "src/ModLoader/Hooks/Renderer/MemoryBudget.cpp"
+  "src/ModLoader/Hooks/Renderer/SnapshotReplay.cpp"
+  "src/ModLoader/Hooks/Renderer/SnapshotCapture.cpp"
+  "src/ModLoader/Hooks/Renderer/SnapshotExecution.cpp"
+  "src/ModLoader/Hooks/Renderer/RasterWorkers.cpp"
+  "src/ModLoader/Hooks/Renderer/RendererService.cpp"
+  "src/ModLoader/Hooks/Renderer/RubyBindings.cpp"
+  "src/ModLoader/Hooks/Renderer/SurfaceResources.cpp"
+  "src/ModLoader/Hooks/MapFrameProbe.cpp"
+  "src/ModLoader/Hooks/RenderIntegration.cpp"
 
   "src/ModLoader/SteamOverlay/DLLResolver.cpp"
+  "src/ModLoader/SteamOverlay/RendererLayout.cpp"
+  "src/ModLoader/SteamOverlay/hde/hde32.c"
   "src/ModLoader/SteamOverlay/IPCStreams.cpp"
   "src/ModLoader/SteamOverlay/FakeRenderer.cpp"
   "src/ModLoader/SteamOverlay/GDIRender.cpp"
@@ -85,6 +112,14 @@ target_compile_definitions(ModLoader PUBLIC
 # break that crashes std::mutex when an older msvcp140 is present).
 target_compile_definitions(ModLoader PRIVATE _DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR)
 target_link_options(ModLoader PRIVATE "/MAP")
+
+# Emit a PDB for optimized builds too, so release crashes symbolicate in VS / the
+# debugger instead of showing a bare ModLoader.dll!<addr>. /Zi puts debug info in
+# the .obj; the linker's /DEBUG writes the .pdb. /DEBUG implies /OPT:NOREF,NOICF,
+# so restore the release fold/strip explicitly to keep the binary lean. Debug
+# already carries its own /Zi+/DEBUG, so scope this to the non-Debug configs.
+target_compile_options(ModLoader PRIVATE "$<$<NOT:$<CONFIG:Debug>>:/Zi>")
+target_link_options(ModLoader PRIVATE "$<$<NOT:$<CONFIG:Debug>>:/DEBUG;/OPT:REF;/OPT:ICF>")
 #target_precompile_headers(ModLoader PRIVATE "src/pch.h")
 
 # The vendored Steamworks SDK headers (src/ModLoader/Steam) use deprecated CRT

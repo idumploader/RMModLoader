@@ -23,6 +23,7 @@
 #pragma once
 
 #include <cstdint>
+#include <array>
 #include <Windows.h>
 
 // ---------------------------------------------------------------
@@ -50,6 +51,14 @@ struct VtableLayout {
 	int slot_RetFour;            // 23 — слот для ret-4 thunk'а
 	int slot_GetOutputBounds;    // 26 (arity 4 outparams)
 	int slot_GetClassName;       // 27 (arity 0, returns const char*)
+	bool discovered = false;
+	std::array<uint8_t,64> argument_bytes{};
+	uintptr_t source_vtable = 0;
+	int slot_FrameInfo = -1;
+	int slot_DrawTexturedQuad = -1;
+	std::array<bool,64> returns_one{};
+	uintptr_t saved_stream_rewind=0;
+	int slot_RendererKind=-1;
 };
 
 // Текущая loaded версия. При update Steam'а — добавить kLayout_<new_date>
@@ -117,7 +126,8 @@ static_assert(offsetof(GDIFakeRenderer, frametime) == 0xAC, "");
 // Инициализация: построить vtable storage и привязать его к dev->vtable.
 // hwnd запоминается в static-переменной и читается в Handler_GetHWND /
 // Handler_GetOutputBounds / Handler_ScreenSize.
-void InitGDIFakeRenderer(GDIFakeRenderer* dev, const VtableLayout& layout, HWND hwnd);
+void InitGDIFakeRenderer(GDIFakeRenderer* dev, const VtableLayout& layout, HWND hwnd,
+                         bool slot8_capability_query = false);
 
 // Screenshot capture (slot 14). Setting deferred until after Present so the
 // back-buffer actually contains the rendered frame, not the gray clear.

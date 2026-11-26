@@ -29,6 +29,8 @@ namespace rm_modloader {
 		 * @return Config value pointer, or nullptr if it doesn't exist
 		 */
 		const nlohmann::json* get(std::string_view key) const noexcept;
+		// Merge into the latest file; keep the running configuration immutable.
+		static void save_overrides(const std::filesystem::path& filepath, const nlohmann::json& values);
 
 	private:
 	

@@ -16,6 +16,8 @@ namespace rm_modloader {
 
 	ModLoaderConfig::ModLoaderConfig(const std::filesystem::path& filepath) : ModLoaderConfig() {
 		std::ifstream config_is(filepath);
+		if (!config_is && std::filesystem::exists(filepath))
+			throw std::runtime_error("Cannot read ModLoader config");
 		std::string content((std::istreambuf_iterator<char>(config_is)), std::istreambuf_iterator<char>());
 
 		// An absent or empty mod_loader.json is a valid "use all defaults" state, not
@@ -29,6 +31,27 @@ namespace rm_modloader {
 
 	bool ModLoaderConfig::contains(std::string_view key) const {
 		return config_.contains(key);
+	}
+
+	void ModLoaderConfig::save_overrides(const std::filesystem::path& filepath, const json& values) {
+		ModLoaderConfig latest(filepath);
+		json updated = latest.config_.is_null() ? json::object() : latest.config_;
+		if (!updated.is_object()) throw std::runtime_error("ModLoader config must be a JSON object");
+		updated.update(values);
+		auto temporary = filepath;
+		temporary += L".tmp." + std::to_wstring(GetCurrentProcessId());
+		try {
+			std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+			output.exceptions(std::ios::failbit | std::ios::badbit);
+			output << updated.dump(2) << '\n';
+			output.close();
+			if (!MoveFileExW(temporary.c_str(), filepath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+				throw std::system_error(GetLastError(), std::system_category(), "Save ModLoader config");
+		} catch (...) {
+			std::error_code ignored;
+			std::filesystem::remove(temporary, ignored);
+			throw;
+		}
 	}
 
 	const nlohmann::json& ModLoaderConfig::at(std::string_view key) const {

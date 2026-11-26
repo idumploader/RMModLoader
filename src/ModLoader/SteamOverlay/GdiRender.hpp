@@ -31,6 +31,18 @@ extern bool g_drew_this_frame;
 void Tex_LoadOrUpdate(uint32_t id, uint32_t ux, uint32_t uy,
                       uint32_t w, uint32_t h, const void* src);
 void Tex_Delete(uint32_t id);
+bool Tex_Has(uint32_t id);
+struct OverlayVertex { float x,y,u,v; uint32_t color; };
+static_assert(sizeof(OverlayVertex)==20);
+void Tex_DrawQuad(uint32_t textureID,const OverlayVertex* vertices);
+void Tex_SetParallel(bool);
+void Tex_SetSharedPool(bool);
+void Tex_ResetWorkers();
+bool Tex_ParallelEnabled();
+bool Tex_SharedPoolEnabled();
+uint64_t Tex_ParallelOperations();
+using OverlayWriteCallback=uint32_t* (*)(void*) noexcept;
+void Tex_SetWriteCallback(OverlayWriteCallback,void*);
 
 void Tex_DrawRect(uint32_t textureID,
                   int dx, int dy, int dw, int dh,
